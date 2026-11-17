@@ -1,0 +1,78 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - region "Notifications (F8)":
+      - list
+    - generic [ref=f1e3]:
+      - navigation [ref=f1e8]:
+        - generic [ref=f1e9]:
+          - generic [ref=f1e10]:
+            - button "Site menu" [ref=f1e12] [cursor=pointer]
+            - link [ref=f1e13] [cursor=pointer]:
+              - /url: /
+              - img "Encode Club" [ref=f1e14]
+          - button "Sign In" [ref=f1e16] [cursor=pointer]
+      - main [ref=f1e17]
+      - contentinfo [ref=f1e27]:
+        - generic [ref=f1e30]:
+          - generic [ref=f1e31]:
+            - img "Encode Club" [ref=f1e33]
+            - paragraph [ref=f1e34]: © 2026 Encode Club Education Limited.All rights reserved.
+            - link "info@encode.club" [ref=f1e35] [cursor=pointer]:
+              - /url: mailto:info@encode.club
+            - button "Partner with us" [ref=f1e39] [cursor=pointer]
+          - generic [ref=f1e43]:
+            - heading "Pages" [level=3] [ref=f1e44]
+            - link "Programmes" [ref=f1e45] [cursor=pointer]:
+              - /url: /programmes
+            - link "London Hub" [ref=f1e46] [cursor=pointer]:
+              - /url: https://hub.encodeclub.com
+            - link "Jobs" [ref=f1e47] [cursor=pointer]:
+              - /url: /jobs
+            - link "Alumni" [ref=f1e48] [cursor=pointer]:
+              - /url: /alumni
+            - link "Ecosystem" [ref=f1e49] [cursor=pointer]:
+              - /url: /partners
+          - generic [ref=f1e50]:
+            - heading "Socials" [level=3] [ref=f1e51]
+            - link "LinkedIn" [ref=f1e52] [cursor=pointer]:
+              - /url: https://www.linkedin.com/company/encode-club/
+            - link "X (Twitter)" [ref=f1e57] [cursor=pointer]:
+              - /url: https://twitter.com/encodeclub
+            - link "Discord" [ref=f1e60] [cursor=pointer]:
+              - /url: https://discord.gg/BsPbaShcxv
+            - link "Blog" [ref=f1e63] [cursor=pointer]:
+              - /url: https://www.blog.encode.club/
+          - generic [ref=f1e66]:
+            - heading "Legal" [level=3] [ref=f1e67]
+            - link "Privacy Policy" [ref=f1e68] [cursor=pointer]:
+              - /url: /privacy-policy
+            - link "Terms of Service" [ref=f1e69] [cursor=pointer]:
+              - /url: /terms-of-service
+  - dialog "Login" [ref=f1e70]:
+    - generic [ref=f1e71]:
+      - heading "Login" [level=2] [ref=f1e72]
+      - paragraph [ref=f1e73]: Choose a login method.
+    - generic [ref=f1e74]:
+      - generic [ref=f1e75]:
+        - button "Google" [active] [ref=f1e76] [cursor=pointer]
+        - button "Github" [ref=f1e77] [cursor=pointer]
+      - generic [ref=f1e78]: Or continue with Email
+      - generic [ref=f1e83]:
+        - text: Email
+        - textbox "Email" [ref=f1e84]:
+          - /placeholder: you@example.com
+      - generic [ref=f1e85]:
+        - generic [ref=f1e86]:
+          - generic [ref=f1e87]: Password
+          - button "Forgot password?" [ref=f1e88] [cursor=pointer]
+        - generic [ref=f1e89]:
+          - textbox "Password" [ref=f1e90]:
+            - /placeholder: Enter your password
+          - button "Show password" [ref=f1e91] [cursor=pointer]
+      - button "Sign In with Password" [disabled]
+      - generic [ref=f1e92]: Or
+      - button "Sign In with Magic Link" [disabled]
+    - generic [ref=f1e98]:
+      - text: Don't have an account?
+      - button "Sign Up" [ref=f1e99] [cursor=pointer]
+    - button "Close" [ref=f1e100] [cursor=pointer]

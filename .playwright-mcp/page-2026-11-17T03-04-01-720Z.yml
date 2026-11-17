@@ -1,0 +1,49 @@
+- generic [ref=f5e2]:
+  - region "Notifications (F8)":
+    - list
+  - generic [ref=f5e3]:
+    - navigation [ref=f5e8]:
+      - generic [ref=f5e9]:
+        - generic [ref=f5e10]:
+          - button "Site menu" [ref=f5e12] [cursor=pointer]
+          - link [ref=f5e13] [cursor=pointer]:
+            - /url: /
+            - img "Encode Club" [ref=f5e14]
+        - button "Sign In" [ref=f5e16] [cursor=pointer]
+    - main [ref=f5e17]
+    - contentinfo [ref=f5e20]:
+      - generic [ref=f5e23]:
+        - generic [ref=f5e24]:
+          - img "Encode Club" [ref=f5e26]
+          - paragraph [ref=f5e27]: © 2026 Encode Club Education Limited.All rights reserved.
+          - link "info@encode.club" [ref=f5e28] [cursor=pointer]:
+            - /url: mailto:info@encode.club
+          - button "Partner with us" [ref=f5e32] [cursor=pointer]
+        - generic [ref=f5e36]:
+          - heading "Pages" [level=3] [ref=f5e37]
+          - link "Programmes" [ref=f5e38] [cursor=pointer]:
+            - /url: /programmes
+          - link "London Hub" [ref=f5e39] [cursor=pointer]:
+            - /url: https://hub.encodeclub.com
+          - link "Jobs" [ref=f5e40] [cursor=pointer]:
+            - /url: /jobs
+          - link "Alumni" [ref=f5e41] [cursor=pointer]:
+            - /url: /alumni
+          - link "Ecosystem" [ref=f5e42] [cursor=pointer]:
+            - /url: /partners
+        - generic [ref=f5e43]:
+          - heading "Socials" [level=3] [ref=f5e44]
+          - link "LinkedIn" [ref=f5e45] [cursor=pointer]:
+            - /url: https://www.linkedin.com/company/encode-club/
+          - link "X (Twitter)" [ref=f5e50] [cursor=pointer]:
+            - /url: https://twitter.com/encodeclub
+          - link "Discord" [ref=f5e53] [cursor=pointer]:
+            - /url: https://discord.gg/BsPbaShcxv
+          - link "Blog" [ref=f5e56] [cursor=pointer]:
+            - /url: https://www.blog.encode.club/
+        - generic [ref=f5e59]:
+          - heading "Legal" [level=3] [ref=f5e60]
+          - link "Privacy Policy" [ref=f5e61] [cursor=pointer]:
+            - /url: /privacy-policy
+          - link "Terms of Service" [ref=f5e62] [cursor=pointer]:
+            - /url: /terms-of-service

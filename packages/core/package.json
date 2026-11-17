@@ -1,0 +1,16 @@
+{
+  "name": "@kuasa/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@concordium/web-sdk": "^12.0.2",
+    "zod": "^3.25.76"
+  }
+}

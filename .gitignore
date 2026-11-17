@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.next/
+target/
+concordium-out/
+.env
+.env.*
+!.env.example
+*.export
+keys/
+.kuasa/
