@@ -9,3 +9,4 @@ concordium-out/
 *.export
 keys/
 .kuasa/
+.playwright-mcp/

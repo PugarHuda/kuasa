@@ -1,5 +1,0 @@
-[     611ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ https://www.encodeclub.com/programmes/concordium-trusted-agents-hackathon/events/workshop-2-prove-your-agent:1
-[    7386ms] [WARNING] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}. @ https://www.encodeclub.com/assets/index-Bc_fJ0D3.js:2
-[   16682ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://bwrubpasqybdchurwjhs.supabase.co/rest/v1/rpc/record_workshop_activity:1
-[   16684ms] [ERROR] Error recording user activity: {code: PGRST202, details: Searched for the function public.record_workshop_a…r, but no matches were found in the schema cache., hint: Perhaps you meant to call the function public.set_workshop_partner, message: Could not find the function public.record_workshop…p_join_method, p_workshop_id) in the schema cache} @ https://www.encodeclub.com/assets/index-Bc_fJ0D3.js:2
-[   17940ms] [WARNING] The powerPreference option is currently ignored when calling requestAdapter() on Windows. See https://crbug.com/369219127 @ :1
