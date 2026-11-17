@@ -48,6 +48,18 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  scripts:
+    dependencies:
+      '@concordium/web-sdk':
+        specifier: ^12.0.2
+        version: 12.0.2(@protobuf-ts/runtime-rpc@2.11.1)(cbor2@1.12.0)
+      '@kuasa/chain':
+        specifier: workspace:*
+        version: link:../packages/chain
+      '@kuasa/core':
+        specifier: workspace:*
+        version: link:../packages/core
+
 packages:
 
   '@concordium/rust-bindings@4.0.1':

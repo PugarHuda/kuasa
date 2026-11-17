@@ -61,3 +61,23 @@ test('x402 hook aborts before verification when the mandate says no', async () =
   assert.equal(out?.abort, true);
   assert.match(out!.message!, /revoked/);
 });
+
+test('parallel purchases cannot overspend the budget', async () => {
+  const g = makeGuard({ maxTotal: 50000000n });
+  const pay = (nonce: number) => g.beforeVerify({
+    paymentPayload: { payload: { signedTransaction: { header: { sender: PAYER, nonce } } } },
+    requirements: { payTo: SHOP, asset: 'EUDemo', amount: '30000000' },
+    transportContext: { request: { routePattern: 'GET /wine/:sku', adapter: { getHeader: () => 'https://k.example/m.json' } } },
+  });
+  const [a, b] = await Promise.all([pay(1), pay(2)]);
+  assert.equal([a, b].filter((r) => r?.abort).length, 1, 'exactly one of two 30-unit buys fits a 50-unit budget');
+  assert.equal((await pay(1))?.reason, 'kuasa_duplicate_payment');
+});
+
+test('ssrf guard rejects non-public targets', async () => {
+  const { safeFetchText, isPrivate } = await import('../src/safe-fetch.js');
+  for (const ip of ['127.0.0.1', '10.1.2.3', '169.254.169.254', '192.168.0.1', '::1', 'fd00::1', '::ffff:10.0.0.1']) assert.ok(isPrivate(ip), ip);
+  assert.ok(!isPrivate('8.8.8.8'));
+  await assert.rejects(safeFetchText('http://example.com/m.json'), /only https/);
+  await assert.rejects(safeFetchText('https://169.254.169.254/latest'), /non-public/);
+});
