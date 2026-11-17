@@ -123,9 +123,9 @@ pub enum Event {
     #[concordium(tag = 1)]
     Revoked { id: MandateId, by: AccountAddress, reason: HashSha2256 },
     #[concordium(tag = 2)]
-    Receipt { id: MandateId, order: HashSha2256, payment_tx: HashSha2256, amount: u64, spent: u64 },
+    Receipt { owner: AccountAddress, id: MandateId, order: HashSha2256, payment_tx: HashSha2256, amount: u64, spent: u64 },
     #[concordium(tag = 3)]
-    Incident { id: MandateId, reporter: Address, evidence: HashSha2256 },
+    Incident { owner: AccountAddress, id: MandateId, reporter: Address, evidence: HashSha2256 },
 }
 
 fn sender_account(ctx: &ReceiveContext) -> KResult<AccountAddress> {
@@ -197,7 +197,7 @@ fn record_receipt(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Log
     ensure!(spent <= m.max_total, Error::BudgetExceeded);
     m.spent = spent;
     m.receipts += 1;
-    logger.log(&Event::Receipt { id: p.key.id, order: p.order, payment_tx: p.payment_tx, amount: p.amount, spent })?;
+    logger.log(&Event::Receipt { owner: p.key.owner, id: p.key.id, order: p.order, payment_tx: p.payment_tx, amount: p.amount, spent })?;
     Ok(())
 }
 
@@ -209,7 +209,7 @@ fn report_incident(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Lo
     let p: IncidentParams = ctx.parameter_cursor().get()?;
     let mut m = host.state_mut().mandates.get_mut(&p.key).ok_or(Error::NotFound)?;
     m.incidents += 1;
-    logger.log(&Event::Incident { id: p.key.id, reporter: ctx.sender(), evidence: p.evidence })?;
+    logger.log(&Event::Incident { owner: p.key.owner, id: p.key.id, reporter: ctx.sender(), evidence: p.evidence })?;
     Ok(())
 }
 
