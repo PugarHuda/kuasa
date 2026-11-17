@@ -42,7 +42,7 @@ fn view(chain: &Chain, c: ContractAddress) -> Option<MandateEntry> {
             amount: Amount::zero(),
             address: c,
             receive_name: OwnedReceiveName::new_unchecked("kuasa.view".into()),
-            message: OwnedParameter::from_serial(&ID).unwrap(),
+            message: OwnedParameter::from_serial(&MandateKey { owner: OWNER, id: ID }).unwrap(),
         })
         .unwrap();
     r.parse_return_value().unwrap()
@@ -62,7 +62,7 @@ fn issue_params() -> IssueParams {
 }
 
 fn receipt(amount: u64) -> ReceiptParams {
-    ReceiptParams { id: ID, order: HashSha2256([9; 32]), payment_tx: HashSha2256([8; 32]), amount }
+    ReceiptParams { key: MandateKey { owner: OWNER, id: ID }, order: HashSha2256([9; 32]), payment_tx: HashSha2256([8; 32]), amount }
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn full_lifecycle() {
     assert_eq!((m.spent, m.receipts), (100, 2));
 
     // anyone may report; only the owner may revoke; revocation stops spending
-    call(&mut chain, c, STRANGER, "reportIncident", &IncidentParams { id: ID, evidence: HashSha2256([5; 32]) }).unwrap();
+    call(&mut chain, c, STRANGER, "reportIncident", &IncidentParams { key: MandateKey { owner: OWNER, id: ID }, evidence: HashSha2256([5; 32]) }).unwrap();
     let rv = RevokeParams { id: ID, reason: HashSha2256([0; 32]) };
     assert!(call(&mut chain, c, STRANGER, "revoke", &rv).is_err());
     call(&mut chain, c, OWNER, "revoke", &rv).unwrap();
@@ -103,6 +103,22 @@ fn revoked_and_expired_mandates_cannot_spend() {
     call(&mut chain, c, OWNER, "issue", &issue_params()).unwrap();
     chain.tick_block_time(Duration::from_millis(20_000)).unwrap();
     assert!(call(&mut chain, c, RECORDER, "recordReceipt", &receipt(1)).is_err());
+}
+
+#[test]
+fn same_id_under_another_owner_cannot_touch_the_original() {
+    let (mut chain, c) = setup();
+    // attacker front-runs with the victim's document id: lands under the attacker's own key
+    let mut squat = issue_params();
+    squat.max_total = 1_000_000;
+    call(&mut chain, c, STRANGER, "issue", &squat).unwrap();
+    // victim can still issue, and the victim's entry is unaffected
+    call(&mut chain, c, OWNER, "issue", &issue_params()).unwrap();
+    let m = view(&chain, c).unwrap();
+    assert_eq!((m.owner, m.max_total), (OWNER, 100));
+    // attacker cannot revoke the victim's mandate (lookup is keyed by sender)
+    call(&mut chain, c, STRANGER, "revoke", &RevokeParams { id: ID, reason: HashSha2256([0; 32]) }).unwrap();
+    assert!(!view(&chain, c).unwrap().revoked);
 }
 
 #[test]
@@ -130,7 +146,7 @@ fn wire_format_matches_typescript_codec() {
             amount: Amount::zero(),
             address: c,
             receive_name: OwnedReceiveName::new_unchecked("kuasa.view".into()),
-            message: OwnedParameter::from_serial(&ID).unwrap(),
+            message: OwnedParameter::from_serial(&MandateKey { owner: OWNER, id: ID }).unwrap(),
         })
         .unwrap()
         .return_value;

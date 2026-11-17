@@ -3,6 +3,8 @@ import { type Claims, type Requirements, unmetRequirements } from './claims.js';
 
 /** Mandate state as stored in the on-chain Kuasa registry. */
 export type MandateState = {
+  /** Account that issued the on-chain entry (the transaction sender). */
+  owner: string;
   status: 'active' | 'revoked';
   spent: bigint;
   maxTotal: bigint;
@@ -40,6 +42,10 @@ export function authorize(args: {
 
   if (!state) return { ok: false, reasons: ['mandate not registered on-chain'] };
   if (state.docSha256 !== args.docSha256) r.push('mandate document does not match on-chain hash');
+  // The on-chain entry must have been issued by the principal named in the document, and may
+  // only narrow (never widen) the document's limits.
+  if (state.owner !== m.principal.account) r.push('on-chain mandate not issued by the principal');
+  if (state.maxTotal > BigInt(m.scope.maxTotal)) r.push('on-chain budget exceeds mandate document');
   if (state.status !== 'active') r.push(`mandate ${state.status}`);
   if (o.now < m.scope.validFrom) r.push('mandate not yet valid');
   if (o.now > Math.min(m.scope.validUntil, state.validUntil)) r.push('mandate expired');

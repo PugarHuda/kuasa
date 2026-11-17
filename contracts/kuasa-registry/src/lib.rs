@@ -18,6 +18,14 @@ use concordium_std::*;
 /// Mandate id = SHA-256 of the canonical off-chain mandate document.
 pub type MandateId = HashSha2256;
 
+/// Mandates are keyed by (owner, id) so nobody can squat another owner's document id
+/// (front-running an `issue` would only create an entry under the attacker's own key).
+#[derive(Serialize, SchemaType, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MandateKey {
+    pub owner: AccountAddress,
+    pub id: MandateId,
+}
+
 /// Recorders are kept small on purpose (a merchant's facilitator or two).
 const MAX_RECORDERS: usize = 8;
 const MAX_URI_LEN: usize = 512;
@@ -42,7 +50,7 @@ pub struct MandateEntry {
 #[derive(Serial, DeserialWithState)]
 #[concordium(state_parameter = "S")]
 pub struct State<S = StateApi> {
-    mandates: StateMap<MandateId, MandateEntry, S>,
+    mandates: StateMap<MandateKey, MandateEntry, S>,
 }
 
 #[derive(Debug, PartialEq, Eq, Reject, Serialize, SchemaType)]
@@ -93,7 +101,7 @@ pub struct RevokeParams {
 
 #[derive(Serialize, SchemaType, Clone, Debug)]
 pub struct ReceiptParams {
-    pub id: MandateId,
+    pub key: MandateKey,
     /// SHA-256 of the canonical order (merchant, items, amount, asset, category).
     pub order: HashSha2256,
     /// Hash of the x402 settlement transaction that moved the funds.
@@ -103,7 +111,7 @@ pub struct ReceiptParams {
 
 #[derive(Serialize, SchemaType, Clone, Debug)]
 pub struct IncidentParams {
-    pub id: MandateId,
+    pub key: MandateKey,
     pub evidence: HashSha2256,
 }
 
@@ -139,7 +147,8 @@ fn issue(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> K
     let owner = sender_account(ctx)?;
     ensure!(p.uri.len() <= MAX_URI_LEN && p.recorders.len() <= MAX_RECORDERS && p.max_total > 0, Error::InvalidParams);
     ensure!(p.valid_until > ctx.metadata().slot_time(), Error::Expired);
-    ensure!(host.state().mandates.get(&p.id).is_none(), Error::AlreadyExists);
+    let key = MandateKey { owner, id: p.id };
+    ensure!(host.state().mandates.get(&key).is_none(), Error::AlreadyExists);
 
     let entry = MandateEntry {
         owner,
@@ -156,7 +165,7 @@ fn issue(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> K
         incidents: 0,
     };
     logger.log(&Event::Issued { id: p.id, owner, payer: entry.payer, max_total: entry.max_total, valid_until: entry.valid_until })?;
-    let _ = host.state_mut().mandates.insert(p.id, entry); // absent: checked above
+    let _ = host.state_mut().mandates.insert(key, entry); // absent: checked above
     Ok(())
 }
 
@@ -165,8 +174,8 @@ fn issue(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> K
 fn revoke(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> KResult<()> {
     let p: RevokeParams = ctx.parameter_cursor().get()?;
     let by = sender_account(ctx)?;
-    let mut m = host.state_mut().mandates.get_mut(&p.id).ok_or(Error::NotFound)?;
-    ensure!(m.owner == by, Error::Unauthorized);
+    // Keyed by sender: an owner can only ever reach their own mandates.
+    let mut m = host.state_mut().mandates.get_mut(&MandateKey { owner: by, id: p.id }).ok_or(Error::NotFound)?;
     m.revoked = true;
     logger.log(&Event::Revoked { id: p.id, by, reason: p.reason })?;
     Ok(())
@@ -180,7 +189,7 @@ fn record_receipt(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Log
     let p: ReceiptParams = ctx.parameter_cursor().get()?;
     let by = sender_account(ctx)?;
     let now = ctx.metadata().slot_time();
-    let mut m = host.state_mut().mandates.get_mut(&p.id).ok_or(Error::NotFound)?;
+    let mut m = host.state_mut().mandates.get_mut(&p.key).ok_or(Error::NotFound)?;
     ensure!(m.recorders.contains(&by), Error::Unauthorized);
     ensure!(!m.revoked, Error::Revoked);
     ensure!(now <= m.valid_until, Error::Expired);
@@ -188,7 +197,7 @@ fn record_receipt(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Log
     ensure!(spent <= m.max_total, Error::BudgetExceeded);
     m.spent = spent;
     m.receipts += 1;
-    logger.log(&Event::Receipt { id: p.id, order: p.order, payment_tx: p.payment_tx, amount: p.amount, spent })?;
+    logger.log(&Event::Receipt { id: p.key.id, order: p.order, payment_tx: p.payment_tx, amount: p.amount, spent })?;
     Ok(())
 }
 
@@ -198,15 +207,15 @@ fn record_receipt(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Log
 #[receive(contract = "kuasa", name = "reportIncident", parameter = "IncidentParams", error = "Error", mutable, enable_logger)]
 fn report_incident(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> KResult<()> {
     let p: IncidentParams = ctx.parameter_cursor().get()?;
-    let mut m = host.state_mut().mandates.get_mut(&p.id).ok_or(Error::NotFound)?;
+    let mut m = host.state_mut().mandates.get_mut(&p.key).ok_or(Error::NotFound)?;
     m.incidents += 1;
-    logger.log(&Event::Incident { id: p.id, reporter: ctx.sender(), evidence: p.evidence })?;
+    logger.log(&Event::Incident { id: p.key.id, reporter: ctx.sender(), evidence: p.evidence })?;
     Ok(())
 }
 
 /// Read a mandate.
-#[receive(contract = "kuasa", name = "view", parameter = "MandateId", return_value = "Option<MandateEntry>", error = "Error")]
+#[receive(contract = "kuasa", name = "view", parameter = "MandateKey", return_value = "Option<MandateEntry>", error = "Error")]
 fn view(ctx: &ReceiveContext, host: &Host<State>) -> KResult<Option<MandateEntry>> {
-    let id: MandateId = ctx.parameter_cursor().get()?;
-    Ok(host.state().mandates.get(&id).map(|m| m.clone()))
+    let key: MandateKey = ctx.parameter_cursor().get()?;
+    Ok(host.state().mandates.get(&key).map(|m| m.clone()))
 }

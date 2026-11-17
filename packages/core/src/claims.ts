@@ -45,8 +45,9 @@ export function deriveClaims(statements: Statement[], at: Date, revealed: Record
   const c: Claims = {};
   for (const s of statements) {
     if (s.type === 'AttributeInRange' && s.attributeTag === 'dob') {
-      const age = yearsSince(String(s.upper), at);
-      c.ageOver = Math.max(c.ageOver ?? 0, age);
+      const upper = String(s.upper);
+      if (!isCalendarDate(upper)) continue; // malformed bound proves nothing
+      c.ageOver = Math.max(c.ageOver ?? 0, yearsSince(upper, at));
     } else if (s.type === 'AttributeInSet' && s.attributeTag === 'countryOfResidence') {
       c.residency = intersect(c.residency, s.set.map(String));
     } else if (s.type === 'AttributeInSet' && s.attributeTag === 'nationality') {
@@ -60,6 +61,13 @@ export function deriveClaims(statements: Statement[], at: Date, revealed: Record
     }
   }
   return c;
+}
+
+function isCalendarDate(yyyymmdd: string): boolean {
+  if (!/^\d{8}$/.test(yyyymmdd)) return false;
+  const [y, m, d] = [yyyymmdd.slice(0, 4), yyyymmdd.slice(4, 6), yyyymmdd.slice(6, 8)].map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
 function intersect(a: string[] | undefined, b: string[]): string[] {
@@ -79,7 +87,8 @@ export type Requirements = {
 /** Returns the list of unmet requirements (empty = satisfied). */
 export function unmetRequirements(claims: Claims, req: Requirements): string[] {
   const out: string[] = [];
-  if (req.minAge != null && (claims.ageOver ?? -1) < req.minAge) out.push(`age>=${req.minAge} not proven`);
+  // fail closed: anything that is not a finite proven age >= minAge is unmet
+  if (req.minAge != null && !(Number.isFinite(claims.ageOver) && claims.ageOver! >= req.minAge)) out.push(`age>=${req.minAge} not proven`);
   if (req.residencyIn && !subset(claims.residency, req.residencyIn)) out.push(`residency in [${req.residencyIn.join(',')}] not proven`);
   if (req.nationalityIn && !subset(claims.nationality, req.nationalityIn)) out.push(`nationality in [${req.nationalityIn.join(',')}] not proven`);
   if (req.business && !claims.lei) out.push('business identity (LEI) not proven');

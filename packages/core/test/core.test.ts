@@ -25,7 +25,7 @@ const mandate: Mandate = MandateSchema.parse({
 });
 
 const state: MandateState = {
-  status: 'active', spent: 0n, maxTotal: 100000000n, validUntil: 2000, payer: PAYER, docSha256: 'h',
+  owner: OWNER, status: 'active', spent: 0n, maxTotal: 100000000n, validUntil: 2000, payer: PAYER, docSha256: 'h',
 };
 const order: Order = { payer: PAYER, merchant: SHOP, asset: 'EUDemo', amount: 24000000n, category: 'wine', now: 1500 };
 const claims = { ageOver: 18, residency: ['DK'] };
@@ -39,6 +39,9 @@ test('each guardrail rejects', () => {
   const cases: [Partial<Parameters<typeof authorize>[0]>, RegExp][] = [
     [{ state: null }, /not registered/],
     [{ docSha256: 'x' }, /does not match/],
+    [{ state: { ...state, owner: SHOP } }, /not issued by the principal/],
+    [{ state: { ...state, maxTotal: 10n ** 12n } }, /budget exceeds mandate document/],
+    [{ claims: { ageOver: NaN, residency: ['DK'] } }, /age>=18/],
     [{ state: { ...state, status: 'revoked' } }, /revoked/],
     [{ order: { ...order, now: 2001 } }, /expired/],
     [{ order: { ...order, payer: SHOP } }, /payer is not the mandated agent/],
@@ -72,6 +75,9 @@ test('claims from statements', () => {
   assert.deepEqual(c.residency, ['DK', 'DE']);
   assert.equal(c.lei, '5493001KJTIIGC8Y1R12');
   assert.equal(yearsSince('20081118', at), 17); // one day short
+  // malformed date bounds are ignored, never turned into an age
+  assert.equal(deriveClaims([{ type: 'AttributeInRange', attributeTag: 'dob', lower: '0', upper: 'abc' }], at).ageOver, undefined);
+  assert.equal(deriveClaims([{ type: 'AttributeInRange', attributeTag: 'dob', lower: '0', upper: '20080231' }], at).ageOver, undefined);
   // a proven set must be a subset of the allowed set
   assert.deepEqual(unmetRequirements({ residency: ['DK', 'US'] }, { residencyIn: ['DK'] }).length, 1);
   assert.deepEqual(unmetRequirements({}, { business: true }), ['business identity (LEI) not proven']);

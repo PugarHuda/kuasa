@@ -74,12 +74,14 @@ export function encodeIssue(p: IssueParams): Uint8Array {
 
 export const encodeRevoke = (id: string, reasonHex: string) => new W().hash(id).hash(reasonHex).done();
 
-export const encodeReceipt = (id: string, orderHex: string, paymentTxHex: string, amount: bigint) =>
-  new W().hash(id).hash(orderHex).hash(paymentTxHex).u64(amount).done();
+/** Mandates are keyed on-chain by (owner, id) so ids cannot be squatted by other owners. */
+export const encodeMandateKey = (owner: string, id: string) => new W().account(owner).hash(id).done();
 
-export const encodeIncident = (id: string, evidenceHex: string) => new W().hash(id).hash(evidenceHex).done();
+export const encodeReceipt = (owner: string, id: string, orderHex: string, paymentTxHex: string, amount: bigint) =>
+  new W().account(owner).hash(id).hash(orderHex).hash(paymentTxHex).u64(amount).done();
 
-export const encodeMandateId = (id: string) => new W().hash(id).done();
+export const encodeIncident = (owner: string, id: string, evidenceHex: string) =>
+  new W().account(owner).hash(id).hash(evidenceHex).done();
 
 /** Encodes an `Option<MandateEntry>` exactly as the contract's `view` returns it (for tests/fixtures). */
 export function encodeViewResult(m: MandateEntry | null): Uint8Array {
@@ -116,6 +118,7 @@ export function decodeViewResult(bytes: Uint8Array): MandateEntry | null {
 /** Adapts an on-chain entry to the policy engine's view. */
 export function toMandateState(m: MandateEntry, docSha256: string): MandateState {
   return {
+    owner: m.owner,
     status: m.revoked ? 'revoked' : 'active',
     spent: m.spent,
     maxTotal: m.maxTotal,
