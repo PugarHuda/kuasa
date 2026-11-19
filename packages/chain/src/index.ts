@@ -1,10 +1,12 @@
 import {
-  AccountAddress, type AccountSigner, buildBasicAccountSigner, CcdAmount, type ConcordiumGRPCClient, ContractAddress,
+  AccountAddress, type AccountSigner, buildBasicAccountSigner, CcdAmount, type ConcordiumGRPCClient, ContractAddress, ContractEvent,
   DataBlob, Energy, Parameter, ReceiveName, ReturnValue, TransactionExpiry, TransactionHash,
 } from '@concordium/web-sdk';
 import { ConcordiumGRPCNodeClient, credentials } from '@concordium/web-sdk/nodejs';
 import { Transaction } from '@concordium/web-sdk/transactions';
 import {
+  type ClaimKind, type CoverView, decodeClaim, decodeCoverView, decodePolicy, decodeRegistryEvent, encodeAssess, encodeCoverQuery,
+  encodeDecide, encodeFileClaim, encodeFraud, encodeIssuePolicy, encodePayout, encodeU64, type IssuePolicyParams, type RegistryEvent,
   decodeViewResult, encodeIncident, encodeIssue, encodeMandateKey, encodeReceipt, encodeRevoke,
   type IssueParams, type MandateEntry,
 } from '@kuasa/core';
@@ -87,4 +89,75 @@ export class KuasaRegistry {
     this.update('recordReceipt', encodeReceipt(owner, id, orderHex, paymentTxHex, amount), recorder);
   reportIncident = (owner: string, id: string, evidenceHex: string, reporter: Wallet, sponsor?: Wallet) =>
     this.update('reportIncident', encodeIncident(owner, id, evidenceHex), reporter, sponsor);
+}
+
+/** Client for the kuasa-cover contract (policies and claims). */
+export class KuasaCover {
+  readonly address: ContractAddress.Type;
+  constructor(readonly grpc: ConcordiumGRPCClient, index: bigint, subindex = 0n) {
+    this.address = ContractAddress.create(index, subindex);
+  }
+
+  private async invoke(method: string, param: Uint8Array) {
+    const res = await this.grpc.invokeContract({
+      contract: this.address,
+      method: ReceiveName.fromString(`kuasa_cover.${method}`),
+      parameter: Parameter.fromBuffer(ab(param)),
+    });
+    if (res.tag !== 'success' || !res.returnValue) throw new Error(`kuasa_cover.${method} failed: ${JSON.stringify(res, bigintJson)}`);
+    return new Uint8Array(ReturnValue.toBuffer(res.returnValue));
+  }
+
+  policy = async (id: bigint) => decodePolicy(await this.invoke('policy', encodeU64(id)));
+  claim = async (id: bigint) => decodeClaim(await this.invoke('claim', encodeU64(id)));
+  coverOf = async (payer: string, order?: string): Promise<CoverView> => decodeCoverView(await this.invoke('coverOf', encodeCoverQuery(payer, order)));
+  claimsAuthorized = async (id: bigint) => (await this.invoke('claimsAuthorized', encodeU64(id)))[0] === 1;
+
+  private async update(method: string, param: Uint8Array, from: Wallet, sponsor?: Wallet) {
+    const tx = Transaction.updateContract(
+      { amount: CcdAmount.zero(), address: this.address, receiveName: ReceiveName.fromString(`kuasa_cover.${method}`), message: Parameter.fromBuffer(ab(param)) },
+      Energy.create(60_000),
+    ) as Transaction.Builder;
+    const r = await submit(this.grpc, tx, from, sponsor);
+    const s = r.summary.summary;
+    if (!s || s.type !== 'accountTransaction' || 'rejectReason' in s) {
+      throw new Error(`kuasa_cover.${method} rejected on-chain (tx ${r.hash}): ${JSON.stringify(s, bigintJson)}`);
+    }
+    return r;
+  }
+
+  issuePolicy = (p: IssuePolicyParams, operator: Wallet) => this.update('issuePolicy', encodeIssuePolicy(p), operator);
+  fileClaim = (p: { policyId: bigint; kind: ClaimKind; amount: bigint; evidence: string; orders: string[] }, claimant: Wallet, sponsor?: Wallet) =>
+    this.update('fileClaim', encodeFileClaim(p), claimant, sponsor);
+  assess = (claimId: bigint, ok: boolean, reasonHex: string, operator: Wallet) => this.update('assessClaim', encodeAssess(claimId, ok, reasonHex), operator);
+  decide = (claimId: bigint, approve: boolean, operator: Wallet) => this.update('decideClaim', encodeDecide(claimId, approve), operator);
+  recordPayout = (claimId: bigint, payoutTx: string, amount: bigint, operator: Wallet) => this.update('recordPayout', encodePayout(claimId, payoutTx, amount), operator);
+  markFraud = (claimId: bigint, disclosureHex: string, operator: Wallet) => this.update('markFraud', encodeFraud(claimId, disclosureHex), operator);
+
+  /** issuePolicy / fileClaim ids: the first u64 of the PolicyIssued (tag 0) / ClaimFiled (tag 1) event. */
+  static idFromEvents(summary: unknown, index: bigint): bigint | null {
+    for (const e of contractEvents(summary, index)) {
+      if (e[0] === 0 || e[0] === 1) return new DataView(e.buffer, e.byteOffset + 1, 8).getBigUint64(0, true);
+    }
+    return null;
+  }
+}
+
+/** Raw event logs emitted by contract <index,*> in a finalized transaction summary. */
+export function contractEvents(summary: unknown, index: bigint): Uint8Array[] {
+  const s = (summary as { summary?: { events?: unknown[] } })?.summary ?? (summary as { events?: unknown[] });
+  const out: Uint8Array[] = [];
+  for (const ev of (s?.events ?? []) as { tag?: string; address?: { index: bigint }; events?: ContractEvent.Type[] }[]) {
+    if (ev.tag === 'Updated' && ev.address?.index === index) out.push(...(ev.events ?? []).map((x) => ContractEvent.toBuffer(x)));
+  }
+  return out;
+}
+
+/** kuasa-registry events in a finalized transaction, with the block time (ms). */
+export async function registryEventsOfTx(grpc: ConcordiumGRPCClient, txHash: string, registryIndex: bigint): Promise<{ at: number; events: RegistryEvent[] } | null> {
+  const st = await grpc.getBlockItemStatus(TransactionHash.fromHexString(txHash)).catch(() => null);
+  if (!st || st.status !== 'finalized' || !st.outcome) return null;
+  const info = await grpc.getBlockInfo(st.outcome.blockHash);
+  const events = contractEvents(st.outcome.summary, registryIndex).map(decodeRegistryEvent).filter((e): e is RegistryEvent => e !== null);
+  return { at: info.blockSlotTime.getTime(), events };
 }

@@ -33,7 +33,8 @@ export type IssueParams = {
   recorders: string[];
 };
 
-class W {
+/** concordium-std `Serial` writer (little-endian, u32-length strings/vecs). */
+export class W {
   private parts: number[] = [];
   u8(n: number) { this.parts.push(n & 0xff); return this; }
   u32(n: number) { for (let i = 0; i < 4; i++) this.parts.push((n >>> (8 * i)) & 0xff); return this; }
@@ -48,7 +49,8 @@ class W {
   done() { return Uint8Array.from(this.parts); }
 }
 
-class R {
+/** concordium-std `Deserial` reader. */
+export class R {
   private o = 0;
   constructor(private b: Uint8Array) {}
   private take(n: number) {
@@ -62,6 +64,8 @@ class R {
   u64() { const s = this.take(8); let n = 0n; for (let i = 7; i >= 0; i--) n = (n << 8n) | BigInt(s[i]); return n; }
   str() { return new TextDecoder().decode(this.take(this.u32())); }
   account() { return AccountAddress.fromBuffer(this.take(32).slice().buffer).address; }
+  hash() { return Buffer.from(this.take(32)).toString('hex'); }
+  bool() { return this.u8() === 1; }
   end() { if (this.o !== this.b.length) throw new Error('trailing bytes'); }
 }
 
