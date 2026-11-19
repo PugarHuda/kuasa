@@ -17,7 +17,7 @@ import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
-import { bigintJson, connect, KuasaCover, KuasaRegistry, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
+import { AuditLog, bigintJson, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
@@ -89,6 +89,10 @@ const svc = new InsurerService({
   },
 }, existsSync(STATE_FILE) ? readFileSync(STATE_FILE, 'utf8') : undefined);
 
+// EU AI Act Art. 12: premiums, claim assessments, decisions and payouts are logged and anchored.
+const audit = new AuditLog({ dir: new URL('audit/insurer/', ROOT), register: (d) => registerData(grpc, d, operator) })
+  .start(60_000, (e) => console.error('[audit]', e.message));
+
 // The premium is spending under the mandate: same guard as any shop, category "insurance".
 const guard = new KuasaGuard({
   grpc, network: 'Testnet', registry,
@@ -124,7 +128,10 @@ server.onBeforeVerify((async (ctx: Parameters<KuasaGuard['beforeVerify']>[0]) =>
 }) as never);
 server.onAfterSettle((async (ctx: Parameters<KuasaGuard['afterSettle']>[0]) => {
   await guard.afterSettle(ctx); // receipt: the premium draws down the mandate budget
-  if (ctx.result.success !== false) await svc.issue(quoteIdOf(ctx), ctx.result.transaction);
+  if (ctx.result.success !== false) {
+    const policyId = await svc.issue(quoteIdOf(ctx), ctx.result.transaction);
+    audit.append({ kind: 'premium', payer: payerOf(ctx), amount: ctx.requirements.amount, premiumTx: ctx.result.transaction, policyId });
+  }
 }) as never);
 server.onSettleFailure(guard.settleFailed as never);
 
@@ -197,7 +204,9 @@ app.post('/claims/sponsor', async (req, res) => {
     const txs = Array.isArray(req.body?.receiptTxs) ? req.body.receiptTxs.map(String).filter((t: string) => /^[0-9a-f]{64}$/.test(t)).slice(0, 4) : [];
     const filedTx = sdk.TransactionHash.toHexString(hash);
     try {
-      json(res, { tx: filedTx, claimId, assessment: await svc.assessClaim(claimId, txs) });
+      const assessment = await svc.assessClaim(claimId, txs);
+      audit.append({ kind: 'claim-assessed', claimId, filedTx, ok: assessment.ok, reason: assessment.reason, payout: assessment.payout });
+      json(res, { tx: filedTx, claimId, assessment });
     } catch (e) {
       pendingAssessments.set(String(claimId), { claimId, receiptTxs: txs, error: (e as Error).message });
       json(res, { tx: filedTx, claimId, assessment: 'pending', error: (e as Error).message }, 202);
@@ -209,6 +218,7 @@ app.get('/state', consoleOnly, async (_req, res) => json(res, {
   ...svc.state(), treasury: treasury.address.address, operator: operator.address.address, cover: `<${state.cover},0>`,
   pool: await eudemoBalance(treasury.address.address).catch(() => null), // node hiccups must not hide the claims queue
   pendingAssessments: [...pendingAssessments.values()],
+  audit: audit.anchors(),
 }));
 /** Console: assess a claim that was filed but never assessed (receipts from the filing request). */
 app.post('/claims/:id/assess', consoleOnly, async (req, res) => {
@@ -224,7 +234,11 @@ app.post('/claims/:id/assess', consoleOnly, async (req, res) => {
 });
 
 app.post('/claims/:id/decision', consoleOnly, async (req, res) => {
-  try { json(res, await svc.decide(big(req.params.id), req.body?.approve === true)); } catch (e) { json(res, { error: (e as Error).message }, 400); }
+  try {
+    const d = await svc.decide(big(req.params.id), req.body?.approve === true);
+    audit.append({ kind: 'claim-decided', claimId: req.params.id, approve: req.body?.approve === true, by: 'claims handler (console)', paid: d.paid, note: d.reason });
+    json(res, d);
+  } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
 app.post('/disclosures/:id/approve', consoleOnly, async (req, res) => {
   try { json(res, { hash: await svc.approveDisclosure(big(req.params.id)) }); } catch (e) { json(res, { error: (e as Error).message }, 400); }

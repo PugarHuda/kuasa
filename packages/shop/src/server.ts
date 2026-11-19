@@ -16,7 +16,7 @@ import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
-import { bigintJson, connect, KuasaCover, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
+import { AuditLog, bigintJson, connect, KuasaCover, KuasaRegistry, registerData, TESTNET, wallet } from '@kuasa/chain';
 import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer } from '@kuasa/merchant';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
@@ -60,8 +60,16 @@ const server = new x402ResourceServer(facilitator as never).register(CONCORDIUM_
 const RECEIPTS = new URL('shop-receipts.json', ROOT);
 if (existsSync(RECEIPTS)) guard.receipts.push(...JSON.parse(readFileSync(RECEIPTS, 'utf8')));
 const saveReceipts = () => { const tmp = new URL('shop-receipts.json.tmp', ROOT); writeFileSync(tmp, JSON.stringify(guard.receipts)); renameSync(tmp, RECEIPTS); };
-server.onBeforeVerify(guard.beforeVerify as never)
-  .onAfterSettle((async (ctx: Parameters<typeof guard.afterSettle>[0]) => { await guard.afterSettle(ctx); saveReceipts(); }) as never)
+// EU AI Act Art. 12: every guard decision is logged; batches are anchored on-chain every minute.
+const audit = new AuditLog({ dir: new URL('audit/shop/', ROOT), register: (d) => registerData(grpc, d, wallet(sponsor.address, sponsor.key)) })
+  .start(60_000, (e) => console.error('[audit]', e.message));
+server.onBeforeVerify((async (ctx: Parameters<typeof guard.beforeVerify>[0]) => {
+  const r = await guard.beforeVerify(ctx);
+  const payer = (ctx.paymentPayload.payload as { signedTransaction?: { header?: { sender?: string } } })?.signedTransaction?.header?.sender;
+  audit.append({ kind: 'guard-decision', payer, payTo: ctx.requirements.payTo, amount: ctx.requirements.amount, outcome: r ? 'refused' : 'allowed', reason: r?.message });
+  return r;
+}) as never)
+  .onAfterSettle((async (ctx: Parameters<typeof guard.afterSettle>[0]) => { await guard.afterSettle(ctx); saveReceipts(); audit.append({ kind: 'settled', paymentTx: ctx.result.transaction, amount: ctx.requirements.amount }); }) as never)
   .onSettleFailure(guard.settleFailed as never);
 
 const routes = Object.fromEntries(Object.entries(catalog).map(([path, p]) => [`GET ${path}`, {
@@ -103,7 +111,7 @@ app.get('/receipt/:paymentTx', (req, res) => {
   return r ? json(res, { order: r.order, orderRef: r.orderRef, receiptTx: r.receiptTx, amount: r.amount }) : json(res, { pending: true }, 404);
 });
 
-app.get('/kuasa-log', (req, res) => !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
+app.get('/kuasa-log', (req, res) => !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, audit: audit.anchors(), unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
 
 app.use(paymentMiddleware(routes as never, server));
 for (const [path, p] of Object.entries(catalog)) {

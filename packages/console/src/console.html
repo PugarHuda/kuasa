@@ -60,6 +60,7 @@
   <section><h2>Kuasa Cover · policies &amp; pool</h2><div id="cover" class="muted">Loading…</div></section>
   <section><h2>Merchant decisions (live)</h2><ul id="feed" class="feed"><li class="muted">Loading…</li></ul></section>
   <section><h2>Trust receipts</h2><div id="receipts" class="muted">No purchases yet.</div></section>
+  <section><h2>Audit trail · EU AI Act Art. 12</h2><div id="audit" class="muted">No anchored batches yet.</div></section>
 </main>
 <div id="toast" role="status" aria-live="polite"></div>
 <script>
@@ -225,6 +226,10 @@ async function refresh() {
     const cv = await (await fetch('/api/cover')).json().catch(() => null);
     show('claims', renderClaims(cv));
     show('cover', renderCover(cv, s.mandates));
+    const anchors = [...(s.shop?.audit ?? []).map((a) => ({ ...a, src: 'shop guard' })), ...((cv && cv.audit) ?? []).map((a) => ({ ...a, src: 'insurer' }))]
+      .sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 20);
+    show('audit', anchors.length ? `<ul class="feed">${anchors.map((a) => `<li><span class="muted mono">${esc(new Date(a.at).toLocaleTimeString())}</span><div>
+      <strong>${esc(a.src)}</strong> · ${esc(a.count)} decision(s) · sha256 <span class="mono">${short(a.sha256)}</span><br>anchored ${tx(a.tx)}</div></li>`).join('')}</ul>` : '<span class="muted">No anchored batches yet (batches anchor every minute when there are decisions).</span>');
   } catch (e) { $('mandates').textContent = 'Console API unreachable.'; }
 }
 refresh();

@@ -196,3 +196,4 @@ export async function cis8004GetMetadata(grpc: ConcordiumGRPCClient, tokenHex: s
   const n = new DataView(b.buffer, b.byteOffset + 1, 4).getUint32(0, true);
   return new TextDecoder().decode(b.subarray(5, 5 + n));
 }
+export * from './audit.js';
