@@ -27,12 +27,16 @@ export type InsurerDeps = {
     decide(claimId: bigint, approve: boolean, operator?: Wallet): Promise<TxResult>;
     recordPayout(claimId: bigint, payoutTx: string, amount: bigint, operator?: Wallet): Promise<TxResult>;
     markFraud(claimId: bigint, disclosureHex: string, operator?: Wallet): Promise<TxResult>;
+    /** The policy already issued for this premium payment, if any (premium_tx is unique per premium). */
+    policyByPremiumTx(premiumTx: string): Promise<bigint | null>;
   };
   /** kuasa-registry events of a finalized transaction, with block time. */
   registryEvents(tx: string): Promise<{ at: number; events: RegistryEvent[] } | null>;
   treasuryBalance(): Promise<bigint>;
-  /** Pays from the treasury; returns the transaction hash. */
+  /** Submits a payout from the treasury and returns its hash without waiting for finalization. */
   pay(to: string, amount: bigint, memo: string): Promise<string>;
+  /** Outcome of a submitted transaction. */
+  txOutcome(hash: string): Promise<'success' | 'failed' | 'pending'>;
   /** Stores a lawful-disclosure request document; returns its sha256 (hex). */
   saveDisclosure(doc: object): Promise<string>;
   operator?: Wallet;
@@ -50,7 +54,16 @@ export type StoredQuote = Quote & {
 };
 type ClaimRecord = {
   claimId: bigint; policyId: bigint; holder: string; claimant: string; recipient: string; assessment: Assessment; receiptTxs: string[]; orders: string[];
-  paid?: string; amountPaid?: bigint; recordPending?: boolean; decided?: boolean; busy?: Promise<{ decided: true; paid?: string; reason?: string }>;
+  mandateId?: string;
+  /** The human decision (or the automatic no-evidence rejection). */
+  verdict?: 'approved' | 'rejected';
+  /** Submitted payout transfer not yet confirmed: checked before anything is sent again. */
+  payoutTx?: string;
+  paid?: string; amountPaid?: bigint; recordPending?: boolean;
+  /** Why an approved claim is not paid (e.g. insufficient pool); `final` when it never will be. */
+  payoutBlocked?: string; final?: boolean;
+  busy?: Promise<{ decided: true; paid?: string; reason?: string }>;
+  busyApprove?: boolean;
 };
 type Disclosure = { claimId: string; account: string; doc: object };
 
@@ -64,6 +77,10 @@ export class InsurerService {
   private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string }[] = [];
   /** Premiums that settled but whose policy is not on-chain yet; the quote travels with them. */
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
+  /** Paid premiums that can never become a policy (e.g. mandate revoked meanwhile): refund manually. */
+  private needsRefund: { quoteId: string; premiumTx: string; reason: string }[] = [];
+  private retrying = false;
+  private assessing = new Set<bigint>();
   private claims = new Map<bigint, ClaimRecord>();
   private fraud = new Map<string, number>();
   private pendingDisclosures: Disclosure[] = [];
@@ -76,7 +93,13 @@ export class InsurerService {
       const s = fromSnapshot(snapshot);
       this.policies = s.policies ?? [];
       this.unissued = s.unissued ?? [];
-      this.claims = new Map((s.claims ?? []).map((c: ClaimRecord) => [c.claimId, c]));
+      this.needsRefund = s.needsRefund ?? [];
+      this.claims = new Map((s.claims ?? []).map((c: ClaimRecord & { decided?: boolean }) => {
+        // older snapshots stored a bare 'decided' flag; payouts still re-check the on-chain status
+        if (c.decided && !c.verdict) c.verdict = c.paid || c.assessment.ok ? 'approved' : 'rejected';
+        delete c.decided;
+        return [c.claimId, c];
+      }));
       this.fraud = new Map(Object.entries(s.fraud ?? {}));
       this.pendingDisclosures = s.pendingDisclosures ?? [];
       this.disclosures = s.disclosures ?? [];
@@ -88,7 +111,7 @@ export class InsurerService {
   /** Everything except live quotes and in-flight locks. */
   private save() {
     this.deps.persist?.(toSnapshot({
-      policies: this.policies, unissued: this.unissued, claims: [...this.claims.values()].map(({ busy, ...r }) => r),
+      policies: this.policies, unissued: this.unissued, needsRefund: this.needsRefund, claims: [...this.claims.values()].map(({ busy, busyApprove, ...r }) => r),
       fraud: Object.fromEntries(this.fraud), pendingDisclosures: this.pendingDisclosures, disclosures: this.disclosures,
       payouts: this.payouts, premiumsIn: this.premiumsIn,
     }));
@@ -157,27 +180,53 @@ export class InsurerService {
       limit: q.request.order ? q.request.order.amount : q.request.limit,
       deductible: DEDUCTIBLE, premium: q.premium, premiumTx, validUntilMs: BigInt(this.deps.now() + days * DAY_MS),
     };
+    const record = (id: bigint) => {
+      this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period' });
+      this.premiumsIn += q.premium;
+      this.quotes.delete(quoteId);
+      this.save();
+      return id;
+    };
+    const issued = async () => this.deps.cover.policyByPremiumTx(premiumTx).catch(() => null);
     let error = '';
     for (let attempt = 0; attempt < 3; attempt++) {
+      // A previous attempt may have landed on-chain even though the client saw an error.
+      const existing = await issued();
+      if (existing !== null) return this.policies.some((p) => p.premiumTx === premiumTx) ? existing : record(existing);
+      // A revoked or expired mandate will never accept a policy: stop and refund instead of paying fees forever.
+      const m = await this.deps.mandateEntry(q.owner, q.mandateId).catch(() => undefined);
+      if (m === null || (m && (m.revoked || Number(m.validUntilMs) <= this.deps.now()))) {
+        this.needsRefund.push({ quoteId, premiumTx, reason: m ? (m.revoked ? 'mandate revoked after the premium was paid' : 'mandate expired') : 'mandate not found' });
+        this.save();
+        return null;
+      }
       try {
         const r = await this.deps.cover.issuePolicy(params, this.deps.operator);
         if (r.id === null) throw new Error(`policy id missing in tx ${r.hash}`);
-        this.policies.push({ policyId: r.id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period' });
-        this.premiumsIn += q.premium;
-        this.quotes.delete(quoteId);
-        this.save();
-        return r.id;
+        return record(r.id);
       } catch (e) {
         error = (e as Error).message;
         await this.sleep(1000 * (attempt + 1));
       }
     }
+    const late = await issued();
+    if (late !== null) return record(late);
     this.unissued.push({ quoteId, premiumTx, error, quote: q });
     this.save();
     return null;
   }
 
   async retryUnissued() {
+    if (this.retrying) return;
+    this.retrying = true;
+    try {
+      await this.retryOnce();
+    } finally {
+      this.retrying = false;
+    }
+  }
+
+  private async retryOnce() {
     const pending = this.unissued.splice(0);
     for (const u of pending) {
       if (u.quote) await this.issue(u.quoteId, u.premiumTx, u.quote);
@@ -188,7 +237,16 @@ export class InsurerService {
 
   /** Assesses a filed claim against the on-chain receipts it cites, and records the outcome. */
   async assessClaim(claimId: bigint, receiptTxs: string[]): Promise<Assessment> {
-    if (this.claims.has(claimId)) throw new Error('claim already assessed');
+    if (this.claims.has(claimId) || this.assessing.has(claimId)) throw new Error('claim already assessed');
+    this.assessing.add(claimId);
+    try {
+      return await this.assessOnce(claimId, receiptTxs);
+    } finally {
+      this.assessing.delete(claimId);
+    }
+  }
+
+  private async assessOnce(claimId: bigint, receiptTxs: string[]): Promise<Assessment> {
     const c = await this.deps.cover.claim(claimId);
     if (!c) throw new Error('unknown claim');
     const p = await this.deps.cover.policy(c.policyId);
@@ -198,19 +256,23 @@ export class InsurerService {
     for (const tx of receiptTxs.slice(0, 4)) {
       const r = await this.deps.registryEvents(tx);
       for (const ev of r?.events ?? []) {
-        if (ev.type === 'Receipt') receipts.push({ order: ev.order, amount: ev.amount, at: r!.at, mandateId: ev.id, owner: ev.owner });
+        if (ev.type !== 'Receipt') continue;
+        // Per-order cover: the shop records sha256(orderRef + payment tx) as the receipt order.
+        const matchesOrderRef = typeof p.kind === 'object' ? ev.order === await sha256Hex(p.kind.order + ev.paymentTx) : undefined;
+        receipts.push({ order: ev.order, amount: ev.amount, at: r!.at, mandateId: ev.id, owner: ev.owner, paymentTx: ev.paymentTx, matchesOrderRef });
       }
     }
-    const paidOrders = [...this.claims.values()].filter((x) => x.paid && x.policyId === c.policyId).flatMap((x) => x.orders);
+    // No double cover: orders paid, approved or still open under ANY policy of the same mandate.
+    const paidOrders = [...this.claims.values()].filter((x) => x.mandateId === p.mandate.id && x.verdict !== 'rejected' && (x.paid || x.verdict === 'approved' || x.assessment.ok)).flatMap((x) => x.orders);
     const a = assess({
       claim: { kind: c.kind, amount: c.amount, orders: c.orders },
-      policy: { validFromMs: Number(p.validFromMs), validUntilMs: Number(p.validUntilMs), limit: p.limit, paidOut: p.paidOut, deductible: p.deductible, mandateId: p.mandate.id, owner: p.mandate.owner },
+      policy: { validFromMs: Number(p.validFromMs), validUntilMs: Number(p.validUntilMs), limit: p.limit, paidOut: p.paidOut, deductible: p.deductible, mandateId: p.mandate.id, owner: p.mandate.owner, orderRef: typeof p.kind === 'object' ? p.kind.order : undefined },
       receipts, priorPaidOrders: paidOrders, incidentFiled: (e?.incidents ?? 0n) > 0n,
     });
     await this.deps.cover.assess(claimId, a.ok, await sha256Hex(a.reason), this.deps.operator);
     const rec: ClaimRecord = {
       claimId, policyId: c.policyId, holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
-      assessment: a, receiptTxs, orders: c.orders,
+      assessment: a, receiptTxs, orders: c.orders, mandateId: p.mandate.id,
     };
     this.claims.set(claimId, rec);
     this.save();
@@ -219,7 +281,7 @@ export class InsurerService {
       // Nothing on-chain backs it: reject without a payout decision, and count it against the
       // account that filed it (the claimant signs fileClaim, so this is who made the claim).
       await this.deps.cover.decide(claimId, false, this.deps.operator);
-      rec.decided = true;
+      rec.verdict = 'rejected';
       const n = (this.fraud.get(c.claimant) ?? 0) + 1;
       this.fraud.set(c.claimant, n);
       if (n >= FRAUD_THRESHOLD) {
@@ -237,54 +299,97 @@ export class InsurerService {
   }
 
   /**
-   * The human claims handler's decision. Approval pays only if the pool can cover it. Calls for
-   * the same claim are serialised, so a double-click can never pay twice.
+   * The human claims handler's decision. A rejection is final; approval pays only if the pool can
+   * cover it. Calls for the same claim are serialised, so a double-click can never pay twice.
    */
   async decide(claimId: bigint, approve: boolean): Promise<{ decided: true; paid?: string; reason?: string }> {
     const rec = this.claims.get(claimId);
     if (!rec) throw new Error('claim not assessed yet');
-    if (rec.busy) return rec.busy;
+    if (rec.busy) {
+      if (approve !== rec.busyApprove) throw new Error('another decision on this claim is in progress');
+      return rec.busy;
+    }
+    rec.busyApprove = approve;
     rec.busy = (async () => {
       if (!approve) {
-        if (rec.paid) throw new Error('claim already paid');
-        await this.deps.cover.decide(claimId, false, this.deps.operator);
-        rec.decided = true;
+        if (rec.verdict === 'approved') throw new Error('claim already approved');
+        if (rec.verdict !== 'rejected') await this.deps.cover.decide(claimId, false, this.deps.operator);
+        rec.verdict = 'rejected';
         return { decided: true as const };
       }
+      if (rec.verdict === 'rejected') throw new Error('claim was rejected; it cannot be paid');
       if (!rec.assessment.ok) throw new Error('only positively assessed claims can be approved');
-      if (!rec.decided) {
+      if (!rec.verdict) {
         await this.deps.cover.decide(claimId, true, this.deps.operator);
-        rec.decided = true;
+        rec.verdict = 'approved';
       }
       return this.pay(rec);
     })().finally(() => { rec.busy = undefined; this.save(); });
     return rec.busy;
   }
 
-  /** Pays an approved claim at most once; a failed on-chain record is retried without paying again. */
+  /**
+   * Pays an approved claim at most once. The claim must be Approved on-chain; a submitted transfer
+   * is confirmed before anything is sent again; a failed on-chain record is retried without paying.
+   */
   private async pay(rec: ClaimRecord): Promise<{ decided: true; paid?: string; reason?: string }> {
+    if (rec.final) return { decided: true, reason: rec.payoutBlocked };
     if (!rec.paid) {
-      const policy = await this.deps.cover.policy(rec.policyId);
-      const remaining = policy ? policy.limit - policy.paidOut : 0n;
-      const amount = rec.assessment.payout < remaining ? rec.assessment.payout : remaining;
-      if (amount <= 0n) return { decided: true, reason: 'policy limit exhausted' };
-      if ((await this.deps.treasuryBalance()) < amount) return { decided: true, reason: 'insufficient pool: approved, payout pending' };
-      const tx = await this.deps.pay(rec.recipient, amount, 'kuasa-claim:' + rec.claimId);
-      rec.paid = tx; // money moved: never transfer again for this claim
-      rec.amountPaid = amount;
-      rec.recordPending = true;
-      this.payouts.push({ claimId: String(rec.claimId), to: rec.recipient, amount, tx });
-      this.save(); // money moved: persist before anything else can fail
+      const onChain = await this.deps.cover.claim(rec.claimId);
+      if (onChain?.status.tag === 'Paid') {
+        rec.paid = onChain.status.payoutTx;
+        rec.recordPending = false;
+        return { decided: true, paid: rec.paid };
+      }
+      if (onChain?.status.tag !== 'Approved') return { decided: true, reason: 'claim is not approved on-chain' };
+      if (rec.payoutTx) {
+        const outcome = await this.deps.txOutcome(rec.payoutTx).catch(() => 'pending' as const);
+        if (outcome === 'pending') return { decided: true, reason: 'payout in flight; approve again to check' };
+        if (outcome === 'failed') rec.payoutTx = undefined;
+        else this.confirmPayout(rec);
+      }
+      if (!rec.paid && !rec.payoutTx) {
+        const policy = await this.deps.cover.policy(rec.policyId);
+        const remaining = policy ? policy.limit - policy.paidOut : 0n;
+        const amount = rec.assessment.payout < remaining ? rec.assessment.payout : remaining;
+        if (amount <= 0n) {
+          rec.payoutBlocked = 'policy limit exhausted';
+          rec.final = true;
+          return { decided: true, reason: rec.payoutBlocked };
+        }
+        if ((await this.deps.treasuryBalance()) < amount) {
+          rec.payoutBlocked = 'insufficient pool: approved, payout pending';
+          return { decided: true, reason: rec.payoutBlocked };
+        }
+        rec.payoutBlocked = undefined;
+        rec.payoutTx = await this.deps.pay(rec.recipient, amount, 'kuasa-claim:' + rec.claimId);
+        rec.amountPaid = amount;
+        this.save(); // submitted: from now on we check this transfer instead of sending another
+        const outcome = await this.deps.txOutcome(rec.payoutTx).catch(() => 'pending' as const);
+        if (outcome === 'pending') return { decided: true, reason: 'payout in flight; approve again to check' };
+        if (outcome === 'failed') {
+          rec.payoutTx = undefined;
+          return { decided: true, reason: 'payout transfer failed on-chain; approve again to retry' };
+        }
+        this.confirmPayout(rec);
+      }
     }
     if (rec.recordPending) {
       try {
-        await this.deps.cover.recordPayout(rec.claimId, rec.paid, rec.amountPaid!, this.deps.operator);
+        await this.deps.cover.recordPayout(rec.claimId, rec.paid!, rec.amountPaid!, this.deps.operator);
         rec.recordPending = false;
       } catch {
         return { decided: true, paid: rec.paid, reason: 'payout sent; on-chain record pending, approve again to retry the record' };
       }
     }
     return { decided: true, paid: rec.paid };
+  }
+
+  private confirmPayout(rec: ClaimRecord) {
+    rec.paid = rec.payoutTx; // money moved: never transfer again for this claim
+    rec.recordPending = true;
+    this.payouts.push({ claimId: String(rec.claimId), to: rec.recipient, amount: rec.amountPaid!, tx: rec.paid! });
+    this.save();
   }
 
   /** A human approves a drafted disclosure request: it is stored, hashed and anchored on the claim. */
@@ -307,7 +412,8 @@ export class InsurerService {
     return {
       policies: this.policies,
       unissued: this.unissued,
-      claims: [...this.claims.values()].map(({ busy, ...r }) => r),
+      needsRefund: this.needsRefund,
+      claims: [...this.claims.values()].map(({ busy, busyApprove, ...r }) => r),
       payouts: this.payouts,
       premiumsIn: this.premiumsIn,
       pendingDisclosures: this.pendingDisclosures,

@@ -41,13 +41,15 @@ function harness(over: Partial<InsurerDeps> = {}) {
       policy: async (id) => policies.get(id) ?? null,
       claim: async (id) => claims.get(id) ?? null,
       assess: async (id, ok) => { calls.push(`assess:${id}:${ok}`); return { hash: 'tx', summary: {} }; },
-      decide: async (id, approve) => { calls.push(`decide:${id}:${approve}`); return { hash: 'tx', summary: {} }; },
-      recordPayout: async (id, tx, amount) => { calls.push(`recordPayout:${id}:${amount}`); return { hash: 'tx', summary: {} }; },
+      decide: async (id, approve) => { calls.push(`decide:${id}:${approve}`); const c = claims.get(id); if (c) c.status = { tag: approve ? 'Approved' : 'Rejected' }; return { hash: 'tx', summary: {} }; },
+      recordPayout: async (id, tx, amount) => { calls.push(`recordPayout:${id}:${amount}`); const c = claims.get(id); if (c) c.status = { tag: 'Paid', payoutTx: tx }; const p = c && policies.get(c.policyId); if (p) p.paidOut += amount; return { hash: 'tx', summary: {} }; },
+      policyByPremiumTx: async (tx) => { for (const [id, p] of policies) if (p.premiumTx === tx) return id; return null; },
       markFraud: async (id) => { calls.push(`markFraud:${id}`); return { hash: 'tx', summary: {} }; },
     },
     registryEvents: async (tx) => events.get(tx) ?? null,
     treasuryBalance: async () => 1_000n * EUR,
     pay: async (to, amount) => { calls.push(`pay:${to}:${amount}`); return 'payout-tx'; },
+    txOutcome: async () => 'success',
     saveDisclosure: async (doc) => { disclosures.push(doc); return h(13); },
     ...over,
   };
@@ -201,4 +203,84 @@ test('a paid-but-unissued premium survives a restart and is issued on retry', as
   await restarted.retryUnissued();
   assert.equal(restarted.state().unissued.length, 0);
   assert.equal(restarted.state().policies.length, 1, 'the premium became a policy, not silently dropped');
+});
+
+test('a rejected claim is never paid, even if approve is clicked afterwards', async () => {
+  const t = harness();
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, false);
+  await assert.rejects(t.svc.decide(0n, true), /rejected/);
+  assert.ok(!t.calls.some((c) => c.startsWith('pay:')));
+});
+
+test('an unconfirmed payout is checked, never sent twice', async () => {
+  let outcome: 'pending' | 'success' = 'pending';
+  const t = harness({ txOutcome: async () => outcome });
+  await filedClaim(t, true, 0n);
+  const d1 = await t.svc.decide(0n, true);
+  assert.match(d1.reason ?? '', /in flight/);
+  outcome = 'success';
+  const d2 = await t.svc.decide(0n, true);
+  assert.equal(d2.paid, 'payout-tx');
+  assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 1);
+  assert.ok(t.calls.includes(`recordPayout:0:${23n * EUR}`));
+});
+
+test('a failed payout transfer may be sent again', async () => {
+  let outcome: 'failed' | 'success' = 'failed';
+  const t = harness({ txOutcome: async () => outcome });
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, true);
+  outcome = 'success';
+  const d = await t.svc.decide(0n, true);
+  assert.equal(d.paid, 'payout-tx');
+  assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 2);
+});
+
+test('one premium never produces two policies', async () => {
+  const t = harness();
+  const real = t.svc['deps'].cover.issuePolicy;
+  let first = true;
+  t.svc['deps'].cover.issuePolicy = async (p, w) => { const r = await real(p, w); if (first) { first = false; throw new Error('finalization wait failed'); } return r; };
+  const q = await quoteOk(t.svc);
+  const id = await t.svc.issue(q.quoteId, h(9));
+  assert.equal(id, 0n);
+  assert.equal(t.policies.size, 1);
+  assert.equal(t.calls.filter((c) => c === 'issuePolicy').length, 1);
+});
+
+test('an order paid under one policy cannot be paid again under another', async () => {
+  const t = harness();
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, true);
+  const q = await quoteOk(t.svc);
+  const pid = await t.svc.issue(q.quoteId, h(8));
+  t.claims.set(5n, { policyId: pid!, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: h(12), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  const a = await t.svc.assessClaim(5n, ['r0']);
+  assert.equal(a.ok, false);
+  assert.match(a.reason, /already paid/);
+});
+
+test('a revoked mandate after the premium settled needs a refund, not endless retries', async () => {
+  const t = harness();
+  const q = await quoteOk(t.svc);
+  t.setEntry(entry({ revoked: true }));
+  assert.equal(await t.svc.issue(q.quoteId, h(9)), null);
+  assert.equal(t.calls.filter((c) => c === 'issuePolicy').length, 0, 'never submitted');
+  assert.equal(t.svc.state().needsRefund.length, 1);
+  await t.svc.retryUnissued();
+  assert.equal(t.calls.filter((c) => c === 'issuePolicy').length, 0);
+});
+
+test('blocked payouts keep their reason; an exhausted limit is final', async () => {
+  const t = harness({ treasuryBalance: async () => 0n });
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, true);
+  assert.match(t.svc.state().claims[0].payoutBlocked ?? '', /insufficient pool/);
+  const u = harness();
+  await filedClaim(u, true, 0n);
+  u.policies.get(0n)!.paidOut = 100n * EUR;
+  await u.svc.decide(0n, true);
+  assert.match(u.svc.state().claims[0].payoutBlocked ?? '', /limit exhausted/);
+  assert.equal(u.svc.state().claims[0].final, true);
 });

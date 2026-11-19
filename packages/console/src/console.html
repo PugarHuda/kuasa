@@ -101,7 +101,7 @@ async function post(path, btn, okText) {
 }
 const decide = (id, verdict, btn) => {
   if (verdict === 'approve' && !confirm(`Approve claim #${id}? The payout is sent from the insurer pool.`)) return;
-  post(`/api/claims/${id}/decision/${verdict}`, btn, (r) => r.paid ? `Paid · tx ${short(r.paid)}` : 'Decision recorded');
+  post(`/api/claims/${id}/decision/${verdict}`, btn, (r) => r.paid ? `Paid · tx ${short(r.paid)}` : r.reason ? r.reason : 'Decision recorded');
 };
 const assessPending = (id, btn) => post(`/api/claims/${id}/assess`, btn, (r) => `Assessed: ${r.reason}`);
 const approveDisclosure = (id, btn) => {
@@ -112,8 +112,8 @@ const approveDisclosure = (id, btn) => {
 function claimStatus(c, pendingIds) {
   if (c.paid) return ['ok', c.recordPending ? 'Paid · record pending' : 'Paid'];
   if (pendingIds.includes(String(c.claimId))) return ['warn', 'Needs assessment'];
-  if (c.decided && c.assessment.ok) return ['warn', 'Approved · payout pending'];
-  if (c.decided) return ['bad', 'Rejected'];
+  if (c.verdict === 'rejected') return ['bad', 'Rejected'];
+  if (c.verdict === 'approved') return c.final ? ['bad', c.payoutBlocked ?? 'Not payable'] : ['warn', c.payoutBlocked ?? 'Approved · payout in flight'];
   return c.assessment.ok ? ['warn', 'Awaiting your decision'] : ['bad', 'Assessed: not covered'];
 }
 
@@ -122,8 +122,8 @@ function renderClaims(cv) {
   const pendingIds = (cv.pendingAssessments ?? []).map((p) => String(p.claimId));
   const rows = cv.claims.slice().reverse().map((c) => {
     const st = claimStatus(c, pendingIds);
-    const open = !c.decided && !c.paid && c.assessment.ok;
-    const retry = c.decided && c.assessment.ok && (!c.paid || c.recordPending);
+    const open = !c.verdict && !c.paid && c.assessment.ok;
+    const retry = c.verdict === 'approved' && !c.final && (!c.paid || c.recordPending);
     return `<div class="card">
       <div class="row"><span class="name">Claim #${esc(c.claimId)}</span><span class="pill ${st[0]}">${st[1]}</span></div>
       <dl>
@@ -152,7 +152,8 @@ function renderCover(cv, mandates) {
   if (!cv || cv.offline) return '<span class="muted">Insurer offline.</span>';
   const who = Object.fromEntries(mandates.map((m) => [m.payer, m.name]));
   const paidOut = cv.payouts.reduce((a, p) => a + Number(p.amount), 0);
-  const warn = cv.unissued.length ? `<p class="pill bad">${cv.unissued.length} premium(s) paid but policy not issued yet (retrying)</p>` : '';
+  const warn = (cv.unissued.length ? `<p class="pill bad">${cv.unissued.length} premium(s) paid but policy not issued yet (retrying)</p>` : '')
+    + ((cv.needsRefund ?? []).length ? `<p class="pill bad">${cv.needsRefund.length} premium(s) need a manual refund: ${cv.needsRefund.map((r) => esc(r.reason)).join('; ')}</p>` : '');
   const pols = cv.policies.slice().reverse().map((p) => `<li><span class="mono">#${esc(p.policyId)}</span><div>
     <strong>${esc(who[p.payer] ?? short(p.payer))}</strong> · ${esc(p.kind)} cover up to ${ccd(p.limit)} · until ${new Date(Number(p.until)).toLocaleDateString()}<br>
     premium ${tx(p.premiumTx)}</div></li>`).join('');

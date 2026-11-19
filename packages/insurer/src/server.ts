@@ -68,6 +68,15 @@ const svc = new InsurerService({
     decide: (id, approve) => cover.decide(id, approve, operator),
     recordPayout: (id, tx, amount) => cover.recordPayout(id, tx, amount, operator),
     markFraud: (id, hash) => cover.markFraud(id, hash, operator),
+    // premium_tx is unique per premium: scan issued policies (ids are dense from 0)
+    policyByPremiumTx: async (tx) => {
+      for (let id = 0n; id < 10_000n; id++) {
+        const p = await cover.policy(id);
+        if (!p) return null;
+        if (p.premiumTx === tx) return id;
+      }
+      return null;
+    },
   },
   registryEvents: (tx) => registryEventsOfTx(grpc, tx, registryIndex),
   treasuryBalance: () => eudemoBalance(treasury.address.address),
@@ -76,9 +85,15 @@ const svc = new InsurerService({
     const hash = await sdk.Token.transfer(token, treasury.address,
       { recipient: sdk.AccountAddress.fromBase58(to), amount: sdk.TokenAmount.create(amount, 6), memo: sdk.CborMemo.fromString(memo) },
       treasury.signer, undefined, { autoScale: false, validate: true });
-    const { summary } = await grpc.waitForTransactionFinalization(hash);
-    if ((summary as { transactionType?: string }).transactionType === 'failed') throw new Error(`payout rejected: ${JSON.stringify(summary, bigintJson)}`);
-    return sdk.TransactionHash.toHexString(hash);
+    return sdk.TransactionHash.toHexString(hash); // submitted; txOutcome confirms it
+  },
+  txOutcome: async (hash) => {
+    const tx = sdk.TransactionHash.fromHexString(hash);
+    const done = await Promise.race([grpc.waitForTransactionFinalization(tx).then(() => true), new Promise<false>((r) => setTimeout(() => r(false), 30_000))]).catch(() => false);
+    if (!done) return 'pending';
+    const st = await grpc.getBlockItemStatus(tx);
+    if (st.status !== 'finalized' || !st.outcome) return 'pending';
+    return (st.outcome.summary as { transactionType?: string }).transactionType === 'failed' ? 'failed' : 'success';
   },
   saveDisclosure: async (doc) => {
     const body = canonicalJson(doc);

@@ -65,3 +65,17 @@ test('fails closed on malformed claims', () => {
   assert.equal(run({ claim: { amount: 0n } }).ok, false);
   assert.equal(run({ claim: { kind: 'Whatever' as never } }).ok, false);
 });
+
+test('AgentMistake with the same order (or payment) twice is refused', () => {
+  const same = { claim: { kind: 'AgentMistake' as const, orders: ['o1', 'o1'] }, receipts: [receipt('o1')] };
+  assert.match(run(same).reason, /two different orders/);
+  const samePay = { claim: { kind: 'AgentMistake' as const, orders: ['o1', 'o2'] },
+    receipts: [{ ...receipt('o1'), paymentTx: 'p1' }, { ...receipt('o2', T0 + 2 * MIN), paymentTx: 'p1' }] };
+  assert.match(run(samePay).reason, /two different payments/);
+});
+
+test('order cover only pays for the order it insured', () => {
+  const p = { ...base.policy, orderRef: 'ref1' };
+  assert.match(run({ policy: p, receipts: [{ ...receipt('o1'), matchesOrderRef: false }] }).reason, /not the order this cover insured/);
+  assert.equal(run({ policy: p, receipts: [{ ...receipt('o1'), matchesOrderRef: true }] }).ok, true);
+});
