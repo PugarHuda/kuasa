@@ -54,3 +54,9 @@ test('rejects nonsense input', () => {
   assert.ok('refused' in quote({ ...base, limit: 0n }));
   assert.ok('refused' in quote({ ...base, days: 0 }));
 });
+
+test('prototype keys are not categories', () => {
+  for (const c of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    assert.deepEqual(quote({ ...base, mandate: { ...base.mandate, categories: [c] } }), { refused: `unknown category: ${c}` });
+  }
+});

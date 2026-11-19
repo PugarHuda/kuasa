@@ -26,7 +26,7 @@ export type Quote = { premium: bigint; factors: Factor[] };
 
 const BPS = 10_000n;
 const BASE_BPS_PER_30_DAYS = 200n; // 2% of the limit
-const CATEGORY_BPS: Record<string, bigint> = { groceries: 10_000n, insurance: 10_000n, wine: 12_000n, vape: 14_000n };
+const CATEGORY_BPS = new Map<string, bigint>([['groceries', 10_000n], ['insurance', 10_000n], ['wine', 12_000n], ['vape', 14_000n]]);
 const TOP_UP_BPS = 150n; // 1.5% of the order
 const TOP_UP_MIN = 100_000n; // 0.10 in a 6-decimal asset
 
@@ -40,7 +40,7 @@ export function quote(input: RiskInput): Quote | { refused: string } {
   if (input.limit <= 0n) return { refused: 'limit must be positive' };
   if (!Number.isInteger(input.days) || input.days <= 0 || input.days > 365) return { refused: 'days must be 1..365' };
 
-  const unknown = input.mandate.categories.find((c) => !(c in CATEGORY_BPS));
+  const unknown = input.mandate.categories.find((c) => !CATEGORY_BPS.has(c));
   if (unknown !== undefined) return { refused: `unknown category: ${unknown}` };
 
   const applied: { name: string; bps: bigint; reason: string }[] = [];
@@ -52,7 +52,7 @@ export function quote(input: RiskInput): Quote | { refused: string } {
 
   if (input.mandate.merchants?.length) applied.push({ name: 'merchant allowlist', bps: 9_000n, reason: 'agent may only pay listed merchants' });
 
-  const cat = input.mandate.categories.reduce((m, c) => (CATEGORY_BPS[c] > m ? CATEGORY_BPS[c] : m), BPS);
+  const cat = input.mandate.categories.reduce((m, c) => (CATEGORY_BPS.get(c)! > m ? CATEGORY_BPS.get(c)! : m), BPS);
   applied.push({ name: 'category', bps: cat, reason: `riskiest category in mandate: ${input.mandate.categories.join(', ')}` });
 
   if (input.provenAgeAndResidency) applied.push({ name: 'proven attributes', bps: 9_000n, reason: 'owner proved age and residency with a ZK proof bound to the agent' });
