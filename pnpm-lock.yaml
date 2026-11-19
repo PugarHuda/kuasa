@@ -78,6 +78,40 @@ importers:
 
   packages/cover: {}
 
+  packages/insurer:
+    dependencies:
+      '@concordium/web-sdk':
+        specifier: ^12.0.2
+        version: 12.0.2(@protobuf-ts/runtime-rpc@2.11.1)(cbor2@1.12.0)
+      '@kuasa/chain':
+        specifier: workspace:*
+        version: link:../chain
+      '@kuasa/core':
+        specifier: workspace:*
+        version: link:../core
+      '@kuasa/cover':
+        specifier: workspace:*
+        version: link:../cover
+      '@kuasa/merchant':
+        specifier: workspace:*
+        version: link:../merchant
+      '@x402/concordium':
+        specifier: ~2.31.0
+        version: 2.31.0(@protobuf-ts/runtime-rpc@2.11.1)(cbor2@1.12.0)
+      '@x402/core':
+        specifier: ~2.31.0
+        version: 2.31.0
+      '@x402/express':
+        specifier: ~2.31.0
+        version: 2.31.0(express@5.3.0)(typescript@5.9.3)
+      express:
+        specifier: ^5.3.0
+        version: 5.3.0
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
+
   packages/merchant:
     dependencies:
       '@concordium/web-sdk':
