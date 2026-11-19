@@ -40,6 +40,7 @@
   .feed { list-style: none; margin: 0; padding: 0; }
   .feed li { border-top: 1px solid var(--line); padding: 10px 0; display: grid; grid-template-columns: 64px 1fr; gap: 10px; }
   .feed li:first-child { border-top: 0; }
+  .feed li.muted { display: block; }
   .muted { color: var(--muted); }
   .reasons { margin: 4px 0 0; padding-left: 18px; color: var(--bad); }
   .feed .reasons li { display: list-item; border: 0; padding: 0; }
@@ -73,6 +74,10 @@ const hex = (h) => /^[0-9a-f]{64}$/i.test(h ?? '') ? h : '';
 const b58 = (a) => /^[1-9A-HJ-NP-Za-km-z]{45,55}$/.test(a ?? '') ? a : '';
 const tx = (h) => hex(h) ? `<a class="mono" target="_blank" rel="noopener" href="${safeUrl(explorer)}/transaction/${hex(h)}">${short(h)}</a>` : '';
 const acct = (a) => !b58(a) ? '' : `<a class="mono" target="_blank" rel="noopener" href="${safeUrl(explorer)}/account/${a}">${short(a)}</a>`;
+
+/** Re-render a section only when its content changed, so buttons stay put while you click them. */
+const shown = {};
+function show(id, html) { if (shown[id] !== html) { shown[id] = html; $(id).innerHTML = html; } }
 
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 6000); }
 
@@ -214,12 +219,12 @@ async function refresh() {
     explorer = s.explorer;
     unit = s.mandates.find((m) => m.doc)?.doc.scope.asset ?? unit;
     $('contracts').textContent = `registry ${s.registry} · agents ${s.agentRegistry}`;
-    $('mandates').innerHTML = s.mandates.map(renderMandate).join('');
-    $('feed').innerHTML = s.shop ? renderFeed(s.shop.log, s.mandates) : '<li class="muted">Shop offline (start packages/shop).</li>';
-    $('receipts').innerHTML = s.shop ? renderReceipts(s.shop.receipts, s.mandates) : '';
+    show('mandates', s.mandates.map(renderMandate).join(''));
+    show('feed', s.shop ? renderFeed(s.shop.log, s.mandates) : '<li class="muted">Shop offline (start packages/shop).</li>');
+    show('receipts', s.shop ? renderReceipts(s.shop.receipts, s.mandates) : '');
     const cv = await (await fetch('/api/cover')).json().catch(() => null);
-    $('claims').innerHTML = renderClaims(cv);
-    $('cover').innerHTML = renderCover(cv, s.mandates);
+    show('claims', renderClaims(cv));
+    show('cover', renderCover(cv, s.mandates));
   } catch (e) { $('mandates').textContent = 'Console API unreachable.'; }
 }
 refresh();
