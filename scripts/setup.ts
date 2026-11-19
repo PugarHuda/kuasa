@@ -32,6 +32,9 @@ type State = {
 };
 const state: State = existsSync(STATE) ? JSON.parse(readFileSync(STATE, 'utf8')) : { agents: {}, mandates: {} };
 const save = () => writeFileSync(STATE, JSON.stringify(state, null, 2));
+// `setup.ts --reissue alice` issues a fresh mandate (new proof, new id) e.g. after a revoke demo.
+const ri = process.argv.indexOf('--reissue');
+if (ri >= 0) for (const n of process.argv.slice(ri + 1)) delete state.mandates[n];
 const publish = (path: string, body: string) => {
   const f = new URL(path, PUB);
   mkdirSync(new URL('.', f), { recursive: true });
