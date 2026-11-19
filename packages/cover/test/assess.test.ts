@@ -59,3 +59,9 @@ test('caps payout at remaining limit; refuses at or below the deductible', () =>
   assert.match(run({ claim: { amount: EUR } }).reason, /deductible/);
   assert.equal(run({ claim: { amount: 50n * EUR } }).payout, 23n * EUR, 'never more than the receipt');
 });
+
+test('fails closed on malformed claims', () => {
+  assert.equal(run({ claim: { orders: [] } }).ok, false);
+  assert.equal(run({ claim: { amount: 0n } }).ok, false);
+  assert.equal(run({ claim: { kind: 'Whatever' as never } }).ok, false);
+});

@@ -137,3 +137,32 @@ test('unknown order reference is refused before payment', async () => {
   });
   assert.match(out?.message ?? '', /order reference/);
 });
+
+const payWith = (g: KuasaGuard, nonce: number, headers: Record<string, string>) => g.beforeVerify({
+  paymentPayload: { payload: { signedTransaction: { header: { sender: PAYER, nonce } } } },
+  requirements: { payTo: SHOP, asset: 'EUDemo', amount: '24000000' },
+  transportContext: { request: { routePattern: 'GET /wine/:sku', adapter: { getHeader: (n: string) => headers[n] } } },
+});
+
+test('parallel covered purchases cannot exceed period cover', async () => {
+  const g = makeGuard({}, undefined, { offers: coveredWine, cover: cover({ periodRemaining: 30000000n }) });
+  const h = { 'x-kuasa-mandate': 'https://k.example/m.json' };
+  const [a, b] = await Promise.all([payWith(g, 1, h), payWith(g, 2, h)]);
+  assert.equal([a, b].filter((r) => r?.abort).length, 1, 'only one 24-unit buy fits 30 units of cover');
+});
+
+test('an order reference cannot back two parallel payments', async () => {
+  const g = makeGuard({});
+  const ref = await g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n });
+  const h = { 'x-kuasa-mandate': 'https://k.example/m.json', [ORDER_HEADER]: ref };
+  const [a, b] = await Promise.all([payWith(g, 1, h), payWith(g, 2, h)]);
+  assert.equal([a, b].filter((r) => r?.abort).length, 1);
+});
+
+test('a rejected purchase gives its order reference back', async () => {
+  const g = makeGuard({ revoked: true });
+  const ref = await g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n });
+  const h = { 'x-kuasa-mandate': 'https://k.example/m.json', [ORDER_HEADER]: ref };
+  assert.match((await payWith(g, 1, h))?.message ?? '', /revoked/);
+  assert.match((await payWith(g, 2, h))?.message ?? '', /revoked/, 'still the mandate reason, not an unknown ref');
+});

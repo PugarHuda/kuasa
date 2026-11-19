@@ -25,6 +25,8 @@ const no = (reason: string, noEvidence = false): Assessment => ({ ok: false, rea
 
 export function assess(i: AssessInput): Assessment {
   const { claim, policy } = i;
+  if (!['AgentMistake', 'WrongItem', 'MerchantLoss'].includes(claim.kind)) return no('unsupported claim kind');
+  if (claim.orders.length === 0 || claim.amount <= 0n) return no('a claim needs at least one order and a positive amount');
   const matched = [];
   for (const order of claim.orders) {
     const r = i.receipts.find((x) => x.order === order && x.mandateId === policy.mandateId && x.owner === policy.owner);
@@ -52,6 +54,8 @@ export function assess(i: AssessInput): Assessment {
       if (matched.length !== 1) return no('a merchant-loss claim covers exactly one receipt');
       if (!i.incidentFiled) return no('a merchant-loss claim needs an incident filed on the mandate');
       break;
+    default:
+      return no('unsupported claim kind');
   }
 
   const loss = claim.amount < matched[0].amount ? claim.amount : matched[0].amount;

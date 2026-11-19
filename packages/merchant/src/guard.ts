@@ -16,7 +16,8 @@ export const ORDER_HEADER = 'x-kuasa-order';
 export type Offer = { category: string; requirements: Requirements & { minCover?: bigint } };
 
 type Payload = { signedTransaction?: { header?: { sender?: string; nonce?: number | string } } };
-type InFlight = { id: string; owner: string; route: string; amount: bigint; orderRef?: string };
+type InFlight = { id: string; owner: string; payer: string; route: string; amount: bigint; orderRef?: string; coverHeld: bigint };
+type CoverNeed = { available: bigint; needed: bigint; viaOrder: boolean };
 type OrderIntent = { payer: string; payTo: string; route: string; amount: bigint; expires: number };
 
 const ORDER_TTL_MS = 10 * 60_000;
@@ -81,6 +82,13 @@ export class KuasaGuard {
 
   private now = () => this.opts.now?.() ?? Date.now();
 
+  /** Period cover held by this payer's purchases still settling. */
+  private reservedCover(payer: string) {
+    let sum = 0n;
+    for (const f of this.inFlight.values()) if (f.payer === payer) sum += f.coverHeld;
+    return sum;
+  }
+
   private reserved(id: string) {
     let sum = 0n;
     for (const f of this.inFlight.values()) if (f.id === id) sum += f.amount;
@@ -97,7 +105,7 @@ export class KuasaGuard {
   }
 
   /** Full decision for a would-be purchase. Also backs a free "quote" endpoint. */
-  async decide(args: { mandateUrl?: string; route: string; payer: string; payTo: string; asset: string; amount: bigint; orderRef?: string }): Promise<Decision & { mandateId?: string; owner?: string; budget?: { spent: bigint; maxTotal: bigint } }> {
+  async decide(args: { mandateUrl?: string; route: string; payer: string; payTo: string; asset: string; amount: bigint; orderRef?: string }): Promise<Decision & { mandateId?: string; owner?: string; budget?: { spent: bigint; maxTotal: bigint }; cover?: CoverNeed }> {
     const offer = this.opts.offers[args.route];
     if (!offer) return { ok: false, reasons: [`no Kuasa offer for route ${args.route}`] };
     if (!args.mandateUrl) return { ok: false, reasons: ['no mandate presented (x-kuasa-mandate header)'] };
@@ -122,8 +130,9 @@ export class KuasaGuard {
     if (decision.ok && state && !state.recorders.includes(this.opts.recorder.address.address)) {
       reasons.push('mandate does not authorise this merchant to record receipts');
     }
-    reasons.push(...await this.agentReasons(mandate), ...await this.coverReasons(offer, args));
-    const base = { mandateId: id, owner: mandate.principal.account, budget };
+    const cover = await this.coverCheck(offer, args);
+    reasons.push(...await this.agentReasons(mandate), ...cover.reasons);
+    const base = { mandateId: id, owner: mandate.principal.account, budget, cover: cover.need };
     return reasons.length ? { ok: false, reasons, ...base } : { ok: true, ...base };
   }
 
@@ -138,15 +147,22 @@ export class KuasaGuard {
     return out;
   }
 
-  private async coverReasons(offer: Offer, args: { payer: string; amount: bigint; orderRef?: string }): Promise<string[]> {
+  /**
+   * Order-specific cover is used when it covers the order on its own; otherwise period cover,
+   * minus what this payer's in-flight purchases already hold.
+   */
+  private async coverCheck(offer: Offer, args: { payer: string; amount: bigint; orderRef?: string }): Promise<{ reasons: string[]; need?: CoverNeed }> {
     const min = offer.requirements.minCover;
-    if (min === undefined) return [];
-    if (!this.opts.cover) return ['cover required but no cover check configured'];
+    if (min === undefined) return { reasons: [] };
+    if (!this.opts.cover) return { reasons: ['cover required but no cover check configured'] };
     const v = await this.opts.cover.coverOf(args.payer, args.orderRef).catch(() => null);
-    if (!v) return ['cover check unavailable'];
-    const available = v.periodRemaining > v.orderLimit ? v.periodRemaining : v.orderLimit;
+    if (!v) return { reasons: ['cover check unavailable'] };
     const needed = args.amount > min ? args.amount : min;
-    return available < needed ? [`cover required: ${needed} needed, ${available} available (Kuasa Cover)`] : [];
+    const need: CoverNeed = v.orderLimit >= needed
+      ? { available: v.orderLimit, needed, viaOrder: true }
+      : { available: v.periodRemaining, needed, viaOrder: false };
+    const free = need.viaOrder ? need.available : need.available - this.reservedCover(args.payer);
+    return free < needed ? { reasons: [`cover required: ${needed} needed, ${free} available (Kuasa Cover)`], need } : { reasons: [], need };
   }
 
   /** x402 `onBeforeVerify`: abort before any funds move if the mandate says no. */
@@ -157,23 +173,28 @@ export class KuasaGuard {
     const route = req?.routePattern ?? `${req?.method} ${req?.path}`;
     const amount = BigInt(ctx.requirements.amount);
     const orderRef = req?.adapter?.getHeader(ORDER_HEADER) || undefined;
+    const intent = orderRef ? this.orders.get(orderRef) : undefined;
     if (orderRef) {
-      const o = this.orders.get(orderRef);
+      const o = intent;
       if (!o || o.expires < this.now() || o.payer !== payer || o.payTo !== ctx.requirements.payTo || o.route !== route || o.amount !== amount) {
         return { abort: true as const, reason: 'kuasa_mandate_rejected', message: 'unknown or expired order reference' };
       }
+      this.orders.delete(orderRef); // consume before any await: one reference backs one payment
     }
+    const reject = (message: string) => {
+      if (orderRef && intent) this.orders.set(orderRef, intent); // give it back on refusal
+      return { abort: true as const, reason: 'kuasa_mandate_rejected', message };
+    };
     const decision = await this.decide({ mandateUrl: req?.adapter?.getHeader(MANDATE_HEADER), route, payer, payTo: ctx.requirements.payTo, asset: ctx.requirements.asset, amount, orderRef });
     this.log.push({ at: this.now(), mandate: decision.mandateId, payer, amount: ctx.requirements.amount, decision });
-    if (!decision.ok) return { abort: true as const, reason: 'kuasa_mandate_rejected', message: decision.reasons.join('; ') };
+    if (!decision.ok) return reject(decision.reasons.join('; '));
     // decide() awaited I/O, so other purchases may have reserved meanwhile. This check and the
     // reservation below run with no await in between, so they are atomic on the event loop.
     const b = decision.budget!;
-    if (b.spent + this.reserved(decision.mandateId!) + amount > b.maxTotal) {
-      return { abort: true as const, reason: 'kuasa_mandate_rejected', message: 'amount exceeds remaining mandate budget' };
-    }
-    if (orderRef) this.orders.delete(orderRef); // single use
-    this.inFlight.set(key, { id: decision.mandateId!, owner: decision.owner!, route, amount, orderRef });
+    if (b.spent + this.reserved(decision.mandateId!) + amount > b.maxTotal) return reject('amount exceeds remaining mandate budget');
+    const c = decision.cover;
+    if (c && !c.viaOrder && c.available - this.reservedCover(payer) < c.needed) return reject('cover required: period cover is held by purchases still settling');
+    this.inFlight.set(key, { id: decision.mandateId!, owner: decision.owner!, payer, route, amount, orderRef, coverHeld: c && !c.viaOrder ? amount : 0n });
   };
 
   /** x402 `onSettleFailure`: release the reservation. */
