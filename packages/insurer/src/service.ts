@@ -256,6 +256,8 @@ export class InsurerService {
   }
 
   claimRecord = (id: bigint) => this.claims.get(id);
+  /** A live (unexpired) quote, for pricing the x402 premium route. */
+  quoteOf = (id: string) => { const q = this.quotes.get(id); return q && q.expires >= this.deps.now() ? q : undefined; };
 
   state() {
     return {
