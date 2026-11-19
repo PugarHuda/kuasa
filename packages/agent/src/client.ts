@@ -30,13 +30,32 @@ const jsonSafe = (_k: string, v: unknown) =>
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const big = (v: unknown) => BigInt(String(v ?? 0));
 
+type PayReq = { network: string; asset: string; amount: string; payTo: string };
+
+/**
+ * Payment-time policy (runs when x402 asks us to sign): the payee must be the counterparty we
+ * verified for this request, and amount/asset/network/payee must fit the mandate. Fails closed.
+ */
+export function paymentAllowed(scope: Scope, expectedPayTo: string | undefined, r: PayReq): boolean {
+  if (!expectedPayTo || r.payTo !== expectedPayTo) return false;
+  if (r.network !== CONCORDIUM_TESTNET_CAIP2) return false;
+  if ((r.asset || 'CCD').toUpperCase() !== scope.asset.toUpperCase()) return false;
+  if (!/^\d+$/.test(r.amount) || BigInt(r.amount) > BigInt(scope.maxPerOrder)) return false;
+  return !scope.merchants?.length || scope.merchants.includes(r.payTo);
+}
+
+const TRUST_TTL_MS = 5 * 60_000;
+
 export class KuasaAgent {
   private payFetch: typeof fetch;
   /**
    * opts.scope is the agent's own trusted copy of its mandate scope, handed over by the owner at
    * start-up and never fetched from a counterparty. Payments outside it are never signed.
    */
-  private trustedShop?: string;
+  private trustedShop?: { payTo: string; at: number };
+  private insurerTreasury?: string;
+  /** The payee verified for the payment currently being made (calls are sequential). */
+  private expectPayTo?: string;
   constructor(readonly opts: {
     shopUrl: string; insurerUrl?: string; mandateUrl: string; payer: string; payerKey: string; scope: Scope;
     /** CIS-8004 registry used to check the shop before paying it (two-way trust). */
@@ -61,13 +80,9 @@ export class KuasaAgent {
 
   private get insurerUrl() { return this.opts.insurerUrl ?? 'http://localhost:4023'; }
 
-  /** Never trust a 402: amount, payee, asset and network must fit the mandate. */
-  private withinMandate(r: { network: string; asset: string; amount: string; payTo: string }) {
-    const s = this.opts.scope;
-    if (r.network !== CONCORDIUM_TESTNET_CAIP2) return false;
-    if ((r.asset || 'CCD').toUpperCase() !== s.asset.toUpperCase()) return false;
-    if (!/^\d+$/.test(r.amount) || BigInt(r.amount) > BigInt(s.maxPerOrder)) return false;
-    return !s.merchants?.length || s.merchants.includes(r.payTo);
+  /** Never trust a 402: payee must be the verified counterparty; amount, asset and network must fit the mandate. */
+  private withinMandate(r: PayReq) {
+    return paymentAllowed(this.opts.scope, this.expectPayTo, r);
   }
 
   private headers = () => ({ [MANDATE_HEADER]: this.opts.mandateUrl });
@@ -79,28 +94,40 @@ export class KuasaAgent {
    * active and owned by the shop's payTo account. Returns a refusal reason, or null if trusted.
    */
   async verifyShop(): Promise<string | null> {
-    if (!this.opts.agents) return null;
     const card = await this.fetchJson(new URL('/.well-known/agent-card.json', this.opts.shopUrl).toString()).catch(() => null) as { kuasa?: { payTo?: string; agentToken?: string } } | null;
     const k = card?.kuasa;
     if (!k?.payTo || !k.agentToken || !/^[0-9a-f]{2,64}$/.test(k.agentToken)) return 'shop agent card missing or invalid';
+    if (!this.opts.agents) { this.trustedShop = { payTo: k.payTo, at: Date.now() }; return null; } // no registry configured: card only
     const a = await this.opts.agents.agentOf(k.agentToken).catch(() => undefined);
     if (a === undefined) return 'agent registry unavailable';
     if (a === null) return 'shop agent not registered in the agent registry';
     if (!a.active) return 'shop agent not active in the agent registry';
     if (a.owner !== k.payTo) return 'shop agent not owned by the account it asks us to pay';
-    this.trustedShop = k.payTo;
+    this.trustedShop = { payTo: k.payTo, at: Date.now() };
     return null;
   }
 
   /** Pays an x402 resource at a configured counterparty (shop or insurer) only. */
   private async payAt(url: URL, extra: Record<string, string> = {}): Promise<BuyResult> {
-    const allowed = [new URL(this.opts.shopUrl).origin, new URL(this.insurerUrl).origin];
-    if (!allowed.includes(url.origin)) return { ok: false, reasons: ['refusing to pay outside the configured shop and insurer'] };
+    if (url.origin === new URL(this.opts.shopUrl).origin) {
+      if (!this.trustedShop || Date.now() - this.trustedShop.at > TRUST_TTL_MS) {
+        const why = await this.verifyShop();
+        if (why) return { ok: false, reasons: [why] };
+      }
+      this.expectPayTo = this.trustedShop!.payTo;
+    } else if (url.origin === new URL(this.insurerUrl).origin) {
+      this.insurerTreasury ??= ((await this.fetchJson(new URL('/info', this.insurerUrl).toString())) as { treasury?: string }).treasury;
+      this.expectPayTo = this.insurerTreasury;
+    } else {
+      return { ok: false, reasons: ['refusing to pay outside the configured shop and insurer'] };
+    }
     let res: Response;
     try {
       res = await this.payFetch(url, { headers: { ...this.headers(), ...extra } });
     } catch (e) {
       return { ok: false, reasons: [`payment failed: ${(e as Error).message}`] };
+    } finally {
+      this.expectPayTo = undefined;
     }
     if (!res.ok) {
       const body = await res.text();
@@ -128,8 +155,6 @@ export class KuasaAgent {
 
   /** skipQuote: behave like a rogue agent that pays anyway; the shop must still refuse. */
   async buy(path: string, skipQuote = false, orderRef?: string): Promise<BuyResult> {
-    const distrust = this.trustedShop ? null : await this.verifyShop();
-    if (distrust) return { ok: false, reasons: [distrust] };
     const q = skipQuote ? { ok: true } : await this.quote(path);
     if (!q.ok) return { ok: false, reasons: q.reasons ?? ['refused'] };
     return this.payAt(new URL(path, this.opts.shopUrl), orderRef ? { [ORDER_HEADER]: orderRef } : {});

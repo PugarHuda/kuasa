@@ -23,3 +23,12 @@ test('refuses shop whose payTo has no active agent', async () => {
   assert.match((await agent({ owner: OTHER, active: true }).verifyShop())!, /not owned/);
   assert.match((await agent({ owner: SHOP, active: true }, {}).verifyShop())!, /agent card/);
 });
+
+test('payment-time policy only pays the verified payTo for that counterparty', async () => {
+  const { paymentAllowed } = await import('../src/client.js');
+  const scope = { asset: 'EUDemo', maxPerOrder: '50000000', merchants: [SHOP, OTHER] };
+  const req = (payTo: string) => ({ network: 'ccd:4221332d34e1694168c2a0c0b3fd0f27', asset: 'EUDemo', amount: '24000000', payTo });
+  assert.equal(paymentAllowed(scope, SHOP, req(SHOP)), true);
+  assert.equal(paymentAllowed(scope, SHOP, req(OTHER)), false, 'another allow-listed merchant is not the verified shop');
+  assert.equal(paymentAllowed(scope, undefined, req(SHOP)), false, 'fail closed without a verified counterparty');
+});
