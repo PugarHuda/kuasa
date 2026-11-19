@@ -10,3 +10,7 @@ concordium-out/
 keys/
 .kuasa/
 .playwright-mcp/
+
+# internal planning and competitor notes (not published)
+docs/IDE-PROYEK.md
+docs/research/
