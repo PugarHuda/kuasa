@@ -55,6 +55,8 @@
 </header>
 <main>
   <section><h2>Mandates (on-chain)</h2><div id="mandates" class="muted">Loading…</div></section>
+  <section><h2>Kuasa Cover · claims queue</h2><div id="claims" class="muted">Loading…</div></section>
+  <section><h2>Kuasa Cover · policies &amp; pool</h2><div id="cover" class="muted">Loading…</div></section>
   <section><h2>Merchant decisions (live)</h2><ul id="feed" class="feed"><li class="muted">Loading…</li></ul></section>
   <section><h2>Trust receipts</h2><div id="receipts" class="muted">No purchases yet.</div></section>
 </main>
@@ -79,8 +81,81 @@ async function act(kind, name, btn) {
   btn.disabled = true; btn.textContent = 'Submitting…';
   try {
     const r = await (await fetch(`/api/${kind}/${name}`, { method: 'POST', headers: { 'x-kuasa-console': '1' } })).json();
-    toast(r.error ? `Failed: ${r.error}` : `${kind === 'revoke' ? 'Revoked' : 'Incident filed'} · tx ${short(r.tx)}`);
+    const label = { revoke: 'Revoked', incident: 'Incident filed', 'publish-cover': 'Cover status published to the agent registry' }[kind];
+    toast(r.error ? `Failed: ${r.error}` : `${label} · tx ${short(r.tx)}`);
   } finally { refresh(); }
+}
+
+async function post(path, btn, okText) {
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try {
+    const r = await (await fetch(path, { method: 'POST', headers: { 'x-kuasa-console': '1' } })).json();
+    toast(r.error ? `Failed: ${r.error}` : r.reason ? r.reason : okText(r));
+  } finally { refresh(); }
+}
+const decide = (id, verdict, btn) => {
+  if (verdict === 'approve' && !confirm(`Approve claim #${id}? The payout is sent from the insurer pool.`)) return;
+  post(`/api/claims/${id}/decision/${verdict}`, btn, (r) => r.paid ? `Paid · tx ${short(r.paid)}` : 'Decision recorded');
+};
+const assessPending = (id, btn) => post(`/api/claims/${id}/assess`, btn, (r) => `Assessed: ${r.reason}`);
+const approveDisclosure = (id, btn) => {
+  if (!confirm(`Anchor a lawful-disclosure request for claim #${id}? It names the claimant account for the identity provider / Privacy Guardians process.`)) return;
+  post(`/api/disclosures/${id}/approve`, btn, (r) => `Disclosure request anchored · ${short(r.hash)}`);
+};
+
+function claimStatus(c, pendingIds) {
+  if (c.paid) return ['ok', c.recordPending ? 'Paid · record pending' : 'Paid'];
+  if (pendingIds.includes(String(c.claimId))) return ['warn', 'Needs assessment'];
+  if (c.decided && c.assessment.ok) return ['warn', 'Approved · payout pending'];
+  if (c.decided) return ['bad', 'Rejected'];
+  return c.assessment.ok ? ['warn', 'Awaiting your decision'] : ['bad', 'Assessed: not covered'];
+}
+
+function renderClaims(cv) {
+  if (!cv || cv.offline) return '<span class="muted">Insurer offline (start packages/insurer).</span>';
+  const pendingIds = (cv.pendingAssessments ?? []).map((p) => String(p.claimId));
+  const rows = cv.claims.slice().reverse().map((c) => {
+    const st = claimStatus(c, pendingIds);
+    const open = !c.decided && !c.paid && c.assessment.ok;
+    const retry = c.decided && c.assessment.ok && (!c.paid || c.recordPending);
+    return `<div class="card">
+      <div class="row"><span class="name">Claim #${esc(c.claimId)}</span><span class="pill ${st[0]}">${st[1]}</span></div>
+      <dl>
+        <dt>Assessment</dt><dd>${esc(c.assessment.reason)}</dd>
+        <dt>Payout</dt><dd>${ccd(c.assessment.payout)} to ${acct(c.recipient)}</dd>
+        <dt>Evidence</dt><dd>${c.receiptTxs.map((t) => tx(t)).join(' · ') || '–'}</dd>
+        ${c.paid ? `<dt>Paid</dt><dd>${tx(c.paid)}</dd>` : ''}
+      </dl>
+      ${open ? `<div class="row" style="justify-content:flex-start">
+        <button onclick="decide('${esc(c.claimId)}','approve',this)">Approve &amp; pay</button>
+        <button class="danger" onclick="decide('${esc(c.claimId)}','reject',this)">Reject</button></div>` : ''}
+      ${retry ? `<button onclick="decide('${esc(c.claimId)}','approve',this)">Retry payout</button>` : ''}
+    </div>`;
+  }).join('');
+  const pend = (cv.pendingAssessments ?? []).map((p) => `<div class="card"><div class="row"><span class="name">Claim #${esc(p.claimId)}</span><span class="pill warn">Filed, not assessed</span></div>
+    <p class="muted">${esc(p.error)}</p><button onclick="assessPending('${esc(p.claimId)}',this)">Assess now</button></div>`).join('');
+  const disc = (cv.pendingDisclosures ?? []).map((d) => `<div class="card"><div class="row"><span class="name">Disclosure draft · claim #${esc(d.claimId)}</span><span class="pill bad">Repeated no-evidence claims</span></div>
+    <dl><dt>Account</dt><dd>${acct(d.account)}</dd></dl>
+    <button class="danger" onclick="approveDisclosure('${esc(d.claimId)}',this)">Review &amp; anchor request</button></div>`).join('');
+  const done = (cv.disclosures ?? []).map((d) => `<li><span class="muted mono">claim ${esc(d.claimId)}</span><div>Lawful-disclosure request anchored for ${acct(d.account)} · <span class="mono">${short(d.hash)}</span></div></li>`).join('');
+  const body = pend + disc + rows;
+  return (body || '<span class="muted">No claims yet.</span>') + (done ? `<ul class="feed">${done}</ul>` : '');
+}
+
+function renderCover(cv, mandates) {
+  if (!cv || cv.offline) return '<span class="muted">Insurer offline.</span>';
+  const who = Object.fromEntries(mandates.map((m) => [m.payer, m.name]));
+  const paidOut = cv.payouts.reduce((a, p) => a + Number(p.amount), 0);
+  const warn = cv.unissued.length ? `<p class="pill bad">${cv.unissued.length} premium(s) paid but policy not issued yet (retrying)</p>` : '';
+  const pols = cv.policies.slice().reverse().map((p) => `<li><span class="mono">#${esc(p.policyId)}</span><div>
+    <strong>${esc(who[p.payer] ?? short(p.payer))}</strong> · ${esc(p.kind)} cover up to ${ccd(p.limit)} · until ${new Date(Number(p.until)).toLocaleDateString()}<br>
+    premium ${tx(p.premiumTx)}</div></li>`).join('');
+  return `${warn}<dl>
+      <dt>Pool</dt><dd>${cv.pool == null ? 'balance unavailable' : ccd(cv.pool)} in treasury ${acct(cv.treasury)}</dd>
+      <dt>Premiums in</dt><dd>${ccd(cv.premiumsIn)}</dd>
+      <dt>Payouts out</dt><dd>${ccd(paidOut)} (${cv.payouts.length})</dd>
+      <dt>Contract</dt><dd class="mono">${esc(cv.cover)}</dd>
+    </dl>${pols ? `<ul class="feed">${pols}</ul>` : '<span class="muted">No policies yet.</span>'}`;
 }
 
 function renderMandate(m) {
@@ -101,10 +176,12 @@ function renderMandate(m) {
       <dt>Agent registry</dt><dd class="mono">CIS-8004 &lt;12802,0&gt; token ${esc(m.agentToken)}</dd>
       <dt>ZK proof</dt><dd>${d ? `<a target="_blank" rel="noopener" href="${safeUrl(d.proof.auditRecordUri)}">audit record</a> · anchor ${tx(m.proofAnchorTx)}` : '–'}</dd>
       <dt>Activity</dt><dd>${e.receipts} receipt(s) · ${e.incidents} incident(s) · issued ${tx(m.issueTx)}</dd>
+      <dt>Insured</dt><dd>${m.coverStatus ? `<span class="pill ok">Kuasa Cover</span> <span class="mono">${esc(m.coverStatus)}</span>` : '<span class="muted">not published in the agent registry</span>'}</dd>
     </dl>
     <div class="row" style="justify-content:flex-start">
       <button class="danger" ${e.revoked ? 'disabled' : ''} onclick="act('revoke','${esc(m.name)}',this)">Revoke mandate</button>
       <button onclick="act('incident','${esc(m.name)}',this)">Report incident</button>
+      <button onclick="act('publish-cover','${esc(m.name)}',this)">Publish cover status</button>
     </div>
   </div>`;
 }
@@ -140,6 +217,9 @@ async function refresh() {
     $('mandates').innerHTML = s.mandates.map(renderMandate).join('');
     $('feed').innerHTML = s.shop ? renderFeed(s.shop.log, s.mandates) : '<li class="muted">Shop offline (start packages/shop).</li>';
     $('receipts').innerHTML = s.shop ? renderReceipts(s.shop.receipts, s.mandates) : '';
+    const cv = await (await fetch('/api/cover')).json().catch(() => null);
+    $('claims').innerHTML = renderClaims(cv);
+    $('cover').innerHTML = renderCover(cv, s.mandates);
   } catch (e) { $('mandates').textContent = 'Console API unreachable.'; }
 }
 refresh();

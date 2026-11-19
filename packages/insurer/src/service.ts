@@ -36,7 +36,13 @@ export type InsurerDeps = {
   /** Stores a lawful-disclosure request document; returns its sha256 (hex). */
   saveDisclosure(doc: object): Promise<string>;
   operator?: Wallet;
+  /** Called with a JSON snapshot after every state change (persist it; restore via the constructor). */
+  persist?: (snapshot: string) => void;
 };
+
+/** JSON with bigints tagged, so a snapshot round-trips exactly. */
+const toSnapshot = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? { $big: x.toString() } : x));
+const fromSnapshot = (s: string) => JSON.parse(s, (_k, x) => (x && typeof x === 'object' && typeof x.$big === 'string' && Object.keys(x).length === 1 ? BigInt(x.$big) : x));
 
 export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; order?: { ref: string; amount: bigint } };
 export type StoredQuote = Quote & {
@@ -64,7 +70,28 @@ export class InsurerService {
   private payouts: { claimId: string; to: string; amount: bigint; tx: string }[] = [];
   private premiumsIn = 0n;
 
-  constructor(private deps: InsurerDeps) {}
+  constructor(private deps: InsurerDeps, snapshot?: string) {
+    if (snapshot) {
+      const s = fromSnapshot(snapshot);
+      this.policies = s.policies ?? [];
+      this.unissued = s.unissued ?? [];
+      this.claims = new Map((s.claims ?? []).map((c: ClaimRecord) => [c.claimId, c]));
+      this.fraud = new Map(Object.entries(s.fraud ?? {}));
+      this.pendingDisclosures = s.pendingDisclosures ?? [];
+      this.disclosures = s.disclosures ?? [];
+      this.payouts = s.payouts ?? [];
+      this.premiumsIn = s.premiumsIn ?? 0n;
+    }
+  }
+
+  /** Everything except live quotes and in-flight locks. */
+  private save() {
+    this.deps.persist?.(toSnapshot({
+      policies: this.policies, unissued: this.unissued, claims: [...this.claims.values()].map(({ busy, ...r }) => r),
+      fraud: Object.fromEntries(this.fraud), pendingDisclosures: this.pendingDisclosures, disclosures: this.disclosures,
+      payouts: this.payouts, premiumsIn: this.premiumsIn,
+    }));
+  }
 
   private sleep = (ms: number) => (this.deps.sleep ?? ((m) => new Promise((r) => setTimeout(r, m))))(ms);
 
@@ -132,6 +159,7 @@ export class InsurerService {
         this.policies.push({ policyId: r.id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period' });
         this.premiumsIn += q.premium;
         this.quotes.delete(quoteId);
+        this.save();
         return r.id;
       } catch (e) {
         error = (e as Error).message;
@@ -139,6 +167,7 @@ export class InsurerService {
       }
     }
     this.unissued.push({ quoteId, premiumTx, error });
+    this.save();
     return null;
   }
 
@@ -174,6 +203,7 @@ export class InsurerService {
       assessment: a, receiptTxs, orders: c.orders,
     };
     this.claims.set(claimId, rec);
+    this.save();
 
     if (a.noEvidence) {
       // Nothing on-chain backs it: reject without a payout decision, and count it against the
@@ -191,6 +221,7 @@ export class InsurerService {
           at: new Date(this.deps.now()).toISOString(),
         } });
       }
+      this.save();
     }
     return a;
   }
@@ -216,7 +247,7 @@ export class InsurerService {
         rec.decided = true;
       }
       return this.pay(rec);
-    })().finally(() => { rec.busy = undefined; });
+    })().finally(() => { rec.busy = undefined; this.save(); });
     return rec.busy;
   }
 
@@ -233,6 +264,7 @@ export class InsurerService {
       rec.amountPaid = amount;
       rec.recordPending = true;
       this.payouts.push({ claimId: String(rec.claimId), to: rec.recipient, amount, tx });
+      this.save(); // money moved: persist before anything else can fail
     }
     if (rec.recordPending) {
       try {
@@ -253,6 +285,7 @@ export class InsurerService {
     const hash = await this.deps.saveDisclosure(d.doc);
     await this.deps.cover.markFraud(claimId, hash, this.deps.operator);
     this.disclosures.push({ claimId: d.claimId, account: d.account, hash });
+    this.save();
     return hash;
   }
 

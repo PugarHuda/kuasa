@@ -9,7 +9,7 @@
  * DEMO: the operator and treasury keys come from .kuasa (testnet only). Signing endpoints are
  * localhost-only and require the console header.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import * as sdk from '@concordium/web-sdk';
 import express from 'express';
 import { x402Facilitator } from '@x402/core/facilitator';
@@ -49,8 +49,10 @@ async function eudemoBalance(address: string) {
   return t ? BigInt(t.state.balance.value) : 0n;
 }
 
+const STATE_FILE = new URL('insurer-state.json', ROOT);
 const svc = new InsurerService({
   now: () => Date.now(),
+  persist: (snapshot) => { const tmp = new URL('insurer-state.json.tmp', ROOT); writeFileSync(tmp, snapshot); renameSync(tmp, STATE_FILE); },
   operator,
   loadMandate: async (url) => {
     const mandate = MandateSchema.parse(JSON.parse(await fetchDoc(url)));
@@ -85,7 +87,7 @@ const svc = new InsurerService({
     writeFileSync(new URL(`${hash}.json`, disclosureDir), body);
     return hash;
   },
-});
+}, existsSync(STATE_FILE) ? readFileSync(STATE_FILE, 'utf8') : undefined);
 
 // The premium is spending under the mandate: same guard as any shop, category "insurance".
 const guard = new KuasaGuard({
@@ -205,12 +207,14 @@ app.post('/claims/sponsor', async (req, res) => {
 
 app.get('/state', consoleOnly, async (_req, res) => json(res, {
   ...svc.state(), treasury: treasury.address.address, operator: operator.address.address, cover: `<${state.cover},0>`,
-  pool: await eudemoBalance(treasury.address.address),
+  pool: await eudemoBalance(treasury.address.address).catch(() => null), // node hiccups must not hide the claims queue
   pendingAssessments: [...pendingAssessments.values()],
 }));
 /** Console: assess a claim that was filed but never assessed (receipts from the filing request). */
 app.post('/claims/:id/assess', consoleOnly, async (req, res) => {
-  const p = pendingAssessments.get(String(big(req.params.id)));
+  // Operator recovery: receipts from the pending filing, or supplied by the operator (console only).
+  const given = Array.isArray(req.body?.receiptTxs) ? req.body.receiptTxs.map(String).filter((t: string) => /^[0-9a-f]{64}$/.test(t)).slice(0, 4) : [];
+  const p = pendingAssessments.get(String(big(req.params.id))) ?? (given.length ? { claimId: big(req.params.id), receiptTxs: given, error: '' } : undefined);
   if (!p) return json(res, { error: 'no pending assessment for this claim' }, 404);
   try {
     const a = await svc.assessClaim(p.claimId, p.receiptTxs);

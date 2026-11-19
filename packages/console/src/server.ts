@@ -14,6 +14,10 @@ import { sha256Hex } from '@kuasa/core';
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4022);
 const SHOP = process.env.KUASA_SHOP_URL ?? 'http://localhost:4021';
+const INSURER = process.env.KUASA_INSURER_URL ?? 'http://localhost:4023';
+/** Calls the insurer's console-only routes (localhost + header). */
+const insurer = (path: string, init: RequestInit = {}) =>
+  fetch(`${INSURER}${path}`, { ...init, headers: { 'x-kuasa-console': '1', 'content-type': 'application/json', ...(init.headers ?? {}) } });
 type State = { registry: string; cover?: string; agents: Record<string, string>; mandates: Record<string, { id: string; owner: string; payer: string; issueTx: string; proofAnchorTx: string }> };
 const loadState = (): State => JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8'));
 const account = (name: string, n: number) => {
@@ -45,6 +49,32 @@ app.get('/api/state', async (_, res) => {
   }));
   const shop = await fetch(`${SHOP}/kuasa-log`).then((r) => r.json()).catch(() => null);
   json(res, { registry: `<${s.registry},0>`, agentRegistry: '<12802,0>', explorer: TESTNET.explorer, mandates, shop });
+});
+
+/** Kuasa Cover: policies, pool, claims queue, disclosures (from the insurer). */
+app.get('/api/cover', async (_req, res) => {
+  const r = await insurer('/state').catch(() => null);
+  return r?.ok ? res.type('json').send(await r.text()) : json(res, { offline: true });
+});
+
+/** The claims handler's decision. Payout happens only through this human action. */
+app.post('/api/claims/:id/decision/:verdict', async (req, res) => {
+  if (!/^d+$/.test(req.params.id) || !['approve', 'reject'].includes(req.params.verdict)) return json(res, { error: 'bad request' }, 400);
+  const r = await insurer(`/claims/${req.params.id}/decision`, { method: 'POST', body: JSON.stringify({ approve: req.params.verdict === 'approve' }) }).catch(() => null);
+  return r ? res.status(r.status).type('json').send(await r.text()) : json(res, { error: 'insurer offline' }, 502);
+});
+
+app.post('/api/claims/:id/assess', async (req, res) => {
+  if (!/^d+$/.test(req.params.id)) return json(res, { error: 'bad request' }, 400);
+  const r = await insurer(`/claims/${req.params.id}/assess`, { method: 'POST', body: '{}' }).catch(() => null);
+  return r ? res.status(r.status).type('json').send(await r.text()) : json(res, { error: 'insurer offline' }, 502);
+});
+
+/** A human approves a drafted lawful-disclosure request before it is anchored on the claim. */
+app.post('/api/disclosures/:id/approve', async (req, res) => {
+  if (!/^d+$/.test(req.params.id)) return json(res, { error: 'bad request' }, 400);
+  const r = await insurer(`/disclosures/${req.params.id}/approve`, { method: 'POST', body: '{}' }).catch(() => null);
+  return r ? res.status(r.status).type('json').send(await r.text()) : json(res, { error: 'insurer offline' }, 502);
 });
 
 /** Owner publishes the agent's live Kuasa Cover in its CIS-8004 entry (metadata is owner-only). */

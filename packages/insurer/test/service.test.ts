@@ -176,3 +176,14 @@ test('a claim is assessed only once (no griefing by re-assessment)', async () =>
   await assert.rejects(t.svc.assessClaim(0n, []), /already assessed/);
   assert.deepEqual(t.svc.state().fraudCounts, {});
 });
+
+test('state survives a restart (snapshot + restore)', async () => {
+  let saved = '';
+  const t = harness({ persist: (s) => { saved = s; } });
+  await filedClaim(t, true, 0n);
+  assert.ok(saved.length > 0, 'persisted after changes');
+  const restarted = new InsurerService({ ...t.svc['deps'], persist: undefined }, saved);
+  assert.equal(restarted.state().policies.length, 1);
+  const d = await restarted.decide(0n, true);
+  assert.equal(d.paid, 'payout-tx', 'a claim assessed before the restart can still be decided');
+});
