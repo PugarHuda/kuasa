@@ -80,7 +80,7 @@ The pitch: *Concordium builds the rails; Kuasa Cover makes the remaining risk in
 ### 1. Cover contract (`contracts/kuasa-cover`, new Rust crate)
 State, keyed by sequential `u64` ids:
 - `Policy { holder, agent_payer, agent_registry, agent_token, mandate: MandateKey, kind: Period | Order(order_hash), limit, deductible, premium, premium_tx, valid_from, valid_until, paid_out, status: Active | Cancelled }`
-- `Claim { policy_id, claimant, kind: NonDelivery | WrongItem | MerchantLoss, amount, evidence (hash), receipt_order (Option<hash>), status: Filed | Assessed{ok, reason_hash} | Approved | Rejected | Paid{payout_tx} | Fraud{disclosure_hash}, decided_by }`
+- `Claim { policy_id, claimant, kind: AgentMistake | WrongItem | MerchantLoss, amount, evidence (hash), receipt_order (Option<hash>), status: Filed | Assessed{ok, reason_hash} | Approved | Rejected | Paid{payout_tx} | Fraud{disclosure_hash}, decided_by }`
 
 Entry points:
 - `init(operator)`.
@@ -119,7 +119,7 @@ Inputs are read from chain/proofs by the insurer service, never trusted from the
 - Fraud: on a rejected claim with no on-chain evidence, if the same holder has ≥ 2 such rejections, it generates a disclosure-request JSON (claim, account, evidence, legal-basis text), anchors its hash with `markFraud`, and links it in the console.
 
 **Assessor rules:**
-- `NonDelivery` / `WrongItem` is approved-eligible iff a receipt exists in the mandate registry events with `order == receipt_order` and `payment_tx` finalized, inside the policy period, amount ≤ receipt amount − deductible, and no prior paid claim on that order.
+- `AgentMistake` (e.g. duplicate order; needs two matching receipts) / `WrongItem` (delivered but wrong or counterfeit) is approved-eligible iff a receipt exists in the mandate registry events with `order == receipt_order` and `payment_tx` finalized, inside the policy period, amount ≤ receipt amount − deductible, and no prior paid claim on that order.
 - `MerchantLoss` requires a receipt plus a filed incident on the mandate.
 - Everything else → reject, with the reason.
 
@@ -141,9 +141,24 @@ The shop guard and the insurer service append decisions to a local log. Every 60
 1. Problem: the shop requires cover ≥ €20 for wine; alice's uninsured agent is refused.
 2. Alice's agent quotes cover (factor breakdown), buys 30-day cover for €100 via x402. The policy appears on-chain and in the agent's registry metadata.
 3. It buys wine (€24). The guard checks mandate + proof + registry + cover. Receipt anchored.
-4. The shop never delivers. The agent files a claim; the assessor matches the on-chain receipt; the claims handler approves in the console; €24 minus deductible is paid in EUDemo.
+4. The agent makes a mistake inside its mandate (orders the same wine twice). It files an AgentMistake claim; the assessor matches the duplicate on-chain receipts; the claims handler approves in the console; €24 minus deductible is paid in EUDemo. A merchant files a MerchantLoss claim against an agent policy (shown briefly).
 5. The teen's agent files a claim for an order that never happened → rejected; the repeat → fraud flag + anchored disclosure request.
 6. Close: the production path (Enhanced Locks pool, fronting insurer, Agent IDP + KYCaaS/AML/liveness as underwriting inputs, EURQ).
+
+## Scope of cover vs. Concordium escrow
+Non-delivery is **not** covered: Protocol-Enforced Escrow (Concordium roadmap) handles funds returning when a seller does not deliver. Kuasa Cover covers what escrow cannot:
+- the agent's own mistakes inside its mandate (duplicate or wrong order);
+- goods delivered but wrong or counterfeit (escrow already released);
+- third-party loss a merchant suffers from an agent (MerchantLoss).
+
+Pitch line: *escrow protects you from bad sellers; Kuasa Cover protects you from your agent, and merchants from agents.*
+
+## Swappable foundations (stand-ins for roadmap items)
+The existing Kuasa layer stays, as stand-ins behind two interfaces, so the swap path is visible in code:
+- `IdentitySource`: `claims(agent) -> Claims`. Today: the V&A mandate proof (`verifyMandateProof`). Later: Agent IDP credentials.
+- `SpendControl`: `state(agent) -> { active, maxTotal, spent, validUntil }`. Today: the Kuasa mandate registry. Later: Protocol-Level Locks.
+
+No further feature work on that layer (LEI business mode and CIS-8 for mandates are dropped). **Mandate revocation voids cover for new transactions:** `issuePolicy` checks the mandate, and the guard and assessor reject claims on orders made after a revoke.
 
 ## Decisions after the builder check (designer's calls, open to change)
 
@@ -197,4 +212,4 @@ The shop guard and the insurer service append decisions to a local log. Every 60
 - Exact `CIS-8004.setMetadata` parameter encoding and **who may call it**. Verify by dry-run; if only the token owner may, the owner signs (sponsored).
 - Whether `kuasa.view` cross-contract invocation needs the registry address in init or per call.
 - The audit batch interval and file layout.
-- How the shop "never delivers" is simulated (e.g. a `/shop/scam/*` product).
+- How the duplicate-order mistake is triggered in the demo (e.g. an agent CLI flag).
