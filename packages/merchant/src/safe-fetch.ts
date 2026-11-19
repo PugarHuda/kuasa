@@ -7,9 +7,10 @@ import { isIP } from 'node:net';
  * ponytail: DNS is checked before connecting; a rebinding resolver could still race this.
  * Pin the resolved IP in a custom agent if mandates are ever fetched from untrusted hosts at scale.
  */
-export async function safeFetchText(url: string, opts: { timeoutMs?: number; maxBytes?: number; allowHttpLocalhost?: boolean } = {}): Promise<string> {
+export async function safeFetchText(url: string, opts: { timeoutMs?: number; maxBytes?: number; localOrigin?: string } = {}): Promise<string> {
   const u = new URL(url);
-  const local = opts.allowHttpLocalhost && u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+  // Dev only: exactly one trusted local origin (e.g. this shop serving its own demo documents).
+  const local = !!opts.localOrigin && u.origin === new URL(opts.localOrigin).origin;
   if (!local) {
     if (u.protocol !== 'https:') throw new Error('only https URLs are accepted');
     const addrs = isIP(u.hostname) ? [{ address: u.hostname }] : await lookup(u.hostname, { all: true });

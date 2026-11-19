@@ -17,11 +17,14 @@ export type BuyResult =
 
 export class KuasaAgent {
   private pay: typeof fetch;
+  /** The agent's own copy of its mandate scope; payments outside it are never signed. */
+  private scope?: { asset: string; maxPerOrder: string; merchants?: string[] };
   constructor(readonly opts: { shopUrl: string; mandateUrl: string; payer: string; payerKey: string }) {
     const client = new x402Client()
       .register(CONCORDIUM_TESTNET_CAIP2, new ExactConcordiumScheme({ accountAddress: AccountAddress.fromBase58(opts.payer), signer: buildBasicAccountSigner(opts.payerKey) }))
-      // ponytail: x402's USD caps don't understand CCD; the mandate (checked via /quote and on-chain) is the cap.
-      .setSpendControls(false);
+      // x402's USD caps don't understand CCD; the agent enforces its own mandate instead (below).
+      .setSpendControls(false)
+      .registerPolicy((_, reqs) => reqs.filter((r) => this.withinMandate(r)));
     this.pay = wrapFetchWithPayment(fetch, client);
   }
 
@@ -30,6 +33,15 @@ export class KuasaAgent {
     const root = new URL('../../../.kuasa/', import.meta.url);
     const acc = JSON.parse(readFileSync(new URL(`accounts/${name}.json`, root), 'utf8')).accounts.find((a: { credNumber: number }) => a.credNumber === 1);
     return new KuasaAgent({ shopUrl, mandateUrl: `${shopUrl}/kuasa/mandate/${name}.json`, payer: acc.address, payerKey: acc.key });
+  }
+
+  /** Never trust the shop's 402: amount, payee, asset and network must fit the mandate. */
+  private withinMandate(r: { network: string; asset: string; amount: string; payTo: string }) {
+    const s = this.scope;
+    if (!s || r.network !== CONCORDIUM_TESTNET_CAIP2) return false;
+    if ((r.asset || 'CCD').toUpperCase() !== s.asset.toUpperCase()) return false;
+    if (!/^\d+$/.test(r.amount) || BigInt(r.amount) > BigInt(s.maxPerOrder)) return false;
+    return !s.merchants?.length || s.merchants.includes(r.payTo);
   }
 
   private headers = () => ({ [MANDATE_HEADER]: this.opts.mandateUrl });
@@ -53,9 +65,12 @@ export class KuasaAgent {
   async buy(path: string, skipQuote = false): Promise<BuyResult> {
     const q = skipQuote ? { ok: true } : await this.quote(path);
     if (!q.ok) return { ok: false, reasons: q.reasons ?? ['refused'] };
+    const url = new URL(path, this.opts.shopUrl);
+    if (url.origin !== new URL(this.opts.shopUrl).origin) return { ok: false, reasons: ['refusing to pay outside the configured shop'] };
+    this.scope ??= (await this.mandate()).scope;
     let res: Response;
     try {
-      res = await this.pay(new URL(path, this.opts.shopUrl), { headers: this.headers() });
+      res = await this.pay(url, { headers: this.headers() });
     } catch (e) {
       return { ok: false, reasons: [`payment failed: ${(e as Error).message}`] };
     }

@@ -1,0 +1,12 @@
+{
+  "name": "@kuasa/console",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node --import tsx src/server.ts", "typecheck": "tsc -p ." },
+  "dependencies": {
+    "@kuasa/chain": "workspace:*",
+    "@kuasa/core": "workspace:*",
+    "express": "^5.2.1"
+  },
+  "devDependencies": { "@types/express": "^5.0.6" }
+}

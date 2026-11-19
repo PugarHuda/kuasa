@@ -54,8 +54,8 @@ export class KuasaGuard {
     offers: Record<string, Offer>;
     /** Account that records receipts; must be listed as a recorder in the mandate. */
     recorder: Wallet;
-    /** Dev only: allow http://localhost mandate URLs. */
-    allowHttpLocalhost?: boolean;
+    /** Dev only: the single local origin (e.g. http://localhost:4021) allowed without https. */
+    localOrigin?: string;
     fetchText?: (url: string) => Promise<string>;
     now?: () => number;
     /** Injectable for tests; defaults to full on-chain re-verification. */
@@ -63,7 +63,7 @@ export class KuasaGuard {
   }) {}
 
   private fetchText = (url: string) =>
-    this.opts.fetchText ? this.opts.fetchText(url) : safeFetchText(url, { allowHttpLocalhost: this.opts.allowHttpLocalhost });
+    this.opts.fetchText ? this.opts.fetchText(url) : safeFetchText(url, { localOrigin: this.opts.localOrigin });
 
   private now = () => this.opts.now?.() ?? Date.now();
 
@@ -74,7 +74,7 @@ export class KuasaGuard {
     if (this.proofs.size >= PROOF_CACHE_MAX) this.proofs.delete(this.proofs.keys().next().value!);
     const result = this.fetchText(mandate.proof.auditRecordUri)
       .then((json) => (this.opts.verifyProof ?? verifyMandateProof)({ mandate, auditRecordJson: json, grpc: this.opts.grpc, network: this.opts.network }))
-      .catch((e): ProofResult => ({ ok: false, reason: `proof unavailable (${(e as Error).message})` }));
+      .catch((): ProofResult => ({ ok: false, reason: 'proof document unavailable' }));
     this.proofs.set(id, { at: this.now(), result });
     result.then((r) => { if (!r.ok) this.proofs.delete(id); }); // never cache failures
     return result;

@@ -42,7 +42,7 @@ const guard = new KuasaGuard({
   grpc, network: 'Testnet', registry,
   offers: Object.fromEntries(Object.entries(catalog).map(([p, o]) => [p, { category: o.category, requirements: o.requirements }])),
   recorder: wallet(sponsor.address, sponsor.key),
-  allowHttpLocalhost: true, // demo: documents are served by this same process
+  localOrigin: `http://localhost:${PORT}`, // demo: documents are served by this same process
 });
 
 const grpcCfg = { host: TESTNET.grpc.host, port: TESTNET.grpc.port, useTls: true };
@@ -73,7 +73,8 @@ app.get('/quote', async (req, res) => {
   json(res, d);
 });
 
-app.get('/kuasa-log', (_, res) => json(res, { log: guard.log.slice(-50), receipts: guard.receipts, unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
+// Operator view for the console: loopback only.
+app.get('/kuasa-log', (req, res) => !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
 
 app.use(paymentMiddleware(routes as never, server));
 for (const [path, p] of Object.entries(catalog)) {
