@@ -103,7 +103,7 @@ async function deployAccount(grpc: ConcordiumGRPCClient, p: Profile, credNumber:
 
 export async function balance(grpc: ConcordiumGRPCClient, address: string): Promise<bigint> {
   const info = await grpc.getAccountInfo(sdk.AccountAddress.fromBase58(address)).catch(() => null);
-  return info ? sdk.CcdAmount.toMicroCcd(info.accountAmount) : 0n;
+  return info ? BigInt(sdk.CcdAmount.toMicroCcd(info.accountAmount).toString()) : 0n;
 }
 
 /** Testnet CCD drop. Only works once per account and only before any other incoming transfer. */

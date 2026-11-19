@@ -1,0 +1,15 @@
+{
+  "name": "@kuasa/shop",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@concordium/web-sdk": "^12.0.2",
+    "@kuasa/chain": "workspace:*",
+    "@kuasa/core": "workspace:*",
+    "@kuasa/merchant": "workspace:*",
+    "@x402/concordium": "~2.31.0",
+    "@x402/core": "~2.31.0",
+    "@x402/express": "~2.31.0",
+    "@x402/fetch": "~2.31.0"
+  }
+}
