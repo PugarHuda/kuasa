@@ -85,7 +85,7 @@ async function deployAccount(grpc: ConcordiumGRPCClient, p: Profile, credNumber:
   const wallet = sdk.ConcordiumHdWallet.fromHex(p.seed, 'Testnet');
   const key = wallet.getAccountSigningKey(IP_INDEX, 0, credNumber).toString('hex');
   const expiry = sdk.TransactionExpiry.fromDate(new Date(Date.now() + 30 * 60_000));
-  const cdt = sdk.createCredentialTransaction({
+  const cdt = sdk.createCredentialPayload({
     ipInfo: { ...ip.ipInfo, ipRealName: ip.ipInfo.ipDescription?.name ?? 'Concordium testnet IP' },
     globalContext: gp, arsInfos, idObject: p.idObject.value ?? p.idObject, revealedAttributes: [],
     credNumber, seedAsHex: p.seed, net: 'Testnet', identityIndex: 0,
