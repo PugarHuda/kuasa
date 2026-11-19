@@ -169,3 +169,10 @@ test('a failed payout record is retried without paying again', async () => {
   assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 1);
   assert.ok(t.calls.includes(`recordPayout:0:${23n * EUR}`));
 });
+
+test('a claim is assessed only once (no griefing by re-assessment)', async () => {
+  const t = harness();
+  await filedClaim(t, true, 0n);
+  await assert.rejects(t.svc.assessClaim(0n, []), /already assessed/);
+  assert.deepEqual(t.svc.state().fraudCounts, {});
+});

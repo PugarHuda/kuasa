@@ -84,6 +84,12 @@ app.get('/quote', async (req, res) => {
 });
 
 // Operator view for the console: loopback only.
+/** Lets a buyer find the on-chain receipt for its own payment (both are public on-chain). */
+app.get('/receipt/:paymentTx', (req, res) => {
+  const r = guard.receipts.find((x) => x.paymentTx === req.params.paymentTx);
+  return r ? json(res, { order: r.order, orderRef: r.orderRef, receiptTx: r.receiptTx, amount: r.amount }) : json(res, { pending: true }, 404);
+});
+
 app.get('/kuasa-log', (req, res) => !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
 
 app.use(paymentMiddleware(routes as never, server));

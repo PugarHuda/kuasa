@@ -21,6 +21,8 @@ import { bigintJson, connect, KuasaCover, KuasaRegistry, registryEventsOfTx, TES
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
+import { checkSponsorable } from './sponsor.js';
+import { Transaction } from '@concordium/web-sdk/transactions';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4023);
@@ -103,7 +105,13 @@ const payerOf = (ctx: { paymentPayload: { payload: unknown } }) =>
 const facilitator = new x402Facilitator().register(CONCORDIUM_TESTNET_CAIP2,
   new FacilitatorScheme({ signer: toConcordiumFacilitatorSigner(operator.address.address, operatorAcc.key, { host: TESTNET.grpc.host, port: TESTNET.grpc.port, useTls: true }) }));
 const server = new x402ResourceServer(facilitator as never).register(CONCORDIUM_TESTNET_CAIP2, new ServerScheme());
+const mandateHeaderOf = (ctx: unknown) =>
+  (ctx as { transportContext?: { request?: { adapter?: { getHeader(n: string): string | undefined } } } })?.transportContext?.request?.adapter?.getHeader(MANDATE_HEADER);
 server.onBeforeVerify((async (ctx: Parameters<KuasaGuard['beforeVerify']>[0]) => {
+  const q = svc.quoteOf(quoteIdOf(ctx));
+  if (!q || mandateHeaderOf(ctx) !== q.request.mandateUrl) {
+    return { abort: true as const, reason: 'kuasa_cover_rejected', message: 'the premium must be paid under the mandate the quote was priced for' };
+  }
   const g = await guard.beforeVerify(ctx);
   if (g) return g;
   const reason = await svc.checkPurchase(quoteIdOf(ctx), payerOf(ctx), BigInt(ctx.requirements.amount));
@@ -156,13 +164,31 @@ app.get('/cover/status', async (req, res) => {
   json(res, { onChain: await cover.coverOf(payer), policies: svc.state().policies.filter((p) => p.payer === payer) });
 });
 
-app.post('/claims/assess', async (req, res) => {
-  const txs = Array.isArray(req.body?.receiptTxs) ? req.body.receiptTxs.map(String).filter((t: string) => /^[0-9a-f]{64}$/.test(t)) : [];
-  try { json(res, await svc.assessClaim(big(req.body?.claimId), txs)); } catch (e) { json(res, { error: (e as Error).message }, 400); }
+app.get('/info', (_req, res) => json(res, { cover: { index: state.cover, subindex: '0' }, operator: operator.address.address, treasury: treasury.address.address, asset: ASSET }));
+
+/** Co-signs (sponsors) a claim filing signed by the claimant, so agents never need CCD for fees. */
+app.post('/claims/sponsor', async (req, res) => {
+  const check = await checkSponsorable(req.body?.tx, cover.address, operator.address);
+  if ('refused' in check) return json(res, { error: check.refused }, 400);
+  try {
+    const sponsored = await Transaction.sponsor(check.signable as never, operator.signer);
+    const hash = await grpc.sendTransaction(Transaction.finalize(sponsored));
+    const summary = await grpc.waitForTransactionFinalization(hash);
+    const s = summary.summary as { transactionType?: string };
+    if (s.transactionType === 'failed') return json(res, { error: 'claim rejected on-chain', summary }, 400);
+    const claimId = KuasaCover.idFromEvents(summary, coverIndex);
+    if (claimId === null) return json(res, { error: 'claim id missing' }, 500);
+    // The receipts are submitted together with the claimant-signed filing; assessed exactly once.
+    const txs = Array.isArray(req.body?.receiptTxs) ? req.body.receiptTxs.map(String).filter((t: string) => /^[0-9a-f]{64}$/.test(t)).slice(0, 4) : [];
+    const assessment = await svc.assessClaim(claimId, txs);
+    json(res, { tx: sdk.TransactionHash.toHexString(hash), claimId, assessment });
+  } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
 
-app.get('/state', (req, res) => (local(req) ? json(res, { ...svc.state(), treasury: treasury.address.address, operator: operator.address.address, cover: `<${state.cover},0>` }) : json(res, { error: 'forbidden' }, 403)));
-app.get('/pool', async (req, res) => (local(req) ? json(res, { balance: await svc['deps'].treasuryBalance() }) : json(res, { error: 'forbidden' }, 403)));
+app.get('/state', consoleOnly, async (_req, res) => json(res, {
+  ...svc.state(), treasury: treasury.address.address, operator: operator.address.address, cover: `<${state.cover},0>`,
+  pool: await eudemoBalance(treasury.address.address),
+}));
 app.post('/claims/:id/decision', consoleOnly, async (req, res) => {
   try { json(res, await svc.decide(big(req.params.id), req.body?.approve === true)); } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });

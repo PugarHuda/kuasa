@@ -149,6 +149,7 @@ export class InsurerService {
 
   /** Assesses a filed claim against the on-chain receipts it cites, and records the outcome. */
   async assessClaim(claimId: bigint, receiptTxs: string[]): Promise<Assessment> {
+    if (this.claims.has(claimId)) throw new Error('claim already assessed');
     const c = await this.deps.cover.claim(claimId);
     if (!c) throw new Error('unknown claim');
     const p = await this.deps.cover.policy(c.policyId);
