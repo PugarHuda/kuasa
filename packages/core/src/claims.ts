@@ -47,7 +47,8 @@ export function deriveClaims(statements: Statement[], at: Date, revealed: Record
     if (s.type === 'AttributeInRange' && s.attributeTag === 'dob') {
       const upper = String(s.upper);
       if (!isCalendarDate(upper)) continue; // malformed bound proves nothing
-      c.ageOver = Math.max(c.ageOver ?? 0, yearsSince(upper, at));
+      // upper is exclusive: the holder was born on or before the day before it
+      c.ageOver = Math.max(c.ageOver ?? 0, yearsSince(dayBefore(upper), at));
     } else if (s.type === 'AttributeInSet' && s.attributeTag === 'countryOfResidence') {
       c.residency = intersect(c.residency, s.set.map(String));
     } else if (s.type === 'AttributeInSet' && s.attributeTag === 'nationality') {
@@ -68,6 +69,11 @@ function isCalendarDate(yyyymmdd: string): boolean {
   const [y, m, d] = [yyyymmdd.slice(0, 4), yyyymmdd.slice(4, 6), yyyymmdd.slice(6, 8)].map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+function dayBefore(yyyymmdd: string): string {
+  const d = new Date(Date.UTC(+yyyymmdd.slice(0, 4), +yyyymmdd.slice(4, 6) - 1, +yyyymmdd.slice(6, 8) - 1));
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
 }
 
 function intersect(a: string[] | undefined, b: string[]): string[] {

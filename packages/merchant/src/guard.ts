@@ -50,7 +50,7 @@ export class KuasaGuard {
     grpc: ConcordiumGRPCClient;
     network: Network;
     registry: KuasaRegistry;
-    /** Route pattern (e.g. "GET /wine/:sku") -> offer. */
+    /** x402 route path pattern (e.g. "/wine/:sku") -> offer. */
     offers: Record<string, Offer>;
     /** Account that records receipts; must be listed as a recorder in the mandate. */
     recorder: Wallet;

@@ -75,6 +75,11 @@ test('claims from statements', () => {
   assert.deepEqual(c.residency, ['DK', 'DE']);
   assert.equal(c.lei, '5493001KJTIIGC8Y1R12');
   assert.equal(yearsSince('20081118', at), 17); // one day short
+  // SDK addMinimumAge(18) on 2026-11-19 emits upper = 20081120 (exclusive): proves 18 today
+  const today = new Date(Date.UTC(2026, 10, 19));
+  const age = (upper: string) => deriveClaims([{ type: 'AttributeInRange', attributeTag: 'dob', lower: '18000101', upper }], today).ageOver;
+  assert.equal(age('20081120'), 18);
+  assert.equal(age('20081121'), 17); // could be born 2008-11-20: turns 18 tomorrow
   // malformed date bounds are ignored, never turned into an age
   assert.equal(deriveClaims([{ type: 'AttributeInRange', attributeTag: 'dob', lower: '0', upper: 'abc' }], at).ageOver, undefined);
   assert.equal(deriveClaims([{ type: 'AttributeInRange', attributeTag: 'dob', lower: '0', upper: '20080231' }], at).ageOver, undefined);
