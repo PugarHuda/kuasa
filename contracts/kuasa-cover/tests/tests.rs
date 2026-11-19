@@ -1,0 +1,235 @@
+use concordium_smart_contract_testing::*;
+use concordium_std::{AccountAddress, ContractAddress, HashSha2256, Timestamp};
+use kuasa_cover::*;
+
+const OWNER: AccountAddress = AccountAddress([1; 32]);
+const PAYER: AccountAddress = AccountAddress([2; 32]);
+const OPERATOR: AccountAddress = AccountAddress([3; 32]);
+const STRANGER: AccountAddress = AccountAddress([4; 32]);
+const MERCHANT: AccountAddress = AccountAddress([5; 32]);
+const SIGNER: Signer = Signer::with_one_key();
+const MANDATE_ID: HashSha2256 = HashSha2256([7; 32]);
+const ORDER_A: HashSha2256 = HashSha2256([10; 32]);
+const ORDER_B: HashSha2256 = HashSha2256([11; 32]);
+const EUR: u64 = 1_000_000;
+
+/// Registry params, serialised exactly like kuasa-registry's IssueParams.
+#[derive(concordium_std::Serial)]
+struct RegistryIssue {
+    id: HashSha2256,
+    payer: AccountAddress,
+    agent_registry: ContractAddress,
+    agent_token: String,
+    uri: String,
+    max_total: u64,
+    valid_until: Timestamp,
+    recorders: Vec<AccountAddress>,
+}
+
+#[derive(concordium_std::Serial)]
+struct RegistryRevoke {
+    id: HashSha2256,
+    reason: HashSha2256,
+}
+
+struct T {
+    chain: Chain,
+    registry: ContractAddress,
+    cover: ContractAddress,
+}
+
+fn deploy(chain: &mut Chain, path: &str, init: &str, param: OwnedParameter) -> ContractAddress {
+    let module = module_load_v1(path).unwrap_or_else(|_| panic!("build {path} first (cargo concordium build)"));
+    let m = chain.module_deploy_v1(SIGNER, OWNER, module).unwrap();
+    chain
+        .contract_init(SIGNER, OWNER, Energy::from(10_000), InitContractPayload {
+            amount: Amount::zero(),
+            mod_ref: m.module_reference,
+            init_name: OwnedContractName::new_unchecked(init.into()),
+            param,
+        })
+        .unwrap()
+        .contract_address
+}
+
+fn setup() -> T {
+    let mut chain = Chain::builder().block_time(Timestamp::from_timestamp_millis(1_000)).build().unwrap();
+    for a in [OWNER, PAYER, OPERATOR, STRANGER, MERCHANT] {
+        chain.create_account(Account::new(a, Amount::from_ccd(1_000)));
+    }
+    let registry = deploy(&mut chain, "../kuasa-registry/concordium-out/module.wasm.v1", "init_kuasa", OwnedParameter::empty());
+    let cover = deploy(&mut chain, "concordium-out/module.wasm.v1", "init_kuasa_cover",
+        OwnedParameter::from_serial(&InitParams { operator: OPERATOR, registry }).unwrap());
+    let mut t = T { chain, registry, cover };
+    let issue = RegistryIssue {
+        id: MANDATE_ID, payer: PAYER, agent_registry: ContractAddress::new(12802, 0), agent_token: "ee04".into(),
+        uri: "https://k.example/m".into(), max_total: 150 * EUR, valid_until: Timestamp::from_timestamp_millis(1_000_000), recorders: vec![MERCHANT],
+    };
+    upd(&mut t.chain, registry, OWNER, "kuasa.issue", &issue).unwrap();
+    t
+}
+
+fn upd<P: concordium_std::Serial>(chain: &mut Chain, c: ContractAddress, from: AccountAddress, name: &str, p: &P) -> Result<ContractInvokeSuccess, ContractInvokeError> {
+    chain.contract_update(SIGNER, from, Address::Account(from), Energy::from(50_000), UpdateContractPayload {
+        amount: Amount::zero(),
+        address: c,
+        receive_name: OwnedReceiveName::new_unchecked(name.into()),
+        message: OwnedParameter::from_serial(p).unwrap(),
+    })
+}
+
+fn call<P: concordium_std::Serial>(t: &mut T, from: AccountAddress, name: &str, p: &P) -> Result<ContractInvokeSuccess, ContractInvokeError> {
+    let c = t.cover;
+    upd(&mut t.chain, c, from, &format!("kuasa_cover.{name}"), p)
+}
+
+fn view<P: concordium_std::Serial, R: concordium_std::Deserial>(t: &T, name: &str, p: &P) -> R {
+    t.chain
+        .contract_invoke(OWNER, Address::Account(OWNER), Energy::from(50_000), UpdateContractPayload {
+            amount: Amount::zero(),
+            address: t.cover,
+            receive_name: OwnedReceiveName::new_unchecked(format!("kuasa_cover.{name}")),
+            message: OwnedParameter::from_serial(p).unwrap(),
+        })
+        .unwrap()
+        .parse_return_value()
+        .unwrap()
+}
+
+fn policy_params() -> IssuePolicy {
+    IssuePolicy {
+        holder: OWNER, agent_payer: PAYER, agent_token: "ee04".into(), mandate: MandateKey { owner: OWNER, id: MANDATE_ID },
+        kind: PolicyKind::Period, limit: 100 * EUR, deductible: EUR, premium: 2 * EUR, premium_tx: HashSha2256([9; 32]),
+        valid_until: Timestamp::from_timestamp_millis(50_000),
+    }
+}
+
+fn issue(t: &mut T) -> u64 {
+    call(t, OPERATOR, "issuePolicy", &policy_params()).unwrap().parse_return_value().unwrap()
+}
+
+fn claim(orders: Vec<HashSha2256>) -> FileClaim {
+    FileClaim { policy_id: 0, kind: ClaimKind::AgentMistake, amount: 24 * EUR, evidence: HashSha2256([12; 32]), orders }
+}
+
+fn cover_of(t: &T, order: Option<HashSha2256>) -> CoverView {
+    view(t, "coverOf", &CoverQuery { payer: PAYER, order })
+}
+
+#[test]
+fn issue_requires_active_matching_mandate() {
+    let mut t = setup();
+    let mut p = policy_params();
+    p.holder = STRANGER;
+    assert!(call(&mut t, OPERATOR, "issuePolicy", &p).is_err(), "holder must be the mandate owner");
+    let mut p = policy_params();
+    p.agent_payer = STRANGER;
+    assert!(call(&mut t, OPERATOR, "issuePolicy", &p).is_err(), "payer must match the mandate");
+    let mut p = policy_params();
+    p.limit = 151 * EUR;
+    assert!(call(&mut t, OPERATOR, "issuePolicy", &p).is_err(), "limit must not exceed the mandate budget");
+    let mut p = policy_params();
+    p.mandate.id = HashSha2256([99; 32]);
+    assert!(call(&mut t, OPERATOR, "issuePolicy", &p).is_err(), "unknown mandate");
+
+    let reg = t.registry;
+    upd(&mut t.chain, reg, OWNER, "kuasa.revoke", &RegistryRevoke { id: MANDATE_ID, reason: HashSha2256([0; 32]) }).unwrap();
+    assert!(call(&mut t, OPERATOR, "issuePolicy", &policy_params()).is_err(), "revoked mandate");
+}
+
+#[test]
+fn period_cover_view() {
+    let mut t = setup();
+    assert_eq!(cover_of(&t, None), CoverView { period_remaining: 0, order_limit: 0, policy_id: None });
+    let id = issue(&mut t);
+    assert_eq!(cover_of(&t, None), CoverView { period_remaining: 100 * EUR, order_limit: 0, policy_id: Some(id) });
+    t.chain.tick_block_time(Duration::from_millis(60_000)).unwrap();
+    assert_eq!(cover_of(&t, None).period_remaining, 0, "expired cover is gone");
+}
+
+#[test]
+fn order_cover_view() {
+    let mut t = setup();
+    let mut p = policy_params();
+    p.kind = PolicyKind::Order(ORDER_A);
+    p.limit = 60 * EUR;
+    call(&mut t, OPERATOR, "issuePolicy", &p).unwrap();
+    assert_eq!(cover_of(&t, Some(ORDER_A)).order_limit, 60 * EUR);
+    assert_eq!(cover_of(&t, Some(ORDER_B)).order_limit, 0);
+    assert_eq!(cover_of(&t, None).period_remaining, 0, "an order policy is not period cover");
+}
+
+#[test]
+fn claim_lifecycle() {
+    let mut t = setup();
+    issue(&mut t);
+    let cid: u64 = call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A, ORDER_B])).unwrap().parse_return_value().unwrap();
+    call(&mut t, OPERATOR, "assessClaim", &AssessParams { claim_id: cid, ok: true, reason: HashSha2256([1; 32]) }).unwrap();
+    assert!(!view::<_, bool>(&t, "claimsAuthorized", &cid), "not before a human approves");
+    call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: cid, approve: true }).unwrap();
+    assert!(view::<_, bool>(&t, "claimsAuthorized", &cid));
+    call(&mut t, OPERATOR, "recordPayout", &PayoutParams { claim_id: cid, payout_tx: HashSha2256([2; 32]), amount: 23 * EUR }).unwrap();
+    assert!(!view::<_, bool>(&t, "claimsAuthorized", &cid), "paid claims are not authorised again");
+    let c: Option<Claim> = view(&t, "claim", &cid);
+    assert_eq!(c.unwrap().status, ClaimStatus::Paid { payout_tx: HashSha2256([2; 32]) });
+    let p: Option<Policy> = view(&t, "policy", &0u64);
+    assert_eq!(p.unwrap().paid_out, 23 * EUR);
+    assert_eq!(cover_of(&t, None).period_remaining, 77 * EUR);
+}
+
+#[test]
+fn approve_requires_positive_assessment() {
+    let mut t = setup();
+    issue(&mut t);
+    let cid: u64 = call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A])).unwrap().parse_return_value().unwrap();
+    assert!(call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: cid, approve: true }).is_err(), "not assessed yet");
+    call(&mut t, OPERATOR, "assessClaim", &AssessParams { claim_id: cid, ok: false, reason: HashSha2256([1; 32]) }).unwrap();
+    assert!(call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: cid, approve: true }).is_err(), "negative assessment");
+    call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: cid, approve: false }).unwrap();
+    call(&mut t, OPERATOR, "markFraud", &FraudParams { claim_id: cid, disclosure: HashSha2256([3; 32]) }).unwrap();
+    let c: Option<Claim> = view(&t, "claim", &cid);
+    assert_eq!(c.unwrap().status, ClaimStatus::Fraud { disclosure: HashSha2256([3; 32]) });
+}
+
+#[test]
+fn duplicate_order_claim_rejected() {
+    let mut t = setup();
+    issue(&mut t);
+    call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A])).unwrap();
+    assert!(call(&mut t, OWNER, "fileClaim", &claim(vec![ORDER_A])).is_err());
+    assert!(call(&mut t, PAYER, "fileClaim", &claim(vec![])).is_err(), "at least one order");
+    assert!(call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_B, HashSha2256([20; 32]), HashSha2256([21; 32])])).is_err(), "at most two");
+}
+
+#[test]
+fn payout_over_limit_rejected() {
+    let mut t = setup();
+    issue(&mut t);
+    let cid: u64 = call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A])).unwrap().parse_return_value().unwrap();
+    call(&mut t, OPERATOR, "assessClaim", &AssessParams { claim_id: cid, ok: true, reason: HashSha2256([1; 32]) }).unwrap();
+    call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: cid, approve: true }).unwrap();
+    assert!(call(&mut t, OPERATOR, "recordPayout", &PayoutParams { claim_id: cid, payout_tx: HashSha2256([2; 32]), amount: 101 * EUR }).is_err());
+}
+
+#[test]
+fn only_payer_or_holder_may_file_buyer_claims() {
+    let mut t = setup();
+    issue(&mut t);
+    assert!(call(&mut t, STRANGER, "fileClaim", &claim(vec![ORDER_A])).is_err());
+    call(&mut t, OWNER, "fileClaim", &claim(vec![ORDER_A])).unwrap();
+    let mut m = claim(vec![ORDER_B]);
+    m.kind = ClaimKind::MerchantLoss;
+    call(&mut t, MERCHANT, "fileClaim", &m).unwrap();
+}
+
+#[test]
+fn operator_only_entrypoints_reject_others() {
+    let mut t = setup();
+    assert!(call(&mut t, STRANGER, "issuePolicy", &policy_params()).is_err());
+    issue(&mut t);
+    let cid: u64 = call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A])).unwrap().parse_return_value().unwrap();
+    assert!(call(&mut t, STRANGER, "assessClaim", &AssessParams { claim_id: cid, ok: true, reason: HashSha2256([1; 32]) }).is_err());
+    assert!(call(&mut t, PAYER, "decideClaim", &DecideParams { claim_id: cid, approve: true }).is_err());
+    assert!(call(&mut t, OWNER, "cancelPolicy", &0u64).is_ok(), "holder may cancel");
+    assert!(call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_B])).is_err(), "cancelled policy");
+}
