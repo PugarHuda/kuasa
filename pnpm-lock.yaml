@@ -26,6 +26,12 @@ importers:
       '@kuasa/chain':
         specifier: workspace:*
         version: link:../chain
+      '@kuasa/core':
+        specifier: workspace:*
+        version: link:../core
+      '@kuasa/merchant':
+        specifier: workspace:*
+        version: link:../merchant
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.2
         version: 1.32.2(zod@3.25.76)

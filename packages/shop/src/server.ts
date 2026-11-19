@@ -21,7 +21,7 @@ import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer } from '@kuasa/
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4021);
-const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string };
+const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string; shopAgent?: string };
 const merchant = JSON.parse(readFileSync(new URL('accounts/merchant.json', ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const payTo = merchant.find((a) => a.credNumber === 0)!.address;
 const sponsor = merchant.find((a) => a.credNumber === 1)!;
@@ -68,6 +68,13 @@ const json = (res: express.Response, body: unknown, status = 200) => res.status(
 
 app.use((_, res, next) => { res.setHeader('access-control-allow-origin', '*'); res.setHeader('access-control-allow-headers', '*'); res.setHeader('access-control-expose-headers', '*'); next(); });
 app.use('/kuasa', express.static(fileURLToPath(new URL('public/', ROOT))));
+
+/** A2A Agent Card with the Kuasa extension: buying agents check this token in CIS-8004 before paying. */
+app.get('/.well-known/agent-card.json', (_, res) => json(res, {
+  name: 'Kuasa demo shop', description: 'Regulated goods for AI agents (age and residency checked with ZK proofs; insured purchases).',
+  url: `http://localhost:${PORT}`, protocols: ['x402', 'kuasa/v1'],
+  kuasa: { payTo, agentToken: state.shopAgent, agentRegistry: '<12802,0>', asset: ASSET, cover: state.cover ? `<${state.cover},0>` : undefined },
+}));
 
 app.get('/catalog', (_, res) => json(res, Object.entries(catalog).map(([path, p]) => ({ path, name: p.name, price: p.price, asset: ASSET, category: p.category, requirements: p.requirements }))));
 

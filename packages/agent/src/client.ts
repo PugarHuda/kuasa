@@ -14,6 +14,7 @@ import { ExactConcordiumScheme } from '@x402/concordium/exact/client';
 import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from '@x402/fetch';
 import { connect } from '@kuasa/chain';
 import { canonicalJson, type ClaimKind, encodeFileClaim, sha256Hex } from '@kuasa/core';
+import { type AgentRegistry, Cis8004Registry } from '@kuasa/merchant';
 
 export const MANDATE_HEADER = 'x-kuasa-mandate';
 export const ORDER_HEADER = 'x-kuasa-order';
@@ -35,7 +36,13 @@ export class KuasaAgent {
    * opts.scope is the agent's own trusted copy of its mandate scope, handed over by the owner at
    * start-up and never fetched from a counterparty. Payments outside it are never signed.
    */
-  constructor(readonly opts: { shopUrl: string; insurerUrl?: string; mandateUrl: string; payer: string; payerKey: string; scope: Scope }) {
+  private trustedShop?: string;
+  constructor(readonly opts: {
+    shopUrl: string; insurerUrl?: string; mandateUrl: string; payer: string; payerKey: string; scope: Scope;
+    /** CIS-8004 registry used to check the shop before paying it (two-way trust). */
+    agents?: AgentRegistry;
+    fetchJson?: (url: string) => Promise<unknown>;
+  }) {
     const client = new x402Client()
       .register(CONCORDIUM_TESTNET_CAIP2, new ExactConcordiumScheme({ accountAddress: AccountAddress.fromBase58(opts.payer), signer: buildBasicAccountSigner(opts.payerKey) }))
       // x402's USD caps don't understand CCD; the agent enforces its own mandate instead (below).
@@ -49,7 +56,7 @@ export class KuasaAgent {
     const root = new URL('../../../.kuasa/', import.meta.url);
     const acc = JSON.parse(readFileSync(new URL(`accounts/${name}.json`, root), 'utf8')).accounts.find((a: { credNumber: number }) => a.credNumber === 1);
     const { scope } = JSON.parse(readFileSync(new URL(`public/mandate/${name}.json`, root), 'utf8')); // owner's local copy
-    return new KuasaAgent({ shopUrl, insurerUrl, mandateUrl: `${shopUrl}/kuasa/mandate/${name}.json`, payer: acc.address, payerKey: acc.key, scope });
+    return new KuasaAgent({ shopUrl, insurerUrl, mandateUrl: `${shopUrl}/kuasa/mandate/${name}.json`, payer: acc.address, payerKey: acc.key, scope, agents: new Cis8004Registry(connect()) });
   }
 
   private get insurerUrl() { return this.opts.insurerUrl ?? 'http://localhost:4023'; }
@@ -64,6 +71,26 @@ export class KuasaAgent {
   }
 
   private headers = () => ({ [MANDATE_HEADER]: this.opts.mandateUrl });
+
+  private fetchJson = (url: string) => (this.opts.fetchJson ? this.opts.fetchJson(url) : fetch(url).then((r) => r.json()));
+
+  /**
+   * Two-way trust: before paying the shop, check its Agent Card names a CIS-8004 agent that is
+   * active and owned by the shop's payTo account. Returns a refusal reason, or null if trusted.
+   */
+  async verifyShop(): Promise<string | null> {
+    if (!this.opts.agents) return null;
+    const card = await this.fetchJson(new URL('/.well-known/agent-card.json', this.opts.shopUrl).toString()).catch(() => null) as { kuasa?: { payTo?: string; agentToken?: string } } | null;
+    const k = card?.kuasa;
+    if (!k?.payTo || !k.agentToken || !/^[0-9a-f]{2,64}$/.test(k.agentToken)) return 'shop agent card missing or invalid';
+    const a = await this.opts.agents.agentOf(k.agentToken).catch(() => undefined);
+    if (a === undefined) return 'agent registry unavailable';
+    if (a === null) return 'shop agent not registered in the agent registry';
+    if (!a.active) return 'shop agent not active in the agent registry';
+    if (a.owner !== k.payTo) return 'shop agent not owned by the account it asks us to pay';
+    this.trustedShop = k.payTo;
+    return null;
+  }
 
   /** Pays an x402 resource at a configured counterparty (shop or insurer) only. */
   private async payAt(url: URL, extra: Record<string, string> = {}): Promise<BuyResult> {
@@ -101,6 +128,8 @@ export class KuasaAgent {
 
   /** skipQuote: behave like a rogue agent that pays anyway; the shop must still refuse. */
   async buy(path: string, skipQuote = false, orderRef?: string): Promise<BuyResult> {
+    const distrust = this.trustedShop ? null : await this.verifyShop();
+    if (distrust) return { ok: false, reasons: [distrust] };
     const q = skipQuote ? { ok: true } : await this.quote(path);
     if (!q.ok) return { ok: false, reasons: q.reasons ?? ['refused'] };
     return this.payAt(new URL(path, this.opts.shopUrl), orderRef ? { [ORDER_HEADER]: orderRef } : {});

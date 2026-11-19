@@ -161,3 +161,38 @@ export async function registryEventsOfTx(grpc: ConcordiumGRPCClient, txHash: str
   const events = contractEvents(st.outcome.summary, registryIndex).map(decodeRegistryEvent).filter((e): e is RegistryEvent => e !== null);
   return { at: info.blockSlotTime.getTime(), events };
 }
+
+/** Concordium's CIS-8004 Agent Registry on testnet. */
+export const AGENT_REGISTRY = ContractAddress.create(12802n, 0n);
+
+const lenPrefixed = (b: Uint8Array) => { const out = new Uint8Array(4 + b.length); new DataView(out.buffer).setUint32(0, b.length, true); out.set(b, 4); return out; };
+const tokenParam = (tokenHex: string) => { const t = Buffer.from(tokenHex, 'hex'); return Uint8Array.from([t.length, ...t]); };
+
+/** CIS-8004 `setMetadata { token_id, key, value }`. Owner-only; the registry rejects values with quotes or angle brackets. */
+export function encodeSetMetadata(tokenHex: string, key: string, value: string): Uint8Array {
+  if (/["<>]/.test(value)) throw new Error('metadata value may not contain quotes or angle brackets');
+  const enc = new TextEncoder();
+  return Uint8Array.from([...tokenParam(tokenHex), ...lenPrefixed(enc.encode(key)), ...lenPrefixed(enc.encode(value))]);
+}
+
+export async function cis8004SetMetadata(grpc: ConcordiumGRPCClient, tokenHex: string, key: string, value: string, owner: Wallet, sponsor?: Wallet) {
+  const tx = Transaction.updateContract(
+    { amount: CcdAmount.zero(), address: AGENT_REGISTRY, receiveName: ReceiveName.fromString('CIS-8004.setMetadata'), message: Parameter.fromBuffer(ab(encodeSetMetadata(tokenHex, key, value))) },
+    Energy.create(30_000),
+  ) as Transaction.Builder;
+  const r = await submit(grpc, tx, owner, sponsor);
+  const s = r.summary.summary as { transactionType?: string };
+  if (s.transactionType === 'failed') throw new Error(`CIS-8004.setMetadata rejected (tx ${r.hash})`);
+  return r;
+}
+
+/** CIS-8004 `getMetadata { token_id, key } -> Option<Vec<u8>>`, as UTF-8 text. */
+export async function cis8004GetMetadata(grpc: ConcordiumGRPCClient, tokenHex: string, key: string): Promise<string | null> {
+  const param = Uint8Array.from([...tokenParam(tokenHex), ...lenPrefixed(new TextEncoder().encode(key))]);
+  const res = await grpc.invokeContract({ contract: AGENT_REGISTRY, method: ReceiveName.fromString('CIS-8004.getMetadata'), parameter: Parameter.fromBuffer(ab(param)) });
+  if (res.tag !== 'success' || !res.returnValue) return null;
+  const b = new Uint8Array(ReturnValue.toBuffer(res.returnValue));
+  if (b[0] !== 1) return null;
+  const n = new DataView(b.buffer, b.byteOffset + 1, 4).getUint32(0, true);
+  return new TextDecoder().decode(b.subarray(5, 5 + n));
+}

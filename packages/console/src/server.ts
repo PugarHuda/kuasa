@@ -8,13 +8,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { bigintJson, connect, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
+import { bigintJson, cis8004GetMetadata, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
 import { sha256Hex } from '@kuasa/core';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4022);
 const SHOP = process.env.KUASA_SHOP_URL ?? 'http://localhost:4021';
-type State = { registry: string; agents: Record<string, string>; mandates: Record<string, { id: string; owner: string; payer: string; issueTx: string; proofAnchorTx: string }> };
+type State = { registry: string; cover?: string; agents: Record<string, string>; mandates: Record<string, { id: string; owner: string; payer: string; issueTx: string; proofAnchorTx: string }> };
 const loadState = (): State => JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8'));
 const account = (name: string, n: number) => {
   const a = JSON.parse(readFileSync(new URL(`accounts/${name}.json`, ROOT), 'utf8')).accounts.find((x: { credNumber: number }) => x.credNumber === n);
@@ -40,10 +40,25 @@ app.get('/api/state', async (_, res) => {
   const s = loadState();
   const mandates = await Promise.all(Object.entries(s.mandates).map(async ([name, m]) => {
     const [entry, doc] = await Promise.all([registry.view(m.owner, m.id), fetch(`${SHOP}/kuasa/mandate/${name}.json`).then((r) => r.json()).catch(() => null)]);
-    return { name, ...m, agentToken: s.agents[name], entry, doc };
+    const coverStatus = await cis8004GetMetadata(grpc, s.agents[name], 'kuasa:cover').catch(() => null);
+    return { name, ...m, agentToken: s.agents[name], entry, doc, coverStatus };
   }));
   const shop = await fetch(`${SHOP}/kuasa-log`).then((r) => r.json()).catch(() => null);
   json(res, { registry: `<${s.registry},0>`, agentRegistry: '<12802,0>', explorer: TESTNET.explorer, mandates, shop });
+});
+
+/** Owner publishes the agent's live Kuasa Cover in its CIS-8004 entry (metadata is owner-only). */
+app.post('/api/publish-cover/:name', async (req, res) => {
+  const s = loadState();
+  const m = s.mandates[req.params.name];
+  if (!m || !s.cover) return json(res, { error: 'unknown agent or no cover contract' }, 404);
+  try {
+    const v = await new KuasaCover(grpc, BigInt(s.cover)).coverOf(m.payer);
+    if (v.policyId === null) return json(res, { error: 'no live cover for this agent' }, 400);
+    const value = `policy=${v.policyId};limit=${v.periodRemaining};cover=${s.cover}.0;at=${Math.floor(Date.now() / 1000)}`;
+    const r = await cis8004SetMetadata(grpc, s.agents[req.params.name], 'kuasa:cover', value, account(req.params.name, 0));
+    json(res, { tx: r.hash, value });
+  } catch (e) { json(res, { error: (e as Error).message }, 500); }
 });
 
 /** Owner revokes: signed by the owner account (#0). Effective for every merchant on the next check. */

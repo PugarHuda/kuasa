@@ -29,6 +29,7 @@ type State = {
   moduleRef?: string;
   coverModuleRef?: string;
   cover?: string; // kuasa-cover contract index
+  shopAgent?: string; // the shop's own CIS-8004 token (two-way trust)
   registry?: string; // contract index
   agents: Record<string, string>; // name -> CIS-8004 token id (hex)
   mandates: Record<string, { id: string; owner: string; payer: string; issueTx: string; proofAnchorTx: string }>;
@@ -153,6 +154,10 @@ async function mandate(name: string, want: { minAge?: number; euResidency?: bool
   state.mandates[name] = { id, owner: owner.address.address, payer: payer.address.address, issueTx: r.hash, proofAnchorTx: proof.anchorTx }; save();
   log(name, 'mandate', id, r.hash);
 }
+
+// The shop registers itself too, so buying agents can verify who they pay.
+state.shopAgent ??= await registerAgent('shop', acct('merchant', 0));
+save();
 
 await mandate('alice', { minAge: 18, euResidency: true });
 await mandate('teen', { euResidency: true }); // a 16-year-old cannot prove 18+, so the shop will refuse wine
