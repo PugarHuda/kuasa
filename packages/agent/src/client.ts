@@ -131,7 +131,10 @@ export class KuasaAgent {
     }
     if (!res.ok) {
       const body = await res.text();
-      return { ok: false, reasons: [`answered ${res.status}: ${body.slice(0, 300) || res.headers.get('payment-required')?.slice(0, 300) || ''}`] };
+      // x402 puts the refusal reason in the base64 PAYMENT-REQUIRED header
+      let why = '';
+      try { why = (JSON.parse(Buffer.from(res.headers.get('payment-required') ?? '', 'base64').toString()) as { error?: string }).error ?? ''; } catch { /* not x402 */ }
+      return { ok: false, reasons: [`answered ${res.status}: ${why || body.slice(0, 300)}`] };
     }
     const header = res.headers.get('payment-response');
     const settle = header ? decodePaymentResponseHeader(header) : undefined;

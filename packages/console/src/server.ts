@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { bigintJson, cis8004GetMetadata, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
 import { sha256Hex } from '@kuasa/core';
+import { isClaimId } from './validate.js';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4022);
@@ -59,20 +60,20 @@ app.get('/api/cover', async (_req, res) => {
 
 /** The claims handler's decision. Payout happens only through this human action. */
 app.post('/api/claims/:id/decision/:verdict', async (req, res) => {
-  if (!/^d+$/.test(req.params.id) || !['approve', 'reject'].includes(req.params.verdict)) return json(res, { error: 'bad request' }, 400);
+  if (!isClaimId(req.params.id) || !['approve', 'reject'].includes(req.params.verdict)) return json(res, { error: 'bad request' }, 400);
   const r = await insurer(`/claims/${req.params.id}/decision`, { method: 'POST', body: JSON.stringify({ approve: req.params.verdict === 'approve' }) }).catch(() => null);
   return r ? res.status(r.status).type('json').send(await r.text()) : json(res, { error: 'insurer offline' }, 502);
 });
 
 app.post('/api/claims/:id/assess', async (req, res) => {
-  if (!/^d+$/.test(req.params.id)) return json(res, { error: 'bad request' }, 400);
+  if (!isClaimId(req.params.id)) return json(res, { error: 'bad request' }, 400);
   const r = await insurer(`/claims/${req.params.id}/assess`, { method: 'POST', body: '{}' }).catch(() => null);
   return r ? res.status(r.status).type('json').send(await r.text()) : json(res, { error: 'insurer offline' }, 502);
 });
 
 /** A human approves a drafted lawful-disclosure request before it is anchored on the claim. */
 app.post('/api/disclosures/:id/approve', async (req, res) => {
-  if (!/^d+$/.test(req.params.id)) return json(res, { error: 'bad request' }, 400);
+  if (!isClaimId(req.params.id)) return json(res, { error: 'bad request' }, 400);
   const r = await insurer(`/disclosures/${req.params.id}/approve`, { method: 'POST', body: '{}' }).catch(() => null);
   return r ? res.status(r.status).type('json').send(await r.text()) : json(res, { error: 'insurer offline' }, 502);
 });
