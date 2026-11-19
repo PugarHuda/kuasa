@@ -22,7 +22,8 @@ const ROOT = new URL('../.kuasa/', import.meta.url);
 const STATE = new URL('state.json', ROOT);
 const PUB = new URL('public/', ROOT);
 const AGENT_REGISTRY = { index: 12802n, subindex: 0n };
-const CCD = 1_000_000n;
+const ASSET = process.env.KUASA_ASSET ?? 'EUDemo'; // allow-listed euro PLT (6 decimals)
+const UNIT = 1_000_000n;
 
 type State = {
   moduleRef?: string;
@@ -110,7 +111,7 @@ async function mandate(name: string, want: { minAge?: number; euResidency?: bool
     principal: { kind: 'person', account: owner.address.address, displayName: name },
     agent,
     scope: {
-      asset: 'CCD', maxPerOrder: String(50n * CCD), maxTotal: String(100n * CCD),
+      asset: ASSET, maxPerOrder: String(50n * UNIT), maxTotal: String(100n * UNIT),
       categories: ['groceries', 'wine'], merchants: [merchantPayTo],
       validFrom: now - 60, validUntil: now + 30 * 86400,
     },

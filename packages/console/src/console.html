@@ -61,7 +61,8 @@
 <div id="toast" role="status" aria-live="polite"></div>
 <script>
 const $ = (id) => document.getElementById(id);
-const ccd = (v) => (Number(v) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' CCD';
+let unit = 'EUDemo';
+const ccd = (v) => (Number(v) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' ' + esc(unit);
 const short = (s) => s ? esc(String(s).slice(0, 8) + '…' + String(s).slice(-6)) : '';
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let explorer = '';
@@ -125,7 +126,7 @@ function renderFeed(log, mandates) {
 function renderReceipts(receipts, mandates) {
   const who = Object.fromEntries(mandates.map((m) => [m.id, m.name]));
   if (!receipts.length) return '<span class="muted">No purchases yet.</span>';
-  return `<ul class="feed">${receipts.slice().reverse().map((r) => `<li><span class="mono">${ccd(r.amount).replace(' CCD', '')}<br><span class="muted">CCD</span></span><div>
+  return `<ul class="feed">${receipts.slice().reverse().map((r) => `<li><span class="mono">${(Number(r.amount) / 1e6).toLocaleString()}<br><span class="muted">${esc(unit)}</span></span><div>
     <strong>${esc(who[r.mandate] ?? short(r.mandate))}</strong><br>
     payment ${tx(r.paymentTx)} · receipt ${tx(r.receiptTx)}<br><span class="muted mono">order ${short(r.order)}</span></div></li>`).join('')}</ul>`;
 }
@@ -134,6 +135,7 @@ async function refresh() {
   try {
     const s = await (await fetch('/api/state')).json();
     explorer = s.explorer;
+    unit = s.mandates.find((m) => m.doc)?.doc.scope.asset ?? unit;
     $('contracts').textContent = `registry ${s.registry} · agents ${s.agentRegistry}`;
     $('mandates').innerHTML = s.mandates.map(renderMandate).join('');
     $('feed').innerHTML = s.shop ? renderFeed(s.shop.log, s.mandates) : '<li class="muted">Shop offline (start packages/shop).</li>';

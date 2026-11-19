@@ -12,7 +12,7 @@ A person verifies once with Concordium ID and gives their shopping agent a *kuas
 | `packages/core` | Mandate schema, claims from ZK statements, the `authorize()` policy, contract codec |
 | `packages/chain` | gRPC client, sponsored-transaction submit, registry client |
 | `packages/merchant` | `KuasaGuard`: x402 hooks that refuse before any funds move, then record receipts |
-| `packages/shop` | Demo regulated-goods shop (x402, in-process facilitator that sponsors fees) |
+| `packages/shop` | Demo regulated-goods shop: x402 priced in EUDemo (allow-listed euro PLT), in-process facilitator that sponsors fees |
 | `packages/agent` | Buyer agent: client, CLI, MCP server (`kuasa_catalog/quote/buy/mandate`) |
 | `packages/console` | Console + incident desk: on-chain mandates, live decisions, revoke, report |
 | `scripts` | Testnet provisioning (headless identities) and one-shot setup |
@@ -21,6 +21,7 @@ A person verifies once with Concordium ID and gives their shopping agent a *kuas
 
 - Kuasa registry: `<13065,0>` (module `7a7c03f0…1031a`)
 - Agents registered in the CIS-8004 Agent Registry `<12802,0>`
+- Payments in **EUDemo**, an allow-listed euro PLT: only identity-verified EU accounts can hold or move it (set `KUASA_ASSET=CCD` to use CCD)
 - Accounts, keys and mandate state live in `.kuasa/` (gitignored, testnet only)
 
 ## Run it
@@ -28,6 +29,7 @@ A person verifies once with Concordium ID and gives their shopping agent a *kuas
 ```sh
 pnpm install
 pnpm --filter @kuasa/scripts exec tsx provision.ts   # alice (adult, DK), teen (16, DK), merchant
+pnpm --filter @kuasa/scripts exec tsx allowlist.ts   # prove EU nationality, get on the EUDemo allow list + test EUDemo
 pnpm --filter @kuasa/scripts exec tsx setup.ts       # deploy, register agents, prove, issue mandates
 pnpm --filter @kuasa/shop start                      # http://localhost:4021
 pnpm --filter @kuasa/console start                   # http://localhost:4022
