@@ -233,3 +233,78 @@ fn operator_only_entrypoints_reject_others() {
     assert!(call(&mut t, OWNER, "cancelPolicy", &0u64).is_ok(), "holder may cancel");
     assert!(call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_B])).is_err(), "cancelled policy");
 }
+
+fn hex(b: Vec<u8>) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
+
+/// Wire-format vectors shared with packages/core/test/cover.test.ts. Regenerate together.
+fn vectors() -> Vec<(&'static str, String)> {
+    use concordium_std::to_bytes;
+    let mut t = setup();
+    let pid = issue(&mut t);
+    let cid: u64 = call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A, ORDER_B])).unwrap().parse_return_value().unwrap();
+    let raw = |t: &T, name: &str, p: Vec<u8>| -> String {
+        hex(t.chain.contract_invoke(OWNER, Address::Account(OWNER), Energy::from(50_000), UpdateContractPayload {
+            amount: Amount::zero(), address: t.cover, receive_name: OwnedReceiveName::new_unchecked(format!("kuasa_cover.{name}")),
+            message: OwnedParameter::new_unchecked(p),
+        }).unwrap().return_value)
+    };
+    let mut order_policy = policy_params();
+    order_policy.kind = PolicyKind::Order(ORDER_A);
+    vec![
+        ("ISSUE_POLICY", hex(to_bytes(&policy_params()))),
+        ("ISSUE_ORDER_POLICY", hex(to_bytes(&order_policy))),
+        ("FILE_CLAIM", hex(to_bytes(&claim(vec![ORDER_A, ORDER_B])))),
+        ("ASSESS", hex(to_bytes(&AssessParams { claim_id: 3, ok: true, reason: HashSha2256([1; 32]) }))),
+        ("DECIDE", hex(to_bytes(&DecideParams { claim_id: 3, approve: false }))),
+        ("PAYOUT", hex(to_bytes(&PayoutParams { claim_id: 3, payout_tx: HashSha2256([2; 32]), amount: 23 * EUR }))),
+        ("FRAUD", hex(to_bytes(&FraudParams { claim_id: 3, disclosure: HashSha2256([3; 32]) }))),
+        ("COVER_QUERY", hex(to_bytes(&CoverQuery { payer: PAYER, order: Some(ORDER_A) }))),
+        ("COVER_VIEW", raw(&t, "coverOf", to_bytes(&CoverQuery { payer: PAYER, order: None }))),
+        ("POLICY_VIEW", raw(&t, "policy", to_bytes(&pid))),
+        ("CLAIM_VIEW", raw(&t, "claim", to_bytes(&cid))),
+    ]
+}
+
+#[test]
+#[ignore]
+fn print_vectors() {
+    for (k, v) in vectors() { println!("{k}={v}"); }
+}
+
+/// Pins the wire format to packages/core/test/cover-vectors.json, which the TS codec tests use.
+#[test]
+fn wire_format_matches_typescript_codec() {
+    let json = std::fs::read_to_string("../../packages/core/test/cover-vectors.json").unwrap();
+    for (k, v) in vectors() {
+        assert!(json.contains(&format!("\"{k}\": \"{v}\"")), "{k} drifted; run print_vectors and update the JSON + TS codec");
+    }
+}
+
+#[test]
+fn merchant_loss_only_from_mandate_recorders() {
+    let mut t = setup();
+    issue(&mut t);
+    let mut m = claim(vec![ORDER_A]);
+    m.kind = ClaimKind::MerchantLoss;
+    assert!(call(&mut t, STRANGER, "fileClaim", &m).is_err(), "a stranger cannot squat orders via MerchantLoss");
+    call(&mut t, MERCHANT, "fileClaim", &m).unwrap();
+}
+
+#[test]
+fn rejected_claim_releases_its_orders() {
+    let mut t = setup();
+    issue(&mut t);
+    let cid: u64 = call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A])).unwrap().parse_return_value().unwrap();
+    call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: cid, approve: false }).unwrap();
+    call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A])).unwrap();
+}
+
+#[test]
+fn claims_window_closes_30_days_after_expiry() {
+    let mut t = setup();
+    issue(&mut t); // valid_until = 50_000 ms
+    t.chain.tick_block_time(Duration::from_millis(50_000 + 29 * 86_400_000)).unwrap();
+    call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A])).unwrap();
+    t.chain.tick_block_time(Duration::from_millis(2 * 86_400_000)).unwrap();
+    assert!(call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_B])).is_err());
+}

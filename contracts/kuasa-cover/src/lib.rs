@@ -250,6 +250,19 @@ fn only_operator(ctx: &ReceiveContext, host: &Host<State>) -> CResult<()> {
     Ok(())
 }
 
+/// Claims may be filed up to this long after a policy ends (for orders inside its period).
+const CLAIMS_WINDOW_MS: u64 = 30 * 86_400_000;
+
+fn read_mandate(host: &Host<State>, key: &MandateKey) -> CResult<MandateEntry> {
+    let registry = host.state().registry;
+    let mut ret = host
+        .invoke_contract_read_only(&registry, key, EntrypointName::new_unchecked("view"), Amount::zero())
+        .map_err(|_| Error::RegistryCall)?
+        .ok_or(Error::RegistryCall)?;
+    let mandate: Option<MandateEntry> = ret.get().map_err(|_| Error::RegistryCall)?;
+    mandate.ok_or(Error::MandateInvalid)
+}
+
 fn is_live(p: &Policy, now: Timestamp) -> bool {
     p.status == PolicyStatus::Active && p.valid_from <= now && now <= p.valid_until
 }
@@ -262,13 +275,7 @@ fn issue_policy(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     let now = ctx.metadata().slot_time();
     ensure!(p.limit > 0 && p.valid_until > now && p.deductible < p.limit, Error::InvalidParams);
 
-    let registry = host.state().registry;
-    let mut ret = host
-        .invoke_contract_read_only(&registry, &p.mandate, EntrypointName::new_unchecked("view"), Amount::zero())
-        .map_err(|_| Error::RegistryCall)?
-        .ok_or(Error::RegistryCall)?;
-    let mandate: Option<MandateEntry> = ret.get().map_err(|_| Error::RegistryCall)?;
-    let m = mandate.ok_or(Error::MandateInvalid)?;
+    let m = read_mandate(host, &p.mandate)?;
     ensure!(!m.revoked && m.valid_until >= now, Error::MandateInvalid);
     ensure!(m.owner == p.holder && m.payer == p.agent_payer && p.limit <= m.max_total, Error::MandateInvalid);
 
@@ -297,21 +304,30 @@ fn issue_policy(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     Ok(id)
 }
 
-/// File a claim. Buyer claims come from the agent payer or the holder; anyone may file a
-/// merchant-loss claim. Each order can back at most one claim per policy.
+/// File a claim. Buyer claims come from the agent payer or the holder; merchant-loss claims
+/// only from a merchant the mandate authorises to record receipts (so strangers cannot squat
+/// orders). Each order backs at most one open claim per policy; a rejected claim releases it.
+/// Claims close 30 days after the policy ends; whether each order falls inside the policy
+/// period is checked by the assessor against the on-chain receipt.
 #[receive(contract = "kuasa_cover", name = "fileClaim", parameter = "FileClaim", return_value = "u64", error = "Error", mutable, enable_logger)]
 fn file_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<u64> {
     let p: FileClaim = ctx.parameter_cursor().get()?;
     let claimant = sender_account(ctx)?;
     ensure!(!p.orders.is_empty() && p.orders.len() <= 2 && p.amount > 0, Error::InvalidParams);
-    let state = host.state_mut();
-    {
-        let policy = state.policies.get(&p.policy_id).ok_or(Error::NotFound)?;
+    let now = ctx.metadata().slot_time();
+    let (mandate_key, payer, holder) = {
+        let policy = host.state().policies.get(&p.policy_id).ok_or(Error::NotFound)?;
         ensure!(policy.status == PolicyStatus::Active, Error::PolicyInactive);
-        if p.kind != ClaimKind::MerchantLoss {
-            ensure!(claimant == policy.agent_payer || claimant == policy.holder, Error::Unauthorized);
-        }
+        let closes = policy.valid_until.checked_add(Duration::from_millis(CLAIMS_WINDOW_MS)).ok_or(Error::InvalidParams)?;
+        ensure!(now <= closes, Error::PolicyInactive);
+        (policy.mandate, policy.agent_payer, policy.holder)
+    };
+    if p.kind == ClaimKind::MerchantLoss {
+        ensure!(read_mandate(host, &mandate_key)?.recorders.contains(&claimant), Error::Unauthorized);
+    } else {
+        ensure!(claimant == payer || claimant == holder, Error::Unauthorized);
     }
+    let state = host.state_mut();
     for o in p.orders.iter() {
         ensure!(!state.claimed_orders.contains(&(p.policy_id, *o)), Error::OrderAlreadyClaimed);
     }
@@ -351,12 +367,21 @@ fn assess_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
 fn decide_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
     only_operator(ctx, host)?;
     let p: DecideParams = ctx.parameter_cursor().get()?;
-    let mut c = host.state_mut().claims.get_mut(&p.claim_id).ok_or(Error::NotFound)?;
-    c.status = match (c.status, p.approve) {
-        (ClaimStatus::Assessed { ok: true, .. }, true) => ClaimStatus::Approved,
-        (ClaimStatus::Filed | ClaimStatus::Assessed { .. }, false) => ClaimStatus::Rejected,
-        _ => bail!(Error::WrongStatus),
+    let state = host.state_mut();
+    let (policy_id, orders) = {
+        let mut c = state.claims.get_mut(&p.claim_id).ok_or(Error::NotFound)?;
+        c.status = match (c.status, p.approve) {
+            (ClaimStatus::Assessed { ok: true, .. }, true) => ClaimStatus::Approved,
+            (ClaimStatus::Filed | ClaimStatus::Assessed { .. }, false) => ClaimStatus::Rejected,
+            _ => bail!(Error::WrongStatus),
+        };
+        (c.policy_id, c.orders.clone())
     };
+    if !p.approve {
+        for o in orders {
+            state.claimed_orders.remove(&(policy_id, o));
+        }
+    }
     logger.log(&Event::ClaimDecided { claim_id: p.claim_id, approve: p.approve })?;
     Ok(())
 }
