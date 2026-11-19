@@ -10,6 +10,9 @@ Everything below is on testnet and can be opened in CCDExplorer. Base URL: `http
 | Module deploy | `7a7c03f0…1031a` | [tx](https://ccdexplorer.io/testnet/transaction/221a2e727643c5b94e11c327b89ffca9a5ad263ed5cc645ecb1180cf590fe694) |
 | Registry init | | [tx](https://ccdexplorer.io/testnet/transaction/24550535f602ee998d0f0ebd8886485adfbb4432d7bcc9df8be15c205f9ca53e) |
 | CIS-8004 Agent Registry (Concordium) | `<12802,0>` | [instance](https://ccdexplorer.io/testnet/instance/12802/0) |
+| **Kuasa Cover** (our contract) | `<13066,0>` | [instance](https://ccdexplorer.io/testnet/instance/13066/0) |
+| Cover module deploy | `b634ea58…009d` | [tx](https://ccdexplorer.io/testnet/transaction/e8e1f98817cd2e55792d672b7964af721f4e9a384da4cde5381831cd8de447df) |
+| Cover init (operator = insurer #1, registry = `<13065,0>`) | | [tx](https://ccdexplorer.io/testnet/transaction/b75fecb7c4e64b01fbc91c4f6b12a2ee90e4e49d756805b493a3817cf720eae6) |
 
 ## Accounts
 
@@ -22,9 +25,29 @@ All identities come from the testnet identity provider with invented attributes.
 | Teen, owner | 16 years old, DK | [4j733X…u8huDH](https://ccdexplorer.io/testnet/account/4j733XjURhA9UFkxfNbZHsKpRSMvnbQjJyjbbMHUKuzMu8huDH) |
 | Teen's agent (payer) | same identity | [4Gw69U…ys4oqg](https://ccdexplorer.io/testnet/account/4Gw69UEYtxxE1EroXsp3AwAZWa38cKCuQZCgs9HYLc1Xys4oqg) |
 | Shop (payTo) | NL | [34BwTu…KrPKv](https://ccdexplorer.io/testnet/account/34BwTuaAu2EsgHNj3Us9TrYUNbKGo6Wnh3ixxUSanrca7KrPKv) |
-| Shop facilitator (fee sponsor, receipt recorder) | NL, **not** on the EUDemo allow list | [4HeXqT…q32UNp](https://ccdexplorer.io/testnet/account/4HeXqTdciL1dVAaNZ6kiVRAH3syJcDnFtqLM3z3phWbAq32UNp) |
+| Shop facilitator (fee sponsor, receipt recorder) | NL; allow-listed later for merchant-loss payouts | [4HeXqT…q32UNp](https://ccdexplorer.io/testnet/account/4HeXqTdciL1dVAaNZ6kiVRAH3syJcDnFtqLM3z3phWbAq32UNp) |
 
-## The flow, transaction by transaction
+| Insurer treasury (EUDemo pool) | NL, allow-listed ([tx](https://ccdexplorer.io/testnet/transaction/328f937f9fbaff7787715b798369331f8c442be90f5c5823b8adc5524cc1f3cf)) | [3z1Xbe…LmBut](https://ccdexplorer.io/testnet/account/3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut) |
+| Insurer operator (policies, claims, fee sponsor) | NL, never allow-listed | [4Tw9uz…TZzJ](https://ccdexplorer.io/testnet/account/4Tw9uzZZSQmbLytV8XqRYU5dCDyrhu8yWU2xwvXovaS54sTZzJ) |
+
+## Kuasa Cover, transaction by transaction
+
+| Step | What happened | Link |
+|---|---|---|
+| Mandates reissued for Cover | Treasury added as allowed merchant, category `insurance`, insurer operator as recorder, budget 150 EUDemo | alice [tx](https://ccdexplorer.io/testnet/transaction/bbef79112d1263d1aa44f5eb6a366eefd948a1b3f888d8ad949354d0b24a57d0), teen [tx](https://ccdexplorer.io/testnet/transaction/1ca36e9bb90867b8497f9bf8df1167c5494917153604017234baf4a2115d9705) |
+| Shop registers its own agent | CIS-8004 token `f304…`; buying agents check it is active and owned by the payTo before paying | [tx](https://ccdexplorer.io/testnet/transaction/425a212049ed240fd06c7b27e19034388a260fe379745f93fa7b4e0728160e73) |
+| Uninsured agent refused | Wine needs cover: `cover required: 24000000 needed, 0 available`, before any payment | – |
+| Alice's agent buys period cover | Premium 1.7496 EUDemo over x402 (base 2%, tightness 0.9, allowlist 0.9, wine 1.2, proven attributes 0.9); policy #0, 100 EUDemo, 30 days | premium [tx](https://ccdexplorer.io/testnet/transaction/43bb75467de60dc7415faa3802baecef91c0369a61be81ac19eb8ff687d4c2f3) |
+| Owner publishes the insured status | `kuasa:cover = policy=0;limit=100000000;cover=13066.0` in the agent's CIS-8004 metadata | [tx](https://ccdexplorer.io/testnet/transaction/f911263f55a339ad7b8b3baa99506fe17f7ce2b9388390293e525f448512627a) |
+| The agent's mistake | Same wine ordered twice, both insured purchases | payments [tx](https://ccdexplorer.io/testnet/transaction/fd67b7ac77577ab91e9dc0c6d3d2992f8c680b99288b8ffb7cfc6f62977bcedd) [tx](https://ccdexplorer.io/testnet/transaction/fe8627036fb93a109a3f447067b5b6edb61179461363fabed5611959caaa18cd), receipts [tx](https://ccdexplorer.io/testnet/transaction/392346a95b0893678553d19c9976e13fda95d551feca491026a5f7bc34113fbb) [tx](https://ccdexplorer.io/testnet/transaction/c1795c4f82c55ac920799b738138320a5badf041def433d2cd175c756bcdafff) |
+| Claim #0 filed by the agent | Signed by the agent's payer, fee sponsored by the insurer; assessor matched both receipts (payout 24 - 1 deductible) | [tx](https://ccdexplorer.io/testnet/transaction/6ad7875c4a8974f319cdf662716b6293ef7b9da92bd603c24237927fe5d0c63a) |
+| Human approves, payout | Claims handler approved in the console; 23 EUDemo to the agent's payer; claim `Paid`, policy `paidOut = 23`, `claimsAuthorized = false` | [tx](https://ccdexplorer.io/testnet/transaction/900ce5b14f7c85e78f9abda90324c825d5402989c84f8688f8c5c71f735d450d) |
+| Per-order cover (option B) | Shop issues an order reference; the agent insures exactly that order (0.36 EUDemo, policy #1), then buys with it | premium [tx](https://ccdexplorer.io/testnet/transaction/a1dfff8f32d10659ccad7f06e7e12391cdc1dfa3c9d2f45f55259b62ffc29a1d), purchase [tx](https://ccdexplorer.io/testnet/transaction/6b3cb66d5fb3b38d9aa94d1ead84fbf5b8566e608a2af6a8e1aa12544cdadd84) |
+| Two-way trust | Teen's agent verified the shop's CIS-8004 entry, then bought bread | [tx](https://ccdexplorer.io/testnet/transaction/3beed6f09a072a9da1b32219d9544c05ff3848e1a669d37a7d38378c3029e0a9) |
+| Fraud attempt | Teen's agent (policy #2, [tx](https://ccdexplorer.io/testnet/transaction/fef6939db59418665f991a9e442f208512e7edc4840f00493b3a23aff1eb55dd)) claims orders that never happened: claim #1 rejected, claim #2 marked `Fraud` after a human approved the anchored disclosure request `1788df74…` | [tx](https://ccdexplorer.io/testnet/transaction/965a81a9430cddb93c06e61df5c52ef049b1bdae28f3174ae10e001c0b533b6a) [tx](https://ccdexplorer.io/testnet/transaction/7a361ba58d200d98a8013424b24e182776ff148be6f5c719ad5f1cb111be3c33) |
+| Audit trail (EU AI Act Art. 12) | Batch of guard decisions, sha256 anchored with `registerData` | [tx](https://ccdexplorer.io/testnet/transaction/dcd97d2fb15293dacf86d8b2354154bd6a98e2ab5a8e8b2d87ad53d1ba47480f) |
+
+## The mandate layer, transaction by transaction (first run)
 
 | Step | What happened | Link |
 |---|---|---|
