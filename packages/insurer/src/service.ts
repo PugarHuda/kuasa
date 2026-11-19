@@ -62,7 +62,8 @@ type Disclosure = { claimId: string; account: string; doc: object };
 export class InsurerService {
   private quotes = new Map<string, StoredQuote>();
   private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string }[] = [];
-  private unissued: { quoteId: string; premiumTx: string; error: string }[] = [];
+  /** Premiums that settled but whose policy is not on-chain yet; the quote travels with them. */
+  private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
   private claims = new Map<bigint, ClaimRecord>();
   private fraud = new Map<string, number>();
   private pendingDisclosures: Disclosure[] = [];
@@ -141,9 +142,14 @@ export class InsurerService {
   }
 
   /** After the premium settled: write the policy on-chain (3 attempts; kept as unissued otherwise). */
-  async issue(quoteId: string, premiumTx: string): Promise<bigint | null> {
-    const q = this.quotes.get(quoteId);
-    if (!q) return null;
+  async issue(quoteId: string, premiumTx: string, stored?: StoredQuote): Promise<bigint | null> {
+    const q = stored ?? this.quotes.get(quoteId);
+    if (!q) {
+      // Paid but the quote is gone: never drop it silently; keep it visible for a manual refund.
+      this.unissued.push({ quoteId, premiumTx, error: 'quote missing: needs manual policy or refund' });
+      this.save();
+      return null;
+    }
     const days = q.request.order ? 1 : q.request.days;
     const params: IssuePolicyParams = {
       holder: q.owner, agentPayer: q.payer, agentToken: q.token, mandate: { owner: q.owner, id: q.mandateId },
@@ -166,14 +172,18 @@ export class InsurerService {
         await this.sleep(1000 * (attempt + 1));
       }
     }
-    this.unissued.push({ quoteId, premiumTx, error });
+    this.unissued.push({ quoteId, premiumTx, error, quote: q });
     this.save();
     return null;
   }
 
   async retryUnissued() {
     const pending = this.unissued.splice(0);
-    for (const u of pending) await this.issue(u.quoteId, u.premiumTx);
+    for (const u of pending) {
+      if (u.quote) await this.issue(u.quoteId, u.premiumTx, u.quote);
+      else this.unissued.push(u); // needs a human: keep it
+    }
+    this.save();
   }
 
   /** Assesses a filed claim against the on-chain receipts it cites, and records the outcome. */

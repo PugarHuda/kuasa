@@ -187,3 +187,18 @@ test('state survives a restart (snapshot + restore)', async () => {
   const d = await restarted.decide(0n, true);
   assert.equal(d.paid, 'payout-tx', 'a claim assessed before the restart can still be decided');
 });
+
+test('a paid-but-unissued premium survives a restart and is issued on retry', async () => {
+  let saved = '';
+  let fail = true;
+  const t = harness({ persist: (s) => { saved = s; } });
+  const real = t.svc['deps'].cover.issuePolicy;
+  t.svc['deps'].cover.issuePolicy = async (p, w) => { if (fail) throw new Error('chain down'); return real(p, w); };
+  const q = await quoteOk(t.svc);
+  await t.svc.issue(q.quoteId, h(9));
+  fail = false;
+  const restarted = new InsurerService({ ...t.svc['deps'] }, saved);
+  await restarted.retryUnissued();
+  assert.equal(restarted.state().unissued.length, 0);
+  assert.equal(restarted.state().policies.length, 1, 'the premium became a policy, not silently dropped');
+});

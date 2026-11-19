@@ -8,7 +8,7 @@
  *   on-chain registry entry are checked; after settlement a receipt is anchored on-chain.
  * - Also serves the public Kuasa documents (mandates, proofs, agent cards) from .kuasa/public.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { x402Facilitator } from '@x402/core/facilitator';
@@ -56,7 +56,13 @@ const grpcCfg = { host: TESTNET.grpc.host, port: TESTNET.grpc.port, useTls: true
 const facilitator = new x402Facilitator().register(CONCORDIUM_TESTNET_CAIP2,
   new FacilitatorScheme({ signer: toConcordiumFacilitatorSigner(sponsor.address, sponsor.key, grpcCfg) }));
 const server = new x402ResourceServer(facilitator as never).register(CONCORDIUM_TESTNET_CAIP2, new ServerScheme());
-server.onBeforeVerify(guard.beforeVerify as never).onAfterSettle(guard.afterSettle as never).onSettleFailure(guard.settleFailed as never);
+// Receipts survive restarts (buyers look them up to file claims).
+const RECEIPTS = new URL('shop-receipts.json', ROOT);
+if (existsSync(RECEIPTS)) guard.receipts.push(...JSON.parse(readFileSync(RECEIPTS, 'utf8')));
+const saveReceipts = () => { const tmp = new URL('shop-receipts.json.tmp', ROOT); writeFileSync(tmp, JSON.stringify(guard.receipts)); renameSync(tmp, RECEIPTS); };
+server.onBeforeVerify(guard.beforeVerify as never)
+  .onAfterSettle((async (ctx: Parameters<typeof guard.afterSettle>[0]) => { await guard.afterSettle(ctx); saveReceipts(); }) as never)
+  .onSettleFailure(guard.settleFailed as never);
 
 const routes = Object.fromEntries(Object.entries(catalog).map(([path, p]) => [`GET ${path}`, {
   accepts: { scheme: 'exact', network: CONCORDIUM_TESTNET_CAIP2, payTo, price: { amount: String(p.price), asset: ASSET }, maxTimeoutSeconds: 120 },
