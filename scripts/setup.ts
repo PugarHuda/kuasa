@@ -27,6 +27,8 @@ const UNIT = 1_000_000n;
 
 type State = {
   moduleRef?: string;
+  coverModuleRef?: string;
+  cover?: string; // kuasa-cover contract index
   registry?: string; // contract index
   agents: Record<string, string>; // name -> CIS-8004 token id (hex)
   mandates: Record<string, { id: string; owner: string; payer: string; issueTx: string; proofAnchorTx: string }>;
@@ -49,6 +51,8 @@ const grpc = connect();
 const acct = (name: string, n: number): Wallet => { const a = loadProfile(name).accounts.find((x) => x.credNumber === n)!; return wallet(a.address, a.key); };
 const merchantFacilitator = acct('merchant', 1);
 const merchantPayTo = acct('merchant', 0).address.address;
+const insurerTreasury = acct('insurer', 0).address.address;
+const insurerOperator = acct('insurer', 1);
 
 function ok(r: Awaited<ReturnType<typeof submit>>, what: string) {
   const s = r.summary.summary as any;
@@ -75,6 +79,27 @@ if (!state.registry) {
   log('kuasa-registry', `<${state.registry},0>`, r.hash);
 }
 const registry = new KuasaRegistry(grpc, BigInt(state.registry));
+
+// 1b. Kuasa Cover contract (books for policies and claims; operator = insurer #1)
+if (!state.cover) {
+  const source = new Uint8Array(readFileSync(new URL('../contracts/kuasa-cover/concordium-out/module.wasm.v1', import.meta.url)));
+  if (!state.coverModuleRef) {
+    const r = await submit(grpc, Transaction.deployModule({ source }) as Transaction.Builder, merchantFacilitator);
+    const s = r.summary.summary as any;
+    state.coverModuleRef = String(s.moduleDeployed?.contents ?? s.rejectReason?.contents ?? '');
+    if (!state.coverModuleRef) throw new Error(`cover deploy failed: ${JSON.stringify(s, bigintJson)}`);
+    save();
+    log('cover module', state.coverModuleRef, r.hash);
+  }
+  // InitParams { operator: AccountAddress, registry: ContractAddress }
+  const init = new Uint8Array([...insurerOperator.address.decodedAddress, ...new Uint8Array(new BigUint64Array([BigInt(state.registry), 0n]).buffer)]);
+  const r = await submit(grpc, Transaction.initContract({
+    amount: sdk.CcdAmount.zero(), moduleRef: sdk.ModuleReference.fromHexString(state.coverModuleRef),
+    initName: sdk.ContractName.fromString('kuasa_cover'), param: sdk.Parameter.fromBuffer(ab(init)),
+  }, sdk.Energy.create(30_000)) as Transaction.Builder, merchantFacilitator);
+  state.cover = String(ok(r, 'cover init').contractInitialized.address.index); save();
+  log('kuasa-cover', `<${state.cover},0>`, r.hash);
+}
 
 // 2. CIS-8004 agent registration: register({ agent_uri: Some(uri), metadata_hash: None, external_reference: None, initial_metadata: [] })
 async function registerAgent(name: string, owner: Wallet) {
@@ -111,8 +136,9 @@ async function mandate(name: string, want: { minAge?: number; euResidency?: bool
     principal: { kind: 'person', account: owner.address.address, displayName: name },
     agent,
     scope: {
-      asset: ASSET, maxPerOrder: String(50n * UNIT), maxTotal: String(100n * UNIT),
-      categories: ['groceries', 'wine'], merchants: [merchantPayTo],
+      // premiums to the insurer are spending under the mandate like any other purchase
+      asset: ASSET, maxPerOrder: String(50n * UNIT), maxTotal: String(150n * UNIT),
+      categories: ['groceries', 'wine', 'insurance'], merchants: [merchantPayTo, insurerTreasury],
       validFrom: now - 60, validUntil: now + 30 * 86400,
     },
     proof: { auditRecordUri: publish(`proof/${name}.json`, proof.json), auditRecordSha256: await sha256Hex(proof.json) },
@@ -122,7 +148,7 @@ async function mandate(name: string, want: { minAge?: number; euResidency?: bool
   const id = await mandateId(m);
   const r = await registry.issue({
     id, payer: payer.address.address, agentRegistry: AGENT_REGISTRY, agentToken: tokenId, uri,
-    maxTotal: BigInt(m.scope.maxTotal), validUntilMs: BigInt(m.scope.validUntil) * 1000n, recorders: [merchantFacilitator.address.address],
+    maxTotal: BigInt(m.scope.maxTotal), validUntilMs: BigInt(m.scope.validUntil) * 1000n, recorders: [merchantFacilitator.address.address, insurerOperator.address.address],
   }, owner);
   state.mandates[name] = { id, owner: owner.address.address, payer: payer.address.address, issueTx: r.hash, proofAnchorTx: proof.anchorTx }; save();
   log(name, 'mandate', id, r.hash);

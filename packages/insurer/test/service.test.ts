@@ -121,13 +121,51 @@ test('approve with empty pool does not pay', async () => {
   assert.ok(!t.calls.some((c) => c.startsWith('pay:')));
 });
 
-test('second no-evidence rejection anchors disclosure', async () => {
+test('second no-evidence rejection drafts a disclosure; only a human approval anchors it', async () => {
   const t = harness();
   const a1 = await filedClaim(t, false, 0n);
   assert.deepEqual([a1.ok, a1.noEvidence], [false, true]);
   assert.ok(t.calls.includes('decide:0:false'), 'no-evidence claims are rejected without paying');
-  assert.equal(t.disclosures.length, 0);
   await filedClaim(t, false, 1n);
+  assert.equal(t.disclosures.length, 0, 'nothing anchored without a human');
+  assert.equal(t.svc.state().pendingDisclosures.length, 1);
+  assert.equal(t.svc.state().pendingDisclosures[0].account, PAYER, 'attributed to the claimant');
+  await t.svc.approveDisclosure(1n);
   assert.equal(t.disclosures.length, 1);
   assert.ok(t.calls.includes('markFraud:1'));
+  assert.equal(t.svc.state().pendingDisclosures.length, 0);
+});
+
+test('merchant claims without evidence count against the merchant, not the owner', async () => {
+  const t = harness();
+  for (const id of [0n, 1n]) {
+    const q = await quoteOk(t.svc);
+    const pid = await t.svc.issue(q.quoteId, h(9));
+    t.claims.set(id, { policyId: pid!, claimant: SHOP, kind: 'MerchantLoss', amount: 24n * EUR, evidence: h(12), orders: [h(20 + Number(id))], status: { tag: 'Filed' }, payout: 0n });
+    await t.svc.assessClaim(id, []);
+  }
+  assert.deepEqual(t.svc.state().fraudCounts, { [SHOP]: 2 });
+  assert.equal(t.svc.state().pendingDisclosures[0].account, SHOP);
+});
+
+test('concurrent approvals pay once', async () => {
+  const t = harness();
+  await filedClaim(t, true, 0n);
+  await Promise.all([t.svc.decide(0n, true), t.svc.decide(0n, true), t.svc.decide(0n, true)]);
+  assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 1);
+});
+
+test('a failed payout record is retried without paying again', async () => {
+  let failRecord = true;
+  const t = harness();
+  const real = t.svc['deps'].cover.recordPayout;
+  t.svc['deps'].cover.recordPayout = async (...args) => { if (failRecord) throw new Error('chain down'); return real(...args); };
+  await filedClaim(t, true, 0n);
+  const d = await t.svc.decide(0n, true);
+  assert.equal(d.paid, 'payout-tx');
+  assert.match(d.reason ?? '', /record/);
+  failRecord = false;
+  await t.svc.decide(0n, true);
+  assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 1);
+  assert.ok(t.calls.includes(`recordPayout:0:${23n * EUR}`));
 });

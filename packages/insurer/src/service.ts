@@ -42,7 +42,11 @@ export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; or
 export type StoredQuote = Quote & {
   quoteId: string; request: QuoteRequest; mandateId: string; owner: string; payer: string; token: string; expires: number;
 };
-type ClaimRecord = { claimId: bigint; policyId: bigint; holder: string; recipient: string; assessment: Assessment; receiptTxs: string[]; orders: string[]; paid?: string; decided?: boolean };
+type ClaimRecord = {
+  claimId: bigint; policyId: bigint; holder: string; claimant: string; recipient: string; assessment: Assessment; receiptTxs: string[]; orders: string[];
+  paid?: string; amountPaid?: bigint; recordPending?: boolean; decided?: boolean; busy?: Promise<{ decided: true; paid?: string; reason?: string }>;
+};
+type Disclosure = { claimId: string; account: string; doc: object };
 
 /**
  * Kuasa Cover insurer: prices cover from on-chain facts, issues policies after the premium is
@@ -55,7 +59,8 @@ export class InsurerService {
   private unissued: { quoteId: string; premiumTx: string; error: string }[] = [];
   private claims = new Map<bigint, ClaimRecord>();
   private fraud = new Map<string, number>();
-  private disclosures: { claimId: string; holder: string; hash: string }[] = [];
+  private pendingDisclosures: Disclosure[] = [];
+  private disclosures: { claimId: string; account: string; hash: string }[] = [];
   private payouts: { claimId: string; to: string; amount: bigint; tx: string }[] = [];
   private premiumsIn = 0n;
 
@@ -164,58 +169,90 @@ export class InsurerService {
     });
     await this.deps.cover.assess(claimId, a.ok, await sha256Hex(a.reason), this.deps.operator);
     const rec: ClaimRecord = {
-      claimId, policyId: c.policyId, holder: p.holder, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
+      claimId, policyId: c.policyId, holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
       assessment: a, receiptTxs, orders: c.orders,
     };
     this.claims.set(claimId, rec);
 
     if (a.noEvidence) {
-      // Nothing on-chain backs it: reject without a payout decision, and count it against the owner.
+      // Nothing on-chain backs it: reject without a payout decision, and count it against the
+      // account that filed it (the claimant signs fileClaim, so this is who made the claim).
       await this.deps.cover.decide(claimId, false, this.deps.operator);
       rec.decided = true;
-      const n = (this.fraud.get(p.holder) ?? 0) + 1;
-      this.fraud.set(p.holder, n);
+      const n = (this.fraud.get(c.claimant) ?? 0) + 1;
+      this.fraud.set(c.claimant, n);
       if (n >= FRAUD_THRESHOLD) {
-        const doc = {
-          type: 'kuasa-cover/lawful-disclosure-request', claimId: String(claimId), account: p.holder, agentPayer: p.agentPayer,
-          rejectedClaimsWithoutEvidence: n, legalBasis: 'Suspected insurance fraud. Disclosure of the account holder identity is requested from the identity provider and Privacy Guardians via court order.',
+        // Drafted only: a human reviews it in the console before anything is anchored.
+        this.pendingDisclosures.push({ claimId: String(claimId), account: c.claimant, doc: {
+          type: 'kuasa-cover/lawful-disclosure-request', claimId: String(claimId), account: c.claimant, policyHolder: p.holder,
+          rejectedClaimsWithoutEvidence: n,
+          legalBasis: 'Suspected insurance fraud. Disclosure of the account holder identity is requested from the identity provider and Privacy Guardians via court order.',
           at: new Date(this.deps.now()).toISOString(),
-        };
-        const hash = await this.deps.saveDisclosure(doc);
-        await this.deps.cover.markFraud(claimId, hash, this.deps.operator);
-        this.disclosures.push({ claimId: String(claimId), holder: p.holder, hash });
+        } });
       }
     }
     return a;
   }
 
-  /** The human claims handler's decision. Approval pays only if the pool can cover it. */
+  /**
+   * The human claims handler's decision. Approval pays only if the pool can cover it. Calls for
+   * the same claim are serialised, so a double-click can never pay twice.
+   */
   async decide(claimId: bigint, approve: boolean): Promise<{ decided: true; paid?: string; reason?: string }> {
     const rec = this.claims.get(claimId);
     if (!rec) throw new Error('claim not assessed yet');
-    if (!approve) {
-      await this.deps.cover.decide(claimId, false, this.deps.operator);
-      rec.decided = true;
-      return { decided: true };
-    }
-    if (!rec.assessment.ok) throw new Error('only positively assessed claims can be approved');
-    if (!rec.decided) {
-      await this.deps.cover.decide(claimId, true, this.deps.operator);
-      rec.decided = true;
-    }
-    return this.pay(rec);
+    if (rec.busy) return rec.busy;
+    rec.busy = (async () => {
+      if (!approve) {
+        if (rec.paid) throw new Error('claim already paid');
+        await this.deps.cover.decide(claimId, false, this.deps.operator);
+        rec.decided = true;
+        return { decided: true as const };
+      }
+      if (!rec.assessment.ok) throw new Error('only positively assessed claims can be approved');
+      if (!rec.decided) {
+        await this.deps.cover.decide(claimId, true, this.deps.operator);
+        rec.decided = true;
+      }
+      return this.pay(rec);
+    })().finally(() => { rec.busy = undefined; });
+    return rec.busy;
   }
 
-  /** Pays an approved claim (also used to retry when the pool was short). */
-  async pay(rec: ClaimRecord): Promise<{ decided: true; paid?: string; reason?: string }> {
-    if (rec.paid) return { decided: true, paid: rec.paid };
-    const amount = rec.assessment.payout;
-    if ((await this.deps.treasuryBalance()) < amount) return { decided: true, reason: 'insufficient pool: approved, payout pending' };
-    const tx = await this.deps.pay(rec.recipient, amount, `kuasa-claim:${rec.claimId}`);
-    await this.deps.cover.recordPayout(rec.claimId, tx, amount, this.deps.operator);
-    rec.paid = tx;
-    this.payouts.push({ claimId: String(rec.claimId), to: rec.recipient, amount, tx });
-    return { decided: true, paid: tx };
+  /** Pays an approved claim at most once; a failed on-chain record is retried without paying again. */
+  private async pay(rec: ClaimRecord): Promise<{ decided: true; paid?: string; reason?: string }> {
+    if (!rec.paid) {
+      const policy = await this.deps.cover.policy(rec.policyId);
+      const remaining = policy ? policy.limit - policy.paidOut : 0n;
+      const amount = rec.assessment.payout < remaining ? rec.assessment.payout : remaining;
+      if (amount <= 0n) return { decided: true, reason: 'policy limit exhausted' };
+      if ((await this.deps.treasuryBalance()) < amount) return { decided: true, reason: 'insufficient pool: approved, payout pending' };
+      const tx = await this.deps.pay(rec.recipient, amount, 'kuasa-claim:' + rec.claimId);
+      rec.paid = tx; // money moved: never transfer again for this claim
+      rec.amountPaid = amount;
+      rec.recordPending = true;
+      this.payouts.push({ claimId: String(rec.claimId), to: rec.recipient, amount, tx });
+    }
+    if (rec.recordPending) {
+      try {
+        await this.deps.cover.recordPayout(rec.claimId, rec.paid, rec.amountPaid!, this.deps.operator);
+        rec.recordPending = false;
+      } catch {
+        return { decided: true, paid: rec.paid, reason: 'payout sent; on-chain record pending, approve again to retry the record' };
+      }
+    }
+    return { decided: true, paid: rec.paid };
+  }
+
+  /** A human approves a drafted disclosure request: it is stored, hashed and anchored on the claim. */
+  async approveDisclosure(claimId: bigint) {
+    const i = this.pendingDisclosures.findIndex((d) => d.claimId === String(claimId));
+    if (i < 0) throw new Error('no pending disclosure for this claim');
+    const [d] = this.pendingDisclosures.splice(i, 1);
+    const hash = await this.deps.saveDisclosure(d.doc);
+    await this.deps.cover.markFraud(claimId, hash, this.deps.operator);
+    this.disclosures.push({ claimId: d.claimId, account: d.account, hash });
+    return hash;
   }
 
   claimRecord = (id: bigint) => this.claims.get(id);
@@ -224,9 +261,10 @@ export class InsurerService {
     return {
       policies: this.policies,
       unissued: this.unissued,
-      claims: [...this.claims.values()],
+      claims: [...this.claims.values()].map(({ busy, ...r }) => r),
       payouts: this.payouts,
       premiumsIn: this.premiumsIn,
+      pendingDisclosures: this.pendingDisclosures,
       disclosures: this.disclosures,
       fraudCounts: Object.fromEntries(this.fraud),
     };
