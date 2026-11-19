@@ -69,8 +69,8 @@ let explorer = '';
 const safeUrl = (u) => { try { const p = new URL(u).protocol; return p === 'https:' || p === 'http:' ? esc(u) : '#'; } catch { return '#'; } };
 const hex = (h) => /^[0-9a-f]{64}$/i.test(h ?? '') ? h : '';
 const b58 = (a) => /^[1-9A-HJ-NP-Za-km-z]{45,55}$/.test(a ?? '') ? a : '';
-const tx = (h) => hex(h) ? `<a class="mono" target="_blank" rel="noopener" href="${safeUrl(explorer)}/transactions/${hex(h)}">${short(h)}</a>` : '';
-const acct = (a) => !b58(a) ? '' : `<a class="mono" target="_blank" rel="noopener" href="${safeUrl(explorer)}/accounts/${a}">${short(a)}</a>`;
+const tx = (h) => hex(h) ? `<a class="mono" target="_blank" rel="noopener" href="${safeUrl(explorer)}/transaction/${hex(h)}">${short(h)}</a>` : '';
+const acct = (a) => !b58(a) ? '' : `<a class="mono" target="_blank" rel="noopener" href="${safeUrl(explorer)}/account/${a}">${short(a)}</a>`;
 
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 6000); }
 
