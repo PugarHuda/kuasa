@@ -16,12 +16,12 @@ import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
-import { bigintJson, connect, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
-import { KuasaGuard, MANDATE_HEADER, type Offer } from '@kuasa/merchant';
+import { bigintJson, connect, KuasaCover, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
+import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer } from '@kuasa/merchant';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4021);
-const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string };
+const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string };
 const merchant = JSON.parse(readFileSync(new URL('accounts/merchant.json', ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const payTo = merchant.find((a) => a.credNumber === 0)!.address;
 const sponsor = merchant.find((a) => a.credNumber === 1)!;
@@ -32,9 +32,11 @@ const UNIT = 1_000_000n;
 const EU = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK'];
 
 /** Catalog: path -> product. Paths are the x402 route patterns, which KuasaGuard keys offers by. */
+/** Wine needs Kuasa Cover for the order once the cover contract is deployed. */
+const WINE_COVER = state.cover ? { minCover: 20n * UNIT } : {};
 const catalog: Record<string, { name: string; price: bigint } & Offer> = {
-  '/shop/wine/rioja': { name: 'Rioja Reserva 2019, 75cl', price: 24n * UNIT, category: 'wine', requirements: { minAge: 18, residencyIn: EU } },
-  '/shop/wine/case': { name: 'Case of 6 Rioja Reserva', price: 60n * UNIT, category: 'wine', requirements: { minAge: 18, residencyIn: EU } },
+  '/shop/wine/rioja': { name: 'Rioja Reserva 2019, 75cl', price: 24n * UNIT, category: 'wine', requirements: { minAge: 18, residencyIn: EU, ...WINE_COVER } },
+  '/shop/wine/case': { name: 'Case of 6 Rioja Reserva', price: 60n * UNIT, category: 'wine', requirements: { minAge: 18, residencyIn: EU, ...WINE_COVER } },
   '/shop/groceries/bread': { name: 'Sourdough loaf', price: 3n * UNIT, category: 'groceries', requirements: {} },
   '/shop/vape/mint': { name: 'Mint e-liquid 10ml', price: 10n * UNIT, category: 'vape', requirements: { minAge: 18, residencyIn: EU } },
 };
@@ -46,6 +48,8 @@ const guard = new KuasaGuard({
   offers: Object.fromEntries(Object.entries(catalog).map(([p, o]) => [p, { category: o.category, requirements: o.requirements }])),
   recorder: wallet(sponsor.address, sponsor.key),
   localOrigin: `http://localhost:${PORT}`, // demo: documents are served by this same process
+  agents: new Cis8004Registry(grpc),
+  cover: state.cover ? new KuasaCover(grpc, BigInt(state.cover)) : undefined,
 });
 
 const grpcCfg = { host: TESTNET.grpc.host, port: TESTNET.grpc.port, useTls: true };
@@ -72,8 +76,11 @@ app.get('/quote', async (req, res) => {
   const path = String(req.query.path ?? '');
   const p = catalog[path];
   if (!p) return json(res, { ok: false, reasons: ['unknown product'] }, 404);
-  const d = await guard.decide({ mandateUrl: req.header(MANDATE_HEADER), route: path, payer: String(req.query.payer ?? ''), payTo, asset: ASSET, amount: p.price });
-  json(res, d);
+  const payer = String(req.query.payer ?? '');
+  const d = await guard.decide({ mandateUrl: req.header(MANDATE_HEADER), route: path, payer, payTo, asset: ASSET, amount: p.price });
+  // An order reference lets the agent buy per-order cover before paying (send it back in x-kuasa-order).
+  const orderRef = d.ok || d.reasons.every((r) => r.startsWith('cover required')) ? await guard.issueOrderRef({ payer, payTo, route: path, amount: p.price }) : undefined;
+  json(res, { ...d, orderRef, amount: p.price, payTo });
 });
 
 // Operator view for the console: loopback only.

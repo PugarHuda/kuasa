@@ -1,24 +1,25 @@
 import type { ConcordiumGRPCClient, Network } from '@concordium/web-sdk';
 import type { KuasaRegistry, Wallet } from '@kuasa/chain';
+import { authorize, canonicalJson, type Decision, type Mandate, MandateSchema, mandateId, type Requirements, sha256Hex } from '@kuasa/core';
 import {
-  authorize, canonicalJson, type Claims, type Decision, type Mandate, MandateSchema, mandateId, type Requirements,
-  sha256Hex, toMandateState,
-} from '@kuasa/core';
-import { verifyMandateProof } from './proof.js';
+  type AgentRegistry, type CoverCheck, type IdentitySource, MandateProofIdentity, MandateRegistrySpend, type SpendControl,
+} from './foundations.js';
+import type { verifyMandateProof } from './proof.js';
 import { safeFetchText } from './safe-fetch.js';
 
 /** Header an agent sends with every request: the URL of its mandate document. */
 export const MANDATE_HEADER = 'x-kuasa-mandate';
+/** Optional header binding a payment to an order reference issued by the shop's free quote. */
+export const ORDER_HEADER = 'x-kuasa-order';
 
-/** What a merchant sells on a route and what the buyer must prove to buy it. */
-export type Offer = { category: string; requirements: Requirements };
+/** What a merchant sells on a route and what the buyer must prove (and be insured for) to buy it. */
+export type Offer = { category: string; requirements: Requirements & { minCover?: bigint } };
 
-type ProofResult = { ok: true; claims: Claims } | { ok: false; reason: string };
 type Payload = { signedTransaction?: { header?: { sender?: string; nonce?: number | string } } };
-type InFlight = { id: string; owner: string; route: string; amount: bigint };
+type InFlight = { id: string; owner: string; route: string; amount: bigint; orderRef?: string };
+type OrderIntent = { payer: string; payTo: string; route: string; amount: bigint; expires: number };
 
-const PROOF_TTL_MS = 5 * 60_000;
-const PROOF_CACHE_MAX = 500;
+const ORDER_TTL_MS = 10 * 60_000;
 
 /** One payment = one signed transaction: sender + nonce is unique and replay-safe. */
 const paymentKey = (payload: unknown) => {
@@ -34,22 +35,25 @@ const paymentKey = (payload: unknown) => {
  *         .onSettleFailure(guard.settleFailed)
  *
  * Before the facilitator sponsors a payment, the guard checks (a) who is behind the paying
- * agent, (b) that this purchase is inside the agent's mandate and (c) that the principal may
- * legally buy it. In-flight purchases reserve budget so parallel requests cannot overspend.
- * After settlement it records the receipt on-chain, which also draws down the budget.
+ * agent and that its CIS-8004 registry entry is active and owned by that principal, (b) that the
+ * purchase is inside the agent's mandate, (c) that the principal may legally buy it and (d) that
+ * the purchase is insured when the offer requires cover. In-flight purchases reserve budget so
+ * parallel requests cannot overspend. After settlement it records the receipt on-chain.
  */
 export class KuasaGuard {
-  private proofs = new Map<string, { at: number; result: Promise<ProofResult> }>();
   private inFlight = new Map<string, InFlight>();
+  private orders = new Map<string, OrderIntent>();
+  private identity: IdentitySource;
+  private spend: SpendControl;
   readonly log: { at: number; mandate?: string; payer?: string; amount?: string; decision: Decision }[] = [];
-  readonly receipts: { mandate: string; order: string; paymentTx: string; receiptTx: string; amount: string }[] = [];
+  readonly receipts: { mandate: string; order: string; orderRef?: string; paymentTx: string; receiptTx: string; amount: string }[] = [];
   /** Settled payments whose receipt could not be recorded; reconcile manually. */
   readonly unrecorded: { mandate: string; paymentTx: string; amount: string; error: string }[] = [];
 
   constructor(private opts: {
     grpc: ConcordiumGRPCClient;
     network: Network;
-    registry: KuasaRegistry;
+    registry: Pick<KuasaRegistry, 'view' | 'recordReceipt'>;
     /** x402 route path pattern (e.g. "/wine/:sku") -> offer. */
     offers: Record<string, Offer>;
     /** Account that records receipts; must be listed as a recorder in the mandate. */
@@ -60,25 +64,22 @@ export class KuasaGuard {
     now?: () => number;
     /** Injectable for tests; defaults to full on-chain re-verification. */
     verifyProof?: typeof verifyMandateProof;
-  }) {}
+    /** Swappable foundations (default: Kuasa's own stand-ins). */
+    identity?: IdentitySource;
+    spend?: SpendControl;
+    /** CIS-8004 registry check of the buying agent (recommended). */
+    agents?: AgentRegistry;
+    /** Kuasa Cover check, required for offers with `minCover`. */
+    cover?: CoverCheck;
+  }) {
+    this.identity = opts.identity ?? new MandateProofIdentity({ grpc: opts.grpc, network: opts.network, fetchText: this.fetchText, verify: opts.verifyProof, now: opts.now });
+    this.spend = opts.spend ?? new MandateRegistrySpend(opts.registry);
+  }
 
   private fetchText = (url: string) =>
     this.opts.fetchText ? this.opts.fetchText(url) : safeFetchText(url, { localOrigin: this.opts.localOrigin });
 
   private now = () => this.opts.now?.() ?? Date.now();
-
-  /** Re-verifies the principal's proof at most every PROOF_TTL_MS (credentials can expire or be revoked). */
-  private proofFor(id: string, mandate: Mandate): Promise<ProofResult> {
-    const hit = this.proofs.get(id);
-    if (hit && this.now() - hit.at < PROOF_TTL_MS) return hit.result;
-    if (this.proofs.size >= PROOF_CACHE_MAX) this.proofs.delete(this.proofs.keys().next().value!);
-    const result = this.fetchText(mandate.proof.auditRecordUri)
-      .then((json) => (this.opts.verifyProof ?? verifyMandateProof)({ mandate, auditRecordJson: json, grpc: this.opts.grpc, network: this.opts.network }))
-      .catch((): ProofResult => ({ ok: false, reason: 'proof document unavailable' }));
-    this.proofs.set(id, { at: this.now(), result });
-    result.then((r) => { if (!r.ok) this.proofs.delete(id); }); // never cache failures
-    return result;
-  }
 
   private reserved(id: string) {
     let sum = 0n;
@@ -86,8 +87,17 @@ export class KuasaGuard {
     return sum;
   }
 
+  /** Issues a single-use order reference (10 min) that a payment can be bound to via ORDER_HEADER. */
+  async issueOrderRef(o: { payer: string; payTo: string; route: string; amount: bigint }): Promise<string> {
+    for (const [k, v] of this.orders) if (v.expires < this.now()) this.orders.delete(k);
+    const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('hex');
+    const ref = await sha256Hex(canonicalJson({ ...o, amount: String(o.amount), nonce }));
+    this.orders.set(ref, { ...o, expires: this.now() + ORDER_TTL_MS });
+    return ref;
+  }
+
   /** Full decision for a would-be purchase. Also backs a free "quote" endpoint. */
-  async decide(args: { mandateUrl?: string; route: string; payer: string; payTo: string; asset: string; amount: bigint }): Promise<Decision & { mandateId?: string; owner?: string; budget?: { spent: bigint; maxTotal: bigint } }> {
+  async decide(args: { mandateUrl?: string; route: string; payer: string; payTo: string; asset: string; amount: bigint; orderRef?: string }): Promise<Decision & { mandateId?: string; owner?: string; budget?: { spent: bigint; maxTotal: bigint } }> {
     const offer = this.opts.offers[args.route];
     if (!offer) return { ok: false, reasons: [`no Kuasa offer for route ${args.route}`] };
     if (!args.mandateUrl) return { ok: false, reasons: ['no mandate presented (x-kuasa-mandate header)'] };
@@ -99,19 +109,44 @@ export class KuasaGuard {
       return { ok: false, reasons: ['mandate document unavailable or invalid'] };
     }
     const id = await mandateId(mandate);
-    const [proof, entry] = await Promise.all([this.proofFor(id, mandate), this.opts.registry.view(mandate.principal.account, id)]);
+    const [proof, state] = await Promise.all([this.identity.claims(mandate, id), this.spend.state(mandate, id)]);
     if (!proof.ok) return { ok: false, reasons: [proof.reason], mandateId: id };
 
-    const state = entry && toMandateState(entry, id);
+    const budget = state ? { spent: state.spent, maxTotal: state.maxTotal } : undefined;
     if (state) state.spent += this.reserved(id); // budget held by purchases still settling
     const decision = authorize({
       mandate, docSha256: id, state, claims: proof.claims, requirements: offer.requirements,
       order: { payer: args.payer, merchant: args.payTo, asset: args.asset, amount: args.amount, category: offer.category, now: Math.floor(this.now() / 1000) },
     });
-    if (decision.ok && entry && !entry.recorders.includes(this.opts.recorder.address.address)) {
-      return { ok: false, reasons: ['mandate does not authorise this merchant to record receipts'], mandateId: id };
+    const reasons = decision.ok ? [] : [...decision.reasons];
+    if (decision.ok && state && !state.recorders.includes(this.opts.recorder.address.address)) {
+      reasons.push('mandate does not authorise this merchant to record receipts');
     }
-    return { ...decision, mandateId: id, owner: mandate.principal.account, budget: entry ? { spent: entry.spent, maxTotal: entry.maxTotal } : undefined };
+    reasons.push(...await this.agentReasons(mandate), ...await this.coverReasons(offer, args));
+    const base = { mandateId: id, owner: mandate.principal.account, budget };
+    return reasons.length ? { ok: false, reasons, ...base } : { ok: true, ...base };
+  }
+
+  private async agentReasons(m: Mandate): Promise<string[]> {
+    if (!this.opts.agents) return [];
+    const a = await this.opts.agents.agentOf(m.agent.registry.tokenId).catch(() => undefined);
+    if (a === undefined) return ['agent registry unavailable'];
+    if (a === null) return ['agent not registered in the agent registry'];
+    const out: string[] = [];
+    if (!a.active) out.push('agent token not active in the agent registry');
+    if (a.owner !== m.principal.account) out.push('agent token not owned by the principal');
+    return out;
+  }
+
+  private async coverReasons(offer: Offer, args: { payer: string; amount: bigint; orderRef?: string }): Promise<string[]> {
+    const min = offer.requirements.minCover;
+    if (min === undefined) return [];
+    if (!this.opts.cover) return ['cover required but no cover check configured'];
+    const v = await this.opts.cover.coverOf(args.payer, args.orderRef).catch(() => null);
+    if (!v) return ['cover check unavailable'];
+    const available = v.periodRemaining > v.orderLimit ? v.periodRemaining : v.orderLimit;
+    const needed = args.amount > min ? args.amount : min;
+    return available < needed ? [`cover required: ${needed} needed, ${available} available (Kuasa Cover)`] : [];
   }
 
   /** x402 `onBeforeVerify`: abort before any funds move if the mandate says no. */
@@ -121,7 +156,14 @@ export class KuasaGuard {
     if (this.inFlight.has(key)) return { abort: true as const, reason: 'kuasa_duplicate_payment', message: 'payment already in flight' };
     const route = req?.routePattern ?? `${req?.method} ${req?.path}`;
     const amount = BigInt(ctx.requirements.amount);
-    const decision = await this.decide({ mandateUrl: req?.adapter?.getHeader(MANDATE_HEADER), route, payer, payTo: ctx.requirements.payTo, asset: ctx.requirements.asset, amount });
+    const orderRef = req?.adapter?.getHeader(ORDER_HEADER) || undefined;
+    if (orderRef) {
+      const o = this.orders.get(orderRef);
+      if (!o || o.expires < this.now() || o.payer !== payer || o.payTo !== ctx.requirements.payTo || o.route !== route || o.amount !== amount) {
+        return { abort: true as const, reason: 'kuasa_mandate_rejected', message: 'unknown or expired order reference' };
+      }
+    }
+    const decision = await this.decide({ mandateUrl: req?.adapter?.getHeader(MANDATE_HEADER), route, payer, payTo: ctx.requirements.payTo, asset: ctx.requirements.asset, amount, orderRef });
     this.log.push({ at: this.now(), mandate: decision.mandateId, payer, amount: ctx.requirements.amount, decision });
     if (!decision.ok) return { abort: true as const, reason: 'kuasa_mandate_rejected', message: decision.reasons.join('; ') };
     // decide() awaited I/O, so other purchases may have reserved meanwhile. This check and the
@@ -130,7 +172,8 @@ export class KuasaGuard {
     if (b.spent + this.reserved(decision.mandateId!) + amount > b.maxTotal) {
       return { abort: true as const, reason: 'kuasa_mandate_rejected', message: 'amount exceeds remaining mandate budget' };
     }
-    this.inFlight.set(key, { id: decision.mandateId!, owner: decision.owner!, route, amount });
+    if (orderRef) this.orders.delete(orderRef); // single use
+    this.inFlight.set(key, { id: decision.mandateId!, owner: decision.owner!, route, amount, orderRef });
   };
 
   /** x402 `onSettleFailure`: release the reservation. */
@@ -144,12 +187,15 @@ export class KuasaGuard {
     const f = this.inFlight.get(key);
     if (!f) return;
     if (ctx.result.success === false) { this.inFlight.delete(key); return; }
-    const order = await sha256Hex(canonicalJson({ ...ctx.requirements, route: f.route, payer, tx: ctx.result.transaction }));
+    // With an order reference the receipt binds it, so cover bought for that order matches the receipt.
+    const order = f.orderRef
+      ? await sha256Hex(f.orderRef + ctx.result.transaction)
+      : await sha256Hex(canonicalJson({ ...ctx.requirements, route: f.route, payer, tx: ctx.result.transaction }));
     let lastError = '';
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const rec = await this.opts.registry.recordReceipt(f.owner, f.id, order, ctx.result.transaction, f.amount, this.opts.recorder);
-        this.receipts.push({ mandate: f.id, order, paymentTx: ctx.result.transaction, receiptTx: rec.hash, amount: ctx.requirements.amount });
+        this.receipts.push({ mandate: f.id, order, orderRef: f.orderRef, paymentTx: ctx.result.transaction, receiptTx: rec.hash, amount: ctx.requirements.amount });
         this.inFlight.delete(key);
         return;
       } catch (e) {
