@@ -21,7 +21,7 @@ import { bigintJson, connect, KuasaCover, KuasaRegistry, registryEventsOfTx, TES
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
-import { checkSponsorable } from './sponsor.js';
+import { checkSponsorable, jsonSafe, SponsorBudget } from './sponsor.js';
 import { Transaction } from '@concordium/web-sdk/transactions';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
@@ -167,9 +167,22 @@ app.get('/cover/status', async (req, res) => {
 app.get('/info', (_req, res) => json(res, { cover: { index: state.cover, subindex: '0' }, operator: operator.address.address, treasury: treasury.address.address, asset: ASSET }));
 
 /** Co-signs (sponsors) a claim filing signed by the claimant, so agents never need CCD for fees. */
+const sponsorBudget = new SponsorBudget(5, 3_600_000);
+/** Filed on-chain but not assessed (e.g. a chain error mid-way); the console can assess them. */
+const pendingAssessments = new Map<string, { claimId: bigint; receiptTxs: string[]; error: string }>();
+
 app.post('/claims/sponsor', async (req, res) => {
   const check = await checkSponsorable(req.body?.tx, cover.address, operator.address);
   if ('refused' in check) return json(res, { error: check.refused }, 400);
+  const wire = JSON.parse(JSON.stringify(Transaction.toJSON(check.signable as never), jsonSafe));
+  const sender = String(wire.header.sender);
+  // Dry-run as the sender first: never pay fees for a filing the contract would reject.
+  const dry = await grpc.invokeContract({
+    contract: cover.address, invoker: sdk.AccountAddress.fromBase58(sender), method: sdk.ReceiveName.fromString('kuasa_cover.fileClaim'),
+    parameter: sdk.Parameter.fromHexString(String(wire.payload.message)), energy: sdk.Energy.create(60_000),
+  }).catch(() => null);
+  if (!dry || dry.tag !== 'success') return json(res, { error: 'the cover contract would reject this claim' }, 400);
+  if (!sponsorBudget.take(sender)) return json(res, { error: 'too many sponsored filings; try again later' }, 429);
   try {
     const sponsored = await Transaction.sponsor(check.signable as never, operator.signer);
     const hash = await grpc.sendTransaction(Transaction.finalize(sponsored));
@@ -180,15 +193,32 @@ app.post('/claims/sponsor', async (req, res) => {
     if (claimId === null) return json(res, { error: 'claim id missing' }, 500);
     // The receipts are submitted together with the claimant-signed filing; assessed exactly once.
     const txs = Array.isArray(req.body?.receiptTxs) ? req.body.receiptTxs.map(String).filter((t: string) => /^[0-9a-f]{64}$/.test(t)).slice(0, 4) : [];
-    const assessment = await svc.assessClaim(claimId, txs);
-    json(res, { tx: sdk.TransactionHash.toHexString(hash), claimId, assessment });
+    const filedTx = sdk.TransactionHash.toHexString(hash);
+    try {
+      json(res, { tx: filedTx, claimId, assessment: await svc.assessClaim(claimId, txs) });
+    } catch (e) {
+      pendingAssessments.set(String(claimId), { claimId, receiptTxs: txs, error: (e as Error).message });
+      json(res, { tx: filedTx, claimId, assessment: 'pending', error: (e as Error).message }, 202);
+    }
   } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
 
 app.get('/state', consoleOnly, async (_req, res) => json(res, {
   ...svc.state(), treasury: treasury.address.address, operator: operator.address.address, cover: `<${state.cover},0>`,
   pool: await eudemoBalance(treasury.address.address),
+  pendingAssessments: [...pendingAssessments.values()],
 }));
+/** Console: assess a claim that was filed but never assessed (receipts from the filing request). */
+app.post('/claims/:id/assess', consoleOnly, async (req, res) => {
+  const p = pendingAssessments.get(String(big(req.params.id)));
+  if (!p) return json(res, { error: 'no pending assessment for this claim' }, 404);
+  try {
+    const a = await svc.assessClaim(p.claimId, p.receiptTxs);
+    pendingAssessments.delete(String(p.claimId));
+    json(res, a);
+  } catch (e) { json(res, { error: (e as Error).message }, 400); }
+});
+
 app.post('/claims/:id/decision', consoleOnly, async (req, res) => {
   try { json(res, await svc.decide(big(req.params.id), req.body?.approve === true)); } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });

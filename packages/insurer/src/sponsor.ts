@@ -30,3 +30,17 @@ export async function checkSponsorable(json: unknown, cover: ContractAddress.Typ
   if (Number(j.header?.executionEnergyAmount) > MAX_ENERGY) return { refused: 'energy too high' };
   return { signable };
 }
+
+/** At most `max` sponsored filings per sender per sliding window (fees are paid by the operator). */
+export class SponsorBudget {
+  private seen = new Map<string, number[]>();
+  constructor(private max = 5, private windowMs = 3_600_000, private now: () => number = Date.now) {}
+  take(sender: string): boolean {
+    const t = this.now();
+    const recent = (this.seen.get(sender) ?? []).filter((x) => t - x < this.windowMs);
+    if (recent.length >= this.max) { this.seen.set(sender, recent); return false; }
+    recent.push(t);
+    this.seen.set(sender, recent);
+    return true;
+  }
+}

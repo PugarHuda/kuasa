@@ -32,3 +32,13 @@ test('fileClaim is refused by sponsor endpoint for non-fileClaim tx', async () =
   assert.match((await checkSponsorable(await signed(update('kuasa_cover.fileClaim'), addr(9)), COVER, OPERATOR) as { refused: string }).refused, /sponsor/);
   assert.match((await checkSponsorable({ nonsense: true }, COVER, OPERATOR) as { refused: string }).refused, /malformed/);
 });
+
+test('sponsorship is rate-limited per sender', async () => {
+  const { SponsorBudget } = await import('../src/sponsor.js');
+  let now = 0;
+  const b = new SponsorBudget(3, 60_000, () => now);
+  assert.deepEqual([b.take('a'), b.take('a'), b.take('a'), b.take('a')], [true, true, true, false]);
+  assert.equal(b.take('b'), true, 'per sender');
+  now = 61_000;
+  assert.equal(b.take('a'), true, 'window slides');
+});
