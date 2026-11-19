@@ -15,11 +15,15 @@ export type BuyResult =
   | { ok: true; item: unknown; paymentTx?: string }
   | { ok: false; reasons: string[] };
 
+export type Scope = { asset: string; maxPerOrder: string; merchants?: string[] };
+
 export class KuasaAgent {
   private pay: typeof fetch;
-  /** The agent's own copy of its mandate scope; payments outside it are never signed. */
-  private scope?: { asset: string; maxPerOrder: string; merchants?: string[] };
-  constructor(readonly opts: { shopUrl: string; mandateUrl: string; payer: string; payerKey: string }) {
+  /**
+   * opts.scope is the agent's own trusted copy of its mandate scope, handed over by the owner at
+   * start-up and never fetched from a counterparty. Payments outside it are never signed.
+   */
+  constructor(readonly opts: { shopUrl: string; mandateUrl: string; payer: string; payerKey: string; scope: Scope }) {
     const client = new x402Client()
       .register(CONCORDIUM_TESTNET_CAIP2, new ExactConcordiumScheme({ accountAddress: AccountAddress.fromBase58(opts.payer), signer: buildBasicAccountSigner(opts.payerKey) }))
       // x402's USD caps don't understand CCD; the agent enforces its own mandate instead (below).
@@ -32,13 +36,14 @@ export class KuasaAgent {
   static fromDemo(name: string, shopUrl = process.env.KUASA_SHOP_URL ?? 'http://localhost:4021') {
     const root = new URL('../../../.kuasa/', import.meta.url);
     const acc = JSON.parse(readFileSync(new URL(`accounts/${name}.json`, root), 'utf8')).accounts.find((a: { credNumber: number }) => a.credNumber === 1);
-    return new KuasaAgent({ shopUrl, mandateUrl: `${shopUrl}/kuasa/mandate/${name}.json`, payer: acc.address, payerKey: acc.key });
+    const { scope } = JSON.parse(readFileSync(new URL(`public/mandate/${name}.json`, root), 'utf8')); // owner's local copy
+    return new KuasaAgent({ shopUrl, mandateUrl: `${shopUrl}/kuasa/mandate/${name}.json`, payer: acc.address, payerKey: acc.key, scope });
   }
 
   /** Never trust the shop's 402: amount, payee, asset and network must fit the mandate. */
   private withinMandate(r: { network: string; asset: string; amount: string; payTo: string }) {
-    const s = this.scope;
-    if (!s || r.network !== CONCORDIUM_TESTNET_CAIP2) return false;
+    const s = this.opts.scope;
+    if (r.network !== CONCORDIUM_TESTNET_CAIP2) return false;
     if ((r.asset || 'CCD').toUpperCase() !== s.asset.toUpperCase()) return false;
     if (!/^\d+$/.test(r.amount) || BigInt(r.amount) > BigInt(s.maxPerOrder)) return false;
     return !s.merchants?.length || s.merchants.includes(r.payTo);
@@ -67,7 +72,6 @@ export class KuasaAgent {
     if (!q.ok) return { ok: false, reasons: q.reasons ?? ['refused'] };
     const url = new URL(path, this.opts.shopUrl);
     if (url.origin !== new URL(this.opts.shopUrl).origin) return { ok: false, reasons: ['refusing to pay outside the configured shop'] };
-    this.scope ??= (await this.mandate()).scope;
     let res: Response;
     try {
       res = await this.pay(url, { headers: this.headers() });

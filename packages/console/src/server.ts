@@ -26,6 +26,14 @@ const registry = new KuasaRegistry(grpc, BigInt(loadState().registry));
 const app = express();
 const json = (res: express.Response, body: unknown, status = 200) => res.status(status).type('json').send(JSON.stringify(body, bigintJson));
 
+// Signing endpoints hold demo keys: only this console page may call them. The Host check blocks DNS
+// rebinding; the custom header forces a CORS preflight that cross-site pages cannot pass.
+app.use('/api', (req, res, next) => {
+  const hostOk = [`localhost:${PORT}`, `127.0.0.1:${PORT}`].includes(req.get('host') ?? '');
+  if (!hostOk || (req.method !== 'GET' && req.get('x-kuasa-console') !== '1')) return json(res, { error: 'forbidden' }, 403);
+  next();
+});
+
 app.get('/', (_, res) => res.sendFile(fileURLToPath(new URL('console.html', import.meta.url))));
 
 app.get('/api/state', async (_, res) => {

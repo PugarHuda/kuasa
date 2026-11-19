@@ -62,11 +62,14 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const ccd = (v) => (Number(v) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' CCD';
-const short = (s) => s ? s.slice(0, 8) + '…' + s.slice(-6) : '';
+const short = (s) => s ? esc(String(s).slice(0, 8) + '…' + String(s).slice(-6)) : '';
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let explorer = '';
-const tx = (h) => h ? `<a class="mono" target="_blank" rel="noopener" href="${explorer}/transactions/${h}">${short(h)}</a>` : '';
-const acct = (a) => `<a class="mono" target="_blank" rel="noopener" href="${explorer}/accounts/${a}">${short(a)}</a>`;
+const safeUrl = (u) => { try { const p = new URL(u).protocol; return p === 'https:' || p === 'http:' ? esc(u) : '#'; } catch { return '#'; } };
+const hex = (h) => /^[0-9a-f]{64}$/i.test(h ?? '') ? h : '';
+const b58 = (a) => /^[1-9A-HJ-NP-Za-km-z]{45,55}$/.test(a ?? '') ? a : '';
+const tx = (h) => hex(h) ? `<a class="mono" target="_blank" rel="noopener" href="${safeUrl(explorer)}/transactions/${hex(h)}">${short(h)}</a>` : '';
+const acct = (a) => !b58(a) ? '' : `<a class="mono" target="_blank" rel="noopener" href="${safeUrl(explorer)}/accounts/${a}">${short(a)}</a>`;
 
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 6000); }
 
@@ -74,7 +77,7 @@ async function act(kind, name, btn) {
   if (kind === 'revoke' && !confirm(`Revoke ${name}'s mandate? This is permanent and applies to every merchant immediately.`)) return;
   btn.disabled = true; btn.textContent = 'Submitting…';
   try {
-    const r = await (await fetch(`/api/${kind}/${name}`, { method: 'POST' })).json();
+    const r = await (await fetch(`/api/${kind}/${name}`, { method: 'POST', headers: { 'x-kuasa-console': '1' } })).json();
     toast(r.error ? `Failed: ${r.error}` : `${kind === 'revoke' ? 'Revoked' : 'Incident filed'} · tx ${short(r.tx)}`);
   } finally { refresh(); }
 }
@@ -95,12 +98,12 @@ function renderMandate(m) {
       <dt>Owner</dt><dd>${acct(e.owner)}</dd>
       <dt>Agent pays from</dt><dd>${acct(e.payer)}</dd>
       <dt>Agent registry</dt><dd class="mono">CIS-8004 &lt;12802,0&gt; token ${esc(m.agentToken)}</dd>
-      <dt>ZK proof</dt><dd>${d ? `<a target="_blank" href="${esc(d.proof.auditRecordUri)}">audit record</a> · anchor ${tx(m.proofAnchorTx)}` : '–'}</dd>
+      <dt>ZK proof</dt><dd>${d ? `<a target="_blank" rel="noopener" href="${safeUrl(d.proof.auditRecordUri)}">audit record</a> · anchor ${tx(m.proofAnchorTx)}` : '–'}</dd>
       <dt>Activity</dt><dd>${e.receipts} receipt(s) · ${e.incidents} incident(s) · issued ${tx(m.issueTx)}</dd>
     </dl>
     <div class="row" style="justify-content:flex-start">
-      <button class="danger" ${e.revoked ? 'disabled' : ''} onclick="act('revoke','${m.name}',this)">Revoke mandate</button>
-      <button onclick="act('incident','${m.name}',this)">Report incident</button>
+      <button class="danger" ${e.revoked ? 'disabled' : ''} onclick="act('revoke','${esc(m.name)}',this)">Revoke mandate</button>
+      <button onclick="act('incident','${esc(m.name)}',this)">Report incident</button>
     </div>
   </div>`;
 }
