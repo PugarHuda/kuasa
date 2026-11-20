@@ -413,3 +413,31 @@ test('tiered autonomy: a fraud flag raised during the objection window cancels t
   assert.ok(!t.calls.some((c) => c.startsWith('pay:')), 'flagged parties are never auto-paid');
   assert.equal(t.svc.state().claims.find((c) => c.claimId === 0n)?.autoPayAt, undefined, 'handed to a human');
 });
+
+test('a cancelled policy gets the unused premium back, pro rata, once; none after a paid claim', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now });
+  const q = await quoteOk(t.svc);
+  t.svc.markSettled(q.quoteId);
+  const id = (await t.svc.issue(q.quoteId, h(9)))!;
+  const p = t.policies.get(id)!;
+  const span = Number(p.validUntilMs - p.validFromMs);
+  now = Number(p.validFromMs) + span / 4; // a quarter used
+  p.status = 'Cancelled';
+  await t.svc.refundCancelled();
+  const expected = (p.premium * 3n) / 4n;
+  assert.ok(t.calls.includes(`pay:${PAYER}:${expected}`), t.calls.join(' '));
+  await t.svc.refundCancelled();
+  assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 1, 'refunded once');
+  assert.equal(t.svc.state().refunds[0].amount, expected);
+
+  const u = harness({ now: () => now });
+  const q2 = await quoteOk(u.svc);
+  u.svc.markSettled(q2.quoteId);
+  const id2 = (await u.svc.issue(q2.quoteId, h(9)))!;
+  const p2 = u.policies.get(id2)!;
+  p2.paidOut = 5n * EUR;
+  p2.status = 'Cancelled';
+  await u.svc.refundCancelled();
+  assert.ok(!u.calls.some((c) => c.startsWith('pay:')), 'no refund once a claim was paid');
+});

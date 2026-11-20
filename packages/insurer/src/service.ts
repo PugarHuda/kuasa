@@ -99,6 +99,8 @@ export class InsurerService {
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
   /** Paid premiums that can never become a policy (e.g. mandate revoked meanwhile): refund manually. */
   private needsRefund: { quoteId: string; premiumTx: string; reason: string }[] = [];
+  /** Unused premium returned when a holder cancels (pro rata, only if no claim was paid). */
+  private refunds: { policyId: bigint; to: string; amount: bigint; tx?: string }[] = [];
   private retrying = false;
   private assessing = new Set<bigint>();
   private claims = new Map<bigint, ClaimRecord>();
@@ -125,6 +127,7 @@ export class InsurerService {
       this.disclosures = s.disclosures ?? [];
       this.payouts = s.payouts ?? [];
       this.premiumsIn = s.premiumsIn ?? 0n;
+      this.refunds = s.refunds ?? [];
     }
   }
 
@@ -133,7 +136,7 @@ export class InsurerService {
     this.deps.persist?.(toSnapshot({
       policies: this.policies, unissued: this.unissued, needsRefund: this.needsRefund, claims: [...this.claims.values()].map(({ busy, busyApprove, ...r }) => r),
       fraud: Object.fromEntries(this.fraud), pendingDisclosures: this.pendingDisclosures, disclosures: this.disclosures,
-      payouts: this.payouts, premiumsIn: this.premiumsIn,
+      payouts: this.payouts, premiumsIn: this.premiumsIn, refunds: this.refunds,
     }));
   }
 
@@ -514,6 +517,30 @@ export class InsurerService {
       pendingDisclosures: this.pendingDisclosures,
       disclosures: this.disclosures,
       fraudCounts: Object.fromEntries(this.fraud),
+      refunds: this.refunds,
     };
+  }
+
+  /**
+   * Returns the unused part of the premium when a holder cancels a policy on-chain: premium x
+   * (time left / policy term), paid to the agent payer that paid it, once. A policy that already
+   * paid a claim keeps its premium. Run periodically.
+   */
+  async refundCancelled() {
+    for (const rec of this.policies) {
+      if (this.refunds.some((r) => r.policyId === rec.policyId)) continue;
+      const p = await this.deps.cover.policy(rec.policyId);
+      if (!p || p.status !== 'Cancelled' || p.paidOut > 0n) continue;
+      const now = BigInt(this.deps.now());
+      if (now >= p.validUntilMs || p.validUntilMs <= p.validFromMs) continue;
+      const left = p.validUntilMs - (now > p.validFromMs ? now : p.validFromMs);
+      const amount = (p.premium * left) / (p.validUntilMs - p.validFromMs);
+      if (amount <= 0n) continue;
+      const entry: { policyId: bigint; to: string; amount: bigint; tx?: string } = { policyId: rec.policyId, to: p.agentPayer, amount };
+      this.refunds.push(entry); // recorded before paying: a crash never pays twice (a missing tx is visible for a manual check)
+      this.save();
+      entry.tx = await this.deps.pay(p.agentPayer, amount, `kuasa cover refund policy ${rec.policyId}`);
+      this.save();
+    }
   }
 }

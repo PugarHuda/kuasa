@@ -347,6 +347,12 @@ app.post('/claims/:id/hold', consoleOnly, (req, res) => {
 });
 
 setInterval(() => { void svc.retryUnissued(); }, 60_000);
+setInterval(() => {
+  const before = svc.state().refunds.length;
+  void svc.refundCancelled()
+    .then(() => { for (const r of svc.state().refunds.slice(before)) audit.append({ kind: 'premium-refunded', policyId: String(r.policyId), to: r.to, amount: String(r.amount), tx: r.tx }); })
+    .catch((e) => console.error('[insurer] refund failed', (e as Error).message));
+}, 60_000);
 const autoAudited = new Set<string>();
 setInterval(() => {
   void svc.runAutoPay().then(() => {

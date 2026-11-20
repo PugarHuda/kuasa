@@ -15,6 +15,7 @@ const LABELS: Record<string, string> = {
   '34BwTuaAu2EsgHNj3Us9TrYUNbKGo6Wnh3ixxUSanrca7KrPKv': 'Demo shop',
   [POOL]: 'Kuasa Cover pool',
   '4Tw9uzZZSQmbLytV8XqRYU5dCDyrhu8yWU2xwvXovaS54sTZzJ': 'Kuasa Cover operator',
+  '4HeXqTdciL1dVAaNZ6kiVRAH3syJcDnFtqLM3z3phWbAq32UNp': 'Demo shop (recorder)',
 };
 
 const $ = (id: string) => document.getElementById(id)!;

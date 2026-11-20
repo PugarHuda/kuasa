@@ -16,7 +16,7 @@ import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
-import { AuditLog, bigintJson, connect, KuasaCover, KuasaRegistry, registerData, TESTNET, wallet } from '@kuasa/chain';
+import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, registerData, TESTNET, wallet } from '@kuasa/chain';
 import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer, verifyPayerProof } from '@kuasa/merchant';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
@@ -132,5 +132,30 @@ app.use(paymentMiddleware(routes as never, server));
 for (const [path, p] of Object.entries(catalog)) {
   app.get(path, (_, res) => json(res, { ok: true, item: p.name, price: p.price, asset: ASSET, shipped: 'order confirmed; ships to the address on file' }));
 }
+
+/**
+ * Counterparty attestation for every new Kuasa Cover claim: is each claimed order in our sales book,
+ * sold under the mandate of the policy being claimed on? Published as kuasa:attest:<id> on the shop's
+ * own CIS-8004 entry (owner account). scripts/merchant-attest.ts backfills older claims.
+ */
+const owner = merchant.find((a) => a.credNumber === 0)!;
+let attestFrom = 0n;
+async function attestNewClaims() {
+  if (!state.cover || !state.shopAgent) return;
+  const cover = new KuasaCover(grpc, BigInt(state.cover));
+  for (let id = attestFrom; ; id++) {
+    const c = await cover.claim(id);
+    if (!c) { attestFrom = id; return; }
+    const key = `kuasa:attest:${id}`;
+    if (await cis8004GetMetadata(grpc, state.shopAgent, key)) continue;
+    const mandateId = (await cover.policy(c.policyId))?.mandate.id;
+    const found = c.orders.filter((o) => guard.receipts.some((r) => r.order === o && r.mandate === mandateId)).length;
+    const verdict = new Set(c.orders).size < c.orders.length ? 'orders-duplicate' : found === c.orders.length ? 'orders-match' : found === 0 ? 'orders-unknown' : 'orders-partial';
+    const value = `${verdict};orders=${found}/${c.orders.length};src=sales-book;by=merchant;at=${Math.floor(Date.now() / 1000)}`;
+    await cis8004SetMetadata(grpc, state.shopAgent, key, value, wallet(owner.address, owner.key));
+    audit.append({ kind: 'claim-attested', claimId: String(id), verdict });
+  }
+}
+setInterval(() => { void attestNewClaims().catch((e) => console.error('[shop] attestation failed', (e as Error).message)); }, 60_000);
 
 app.listen(PORT, process.env.HOST ?? '127.0.0.1', () => console.log(`[shop] http://localhost:${PORT}  registry <${state.registry},0>  payTo ${payTo}`));

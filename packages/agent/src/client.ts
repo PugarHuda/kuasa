@@ -261,9 +261,10 @@ export class KuasaAgent {
    * Files a claim on our live policy, signed by this agent's payer account and sponsored by the
    * insurer (the agent pays no fee). The insurer assesses it against the on-chain receipts.
    */
-  async fileClaim(kind: ClaimKind, paymentTxs: string[], amount: bigint, note = '') {
-    const status = await this.coverStatus();
-    const policyId = status.onChain.policyId ?? status.policies.at(-1)?.policyId;
+  /** policyId: the policy claimed on (defaults to this agent's live cover; a merchant names the buyer's policy). */
+  async fileClaim(kind: ClaimKind, paymentTxs: string[], amount: bigint, note = '', policyIdArg?: string) {
+    const status = policyIdArg ? undefined : await this.coverStatus();
+    const policyId = policyIdArg ?? status?.onChain.policyId ?? status?.policies.at(-1)?.policyId;
     if (policyId == null) return { ok: false as const, reasons: ['no live policy'] };
     const receipts = await Promise.all(paymentTxs.map((tx) => this.receiptOf(tx)));
     const info = await (await fetch(new URL('/info', this.insurerUrl))).json() as { cover: { index: string; subindex: string }; operator: string };
