@@ -148,7 +148,10 @@ server.onAfterSettle((async (ctx: Parameters<KuasaGuard['afterSettle']>[0]) => {
     audit.append({ kind: 'premium', payer: payerOf(ctx), amount: ctx.requirements.amount, premiumTx: ctx.result.transaction, policyId });
   }
 }) as never);
-server.onSettleFailure(guard.settleFailed as never);
+server.onSettleFailure((async (ctx: Parameters<KuasaGuard['settleFailed']>[0]) => {
+  await guard.settleFailed(ctx);
+  svc.releaseQuote(quoteIdOf(ctx)); // the premium did not settle: the quote may be paid again
+}) as never);
 
 const app = express();
 app.use(express.json({ limit: '32kb' }));
@@ -210,7 +213,9 @@ app.post('/claims/sponsor', async (req, res) => {
   try {
     const sponsored = await Transaction.sponsor(check.signable as never, operator.signer);
     const hash = await grpc.sendTransaction(Transaction.finalize(sponsored));
-    const summary = await grpc.waitForTransactionFinalization(hash);
+    const summary = await grpc.waitForTransactionFinalization(hash).catch(() => null);
+    // Sent but not confirmed yet: report the transaction so the claimant can follow up.
+    if (!summary) return json(res, { tx: sdk.TransactionHash.toHexString(hash), claimId: null, assessment: 'pending', error: 'filing sent; finalization not confirmed yet' }, 202);
     const s = summary.summary as { transactionType?: string };
     if (s.transactionType === 'failed') return json(res, { error: 'claim rejected on-chain', summary }, 400);
     const claimId = KuasaCover.idFromEvents(summary, coverIndex);
@@ -260,4 +265,4 @@ app.post('/disclosures/:id/approve', consoleOnly, async (req, res) => {
 });
 
 setInterval(() => { void svc.retryUnissued(); }, 60_000);
-app.listen(PORT, () => console.log(`[insurer] http://localhost:${PORT}  cover <${state.cover},0>  treasury ${treasury.address.address}`));
+app.listen(PORT, process.env.HOST ?? '127.0.0.1', () => console.log(`[insurer] http://localhost:${PORT}  cover <${state.cover},0>  treasury ${treasury.address.address}`));

@@ -72,6 +72,8 @@ export class KuasaGuard {
     agents?: AgentRegistry;
     /** Kuasa Cover check, required for offers with `minCover`. */
     cover?: CoverCheck;
+    /** Upper bound on live order references (oldest evicted first). */
+    maxOrders?: number;
   }) {
     this.identity = opts.identity ?? new MandateProofIdentity({ grpc: opts.grpc, network: opts.network, fetchText: this.fetchText, verify: opts.verifyProof, now: opts.now });
     this.spend = opts.spend ?? new MandateRegistrySpend(opts.registry);
@@ -98,6 +100,8 @@ export class KuasaGuard {
   /** Issues a single-use order reference (10 min) that a payment can be bound to via ORDER_HEADER. */
   async issueOrderRef(o: { payer: string; payTo: string; route: string; amount: bigint }): Promise<string> {
     for (const [k, v] of this.orders) if (v.expires < this.now()) this.orders.delete(k);
+    const cap = this.opts.maxOrders ?? 10_000;
+    for (const k of this.orders.keys()) { if (this.orders.size < cap) break; this.orders.delete(k); }
     const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('hex');
     const ref = await sha256Hex(canonicalJson({ ...o, amount: String(o.amount), nonce }));
     this.orders.set(ref, { ...o, expires: this.now() + ORDER_TTL_MS });

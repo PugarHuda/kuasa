@@ -67,6 +67,7 @@ test('buy aborts when amount != fresh quote', async () => {
   const t = harness();
   const q = await quoteOk(t.svc);
   assert.equal(await t.svc.checkPurchase(q.quoteId, PAYER, q.premium), null);
+  t.svc.releaseQuote(q.quoteId); // a successful check reserves the quote; pretend that payment failed
   assert.match((await t.svc.checkPurchase(q.quoteId, PAYER, q.premium + 1n))!, /premium/);
   assert.match((await t.svc.checkPurchase(q.quoteId, SHOP, q.premium))!, /payer/);
   t.setEntry(entry({ incidents: 1n })); // risk changed after quoting
@@ -283,4 +284,24 @@ test('blocked payouts keep their reason; an exhausted limit is final', async () 
   await u.svc.decide(0n, true);
   assert.match(u.svc.state().claims[0].payoutBlocked ?? '', /limit exhausted/);
   assert.equal(u.svc.state().claims[0].final, true);
+});
+
+test('a quote backs exactly one premium payment', async () => {
+  const t = harness();
+  const q = await quoteOk(t.svc);
+  const [a, b] = await Promise.all([t.svc.checkPurchase(q.quoteId, PAYER, q.premium), t.svc.checkPurchase(q.quoteId, PAYER, q.premium)]);
+  assert.deepEqual([a, b].filter((x) => x === null).length, 1);
+  assert.match([a, b].find((x) => x !== null)!, /already being paid/);
+  t.svc.releaseQuote(q.quoteId); // the reserved payment failed
+  assert.equal(await t.svc.checkPurchase(q.quoteId, PAYER, q.premium), null);
+});
+
+test('expired quotes are purged and the store is bounded', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, maxQuotes: 3 });
+  for (let i = 0; i < 5; i++) await quoteOk(t.svc);
+  assert.equal(t.svc.quoteCount(), 3, 'oldest evicted beyond the cap');
+  now += 11 * 60_000;
+  await quoteOk(t.svc);
+  assert.equal(t.svc.quoteCount(), 1, 'expired ones purged');
 });
