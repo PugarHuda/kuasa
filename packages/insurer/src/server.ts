@@ -19,7 +19,7 @@ import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exa
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
 import { solvency } from '@kuasa/cover';
 import { handleA2a } from './a2a.js';
-import { AuditLog, bigintJson, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
+import { AuditLog, bigintJson, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyPayerProof } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
@@ -31,12 +31,23 @@ const PORT = Number(process.env.PORT ?? 4023);
 const PUBLIC_URL = process.env.KUASA_INSURER_URL ?? `http://localhost:${PORT}`;
 const SHOP_ORIGIN = process.env.KUASA_SHOP_URL ?? 'http://localhost:4021';
 const ASSET = process.env.KUASA_ASSET ?? 'EUDemo';
-const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover: string };
+const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover: string; insurerAgent?: string };
 const accounts = JSON.parse(readFileSync(new URL('accounts/insurer.json', ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const treasuryAcc = accounts.find((a) => a.credNumber === 0)!;
 const operatorAcc = accounts.find((a) => a.credNumber === 1)!;
 const treasury = wallet(treasuryAcc.address, treasuryAcc.key);
 const operator = wallet(operatorAcc.address, operatorAcc.key);
+
+/**
+ * Every claim decision is published on the insurer's own CIS-8004 entry (key kuasa:decision:<id>),
+ * so anyone can see which claims were paid automatically and which a human decided.
+ */
+function publishDecision(claimId: bigint | string, by: 'auto' | 'human', verdict: 'approved' | 'rejected', paid?: string) {
+  if (!state.insurerAgent) return;
+  const value = `by=${by};verdict=${verdict};paid=${paid ?? '-'};at=${Math.floor(Date.now() / 1000)}`;
+  void cis8004SetMetadata(grpc, state.insurerAgent, `kuasa:decision:${claimId}`, value, treasury)
+    .catch((e) => console.error('[insurer] publishing decision failed', String(claimId), (e as Error).message));
+}
 
 const grpc = connect();
 const registryIndex = BigInt(state.registry);
@@ -271,6 +282,7 @@ app.post('/claims/sponsor', async (req, res) => {
     try {
       const assessment = await svc.assessClaim(claimId, txs);
       audit.append({ kind: 'claim-assessed', claimId, filedTx, ok: assessment.ok, reason: assessment.reason, payout: assessment.payout });
+      if (typeof assessment === 'object' && assessment.noEvidence) publishDecision(claimId, 'auto', 'rejected');
       json(res, { tx: filedTx, claimId, assessment });
     } catch (e) {
       pendingAssessments.set(String(claimId), { claimId, receiptTxs: txs, error: (e as Error).message });
@@ -302,6 +314,7 @@ app.post('/claims/:id/decision', consoleOnly, async (req, res) => {
   try {
     const d = await svc.decide(big(req.params.id), req.body?.approve === true);
     audit.append({ kind: 'claim-decided', claimId: req.params.id, approve: req.body?.approve === true, by: 'claims handler (console)', paid: d.paid, note: d.reason });
+    if (req.body?.approve !== true || d.paid) publishDecision(String(req.params.id), 'human', req.body?.approve === true ? 'approved' : 'rejected', d.paid);
     json(res, d);
   } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
@@ -341,6 +354,7 @@ setInterval(() => {
       if (c.decidedBy !== 'auto' || !c.paid || autoAudited.has(String(c.claimId))) continue;
       autoAudited.add(String(c.claimId));
       audit.append({ kind: 'claim-decided', claimId: String(c.claimId), approve: true, by: 'automatic (below the auto-pay limit, objection window passed)', paid: c.paid });
+      publishDecision(c.claimId, 'auto', 'approved', c.paid);
     }
   });
 }, 15_000);

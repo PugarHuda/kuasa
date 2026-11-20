@@ -49,3 +49,19 @@ export async function coverOf(payer: string) {
   AccountAddress.fromBase58(payer);
   return decodeCoverView(await viewCover('coverOf', encodeCoverQuery(payer)));
 }
+
+const REGISTRY = ContractAddress.create(12802n, 0n);
+const INSURER_TOKEN = [0x22, 0x05, 0, 0, 0, 0, 0, 0]; // the insurer's own CIS-8004 agent token
+const lenPrefixed = (b: Uint8Array) => { const out = new Uint8Array(4 + b.length); new DataView(out.buffer).setUint32(0, b.length, true); out.set(b, 4); return out; };
+
+/** The insurer publishes each claim decision on its CIS-8004 entry: by=auto|human;verdict=...;paid=... */
+export async function decisionOf(claimId: number) {
+  const param = Uint8Array.from([INSURER_TOKEN.length, ...INSURER_TOKEN, ...lenPrefixed(new TextEncoder().encode(`kuasa:decision:${claimId}`))]);
+  const r = await grpc.invokeContract({ contract: REGISTRY, method: ReceiveName.fromString('CIS-8004.getMetadata'), parameter: Parameter.fromBuffer(param.buffer as ArrayBuffer) });
+  if (r.tag !== 'success' || !r.returnValue) return null;
+  const b = new Uint8Array(ReturnValue.toBuffer(r.returnValue));
+  if (b[0] !== 1) return null;
+  const n = new DataView(b.buffer, b.byteOffset + 1, 4).getUint32(0, true);
+  const fields = Object.fromEntries(new TextDecoder().decode(b.subarray(5, 5 + n)).split(';').map((kv) => kv.split('=') as [string, string]));
+  return { by: fields.by as 'auto' | 'human' | undefined, verdict: fields.verdict };
+}

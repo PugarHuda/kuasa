@@ -74,7 +74,7 @@
     {
       "id": "verify-evm-agent",
       "name": "Verify an EVM agent",
-      "description": "Cross-chain: an agent on an EVM chain signs \"kuasa-evm-agent:v1:<unix ms>\" with its Ethereum key; the answer is the Concordium agent bound to that key (CIS-8), its badge status and its Kuasa Cover. Data: { skill: \"verify-evm-agent\", message, signature }",
+      "description": "Cross-chain: an agent on an EVM chain signs \"kuasa-evm-agent:v1:kuasa-explorer.vercel.app:<your nonce>:<unix ms>\" with its Ethereum key; the answer is the Concordium agent bound to that key (CIS-8), its badge status and its Kuasa Cover (only if the policy belongs to that agent and owner). Data: { skill: \"verify-evm-agent\", message, signature, nonce }",
       "tags": [
         "kuasa",
         "cross-chain",

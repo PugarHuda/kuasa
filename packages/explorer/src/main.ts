@@ -5,7 +5,7 @@
  */
 import { type Claim, type Policy } from '@kuasa/core';
 import { solvency } from '@kuasa/cover';
-import { POOL, poolBalance, scan } from './chain.js';
+import { decisionOf, POOL, poolBalance, scan } from './chain.js';
 
 const LABELS: Record<string, string> = {
   '4WmdhhLRPTk92STxiaXQFFNyJFLaM6k5kRq1ryFN8xjho1aq3s': 'Alice (owner)',
@@ -24,12 +24,17 @@ const acct = (a: string) => `<a href="https://ccdexplorer.io/testnet/account/${e
 const tx = (h: string) => `<a class="mono" href="https://ccdexplorer.io/testnet/transaction/${esc(h)}" target="_blank" rel="noopener">${esc(h.slice(0, 8))}…</a>`;
 const day = (ms: bigint) => new Date(Number(ms)).toISOString().slice(0, 10);
 
+function decidedBy(d: Awaited<ReturnType<typeof decisionOf>> | undefined) {
+  if (!d?.by) return '<span class="muted">–</span>';
+  return d.by === 'auto' ? '<span class="pill warn">automatic</span>' : '<span class="pill ok">human</span>';
+}
+
 function statusPill(tag: string) {
   const cls = tag === 'Paid' || tag === 'Active' ? 'ok' : tag === 'Rejected' || tag === 'Fraud' || tag === 'Cancelled' ? 'bad' : 'warn';
   return `<span class="pill ${cls}">${esc(tag)}</span>`;
 }
 
-function render(policies: Policy[], claims: Claim[], pool: bigint) {
+function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (Awaited<ReturnType<typeof decisionOf>>)[] = []) {
   const now = Date.now();
   const s = solvency({ pool, now, policies, claims: claims.map((c) => ({ status: c.status.tag })) });
   $('stats').innerHTML = [
@@ -45,7 +50,7 @@ function render(policies: Policy[], claims: Claim[], pool: bigint) {
 
   $('claims').innerHTML = claims.map((c, i) => {
     const payout = c.status.tag === 'Paid' ? tx((c.status as { payoutTx: string }).payoutTx) : '–';
-    return `<tr><td>#${i}</td><td>#${c.policyId}</td><td>${esc(c.kind)}</td><td>${acct(c.claimant)}</td><td class="n">${eur(c.amount)}</td><td class="n">${c.payout ? eur(c.payout) : '–'}</td><td>${payout}</td><td>${statusPill(c.status.tag)}</td></tr>`;
+    return `<tr><td>#${i}</td><td>#${c.policyId}</td><td>${esc(c.kind)}</td><td>${acct(c.claimant)}</td><td class="n">${eur(c.amount)}</td><td class="n">${c.payout ? eur(c.payout) : '–'}</td><td>${payout}</td><td>${decidedBy(decisions[i])}</td><td>${statusPill(c.status.tag)}</td></tr>`;
   }).reverse().join('');
   $('updated').textContent = `Read from Concordium testnet at ${new Date().toLocaleTimeString()}`;
 }
@@ -54,6 +59,10 @@ async function load() {
   try {
     const [{ policies, claims }, pool] = await Promise.all([scan(), poolBalance()]);
     render(policies, claims, pool);
+    // decisions are read after the first paint (one registry read per claim)
+    const decisions: Awaited<ReturnType<typeof decisionOf>>[] = [];
+    for (let i = 0; i < claims.length; i++) decisions.push(await decisionOf(i).catch(() => decisionOf(i)).catch(() => null)); // one at a time: gentle on the public node
+    render(policies, claims, pool, decisions);
   } catch (e) {
     $('updated').textContent = `Could not read testnet: ${(e as Error).message}`;
   }

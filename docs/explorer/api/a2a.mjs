@@ -7761,6 +7761,7 @@ async function coverOf(payer) {
   AccountAddress2.fromBase58(payer);
   return decodeCoverView(await viewCover("coverOf", encodeCoverQuery(payer)));
 }
+var REGISTRY = ContractAddress.create(12802n, 0n);
 
 // ../../node_modules/.pnpm/viem@2.58.0_typescript@5.9.3_zod@4.6.7/node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js
 init_base();
@@ -7851,7 +7852,19 @@ function hashMessage(message, to_) {
 // src/evm.ts
 var MCP = "https://agent-registry-mcp.concordium.com/mcp";
 var WINDOW_MS = 5 * 6e4;
-var evmChallenge = (ts) => `kuasa-evm-agent:v1:${ts}`;
+var SKEW_MS = 3e4;
+var AUDIENCE = "kuasa-explorer.vercel.app";
+var evmChallenge = (nonce, ts) => `kuasa-evm-agent:v1:${AUDIENCE}:${nonce}:${ts}`;
+var tokenHex = (id) => {
+  let v = BigInt(id);
+  let h = "";
+  for (let i = 0; i < 8; i++) {
+    h += (v & 0xffn).toString(16).padStart(2, "0");
+    v >>= 8n;
+  }
+  return h;
+};
+var coverBindsToAgent = (p, a) => p.agentToken === tokenHex(a.token_id) && p.holder === a.owner_account;
 async function mcp(name, args) {
   const r = await fetch(MCP, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });
   const raw = await r.text();
@@ -7861,23 +7874,28 @@ async function mcp(name, args) {
 }
 async function verifyEvmAgent(d, now = Date.now()) {
   const message = String(d.message ?? "");
+  const nonce = String(d.nonce ?? "");
+  if (!/^[0-9a-f]{32,64}$/i.test(nonce)) throw new Error("send the random nonce you issued (32-64 hex chars)");
   const ts = Number(message.split(":").at(-1));
-  if (message !== evmChallenge(ts) || Math.abs(now - ts) > WINDOW_MS) throw new Error(`sign "kuasa-evm-agent:v1:<unix ms>" with the agent's Ethereum key (5-minute window)`);
+  if (message !== evmChallenge(nonce, ts)) throw new Error(`sign "kuasa-evm-agent:v1:${AUDIENCE}:<your nonce>:<unix ms>" with the agent's Ethereum key`);
+  if (now - ts > WINDOW_MS || ts - now > SKEW_MS) throw new Error("challenge outside the 5-minute window");
   const publicKey = await recoverPublicKey({ hash: hashMessage(message), signature: String(d.signature ?? "") });
   const evmAddress = publicKeyToAddress(publicKey);
   const agent = await mcp("agent_by_external_reference", {
     network: "testnet",
     external_reference: { contract_address: { index: 12801, subindex: 0 }, kind: "Cis8", key: { namespace: "eip155:1", key_type: "secp256k1-uncompressed", public_key_hex: publicKey.slice(2) } }
   });
-  if (!agent) return { evmAddress, concordiumAgent: null, insured: false, note: "this Ethereum key is not bound to a Concordium agent (CIS-8)" };
+  if (!agent) return { nonce, evmAddress, concordiumAgent: null, insured: false, note: "this Ethereum key is not bound to a Concordium agent (CIS-8)" };
   const [badge, coverMeta] = await Promise.all([
     mcp("check_badge", { id: agent.token_address, network: "testnet" }),
     mcp("get_metadata", { network: "testnet", token_id: agent.token_id, key: "kuasa:cover" }).catch(() => null)
   ]);
-  const policyId = coverMeta?.value_text?.match(/policy=(\d+)/)?.[1];
-  const policy = policyId ? decodePolicy(await viewCover("policy", encodeU64(BigInt(policyId)))) : null;
+  const policyId = coverMeta?.value_text?.match(/^policy=(\d+);/)?.[1];
+  const found = policyId ? decodePolicy(await viewCover("policy", encodeU64(BigInt(policyId)))) : null;
+  const policy = found && coverBindsToAgent(found, agent) ? found : null;
   const cover = policy ? await coverOf(policy.agentPayer) : null;
   return {
+    nonce,
     evmAddress,
     concordiumAgent: { tokenAddress: agent.token_address, owner: agent.owner_account, status: agent.status, agentCard: agent.agent_uri },
     badgeValid: badge.agents?.[0]?.badge_valid ?? badge.badge_valid ?? false,

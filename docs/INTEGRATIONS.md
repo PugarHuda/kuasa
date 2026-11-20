@@ -64,7 +64,7 @@ Send JSON-RPC `message/send` to `POST /a2a` with a data part:
 | `solvency` | none | Pool, live exposure, coverage, recomputed from the cover contract |
 | `risk` | `payer` | Paid claims and premium multiplier (experience rating) |
 | `cover-status` | `payer` | Live cover and policies |
-| `verify-evm-agent` | `message`, `signature` | **Cross-chain.** An agent on an EVM chain signs `kuasa-evm-agent:v1:<unix ms>` with its Ethereum key (5-minute window). The answer has its EVM address, the Concordium agent bound to that key through the CIS-8 External Key Registry, badge validity, live Kuasa Cover and risk. |
+| `verify-evm-agent` | `message`, `signature`, `nonce` | **Cross-chain.** The caller issues a random nonce (32-64 hex chars). The agent on an EVM chain signs `kuasa-evm-agent:v1:kuasa-explorer.vercel.app:<nonce>:<unix ms>` with its Ethereum key; the message is bound to this verifier, must be fresh (5-minute window, no future timestamps), and the answer echoes the nonce. Cover counts only if the policy was issued for that agent token and owner. The answer has its EVM address, the Concordium agent bound to that key through the CIS-8 External Key Registry, badge validity, live Kuasa Cover and risk. |
 | `quote` | `mandateUrl`, `limit`, `days`, `proof` | A priced quote. `proof` holds the `x-kuasa-payer`, `x-kuasa-payer-ts` and `x-kuasa-payer-sig` fields, signed by the agent payer key (see `makePayerProof`). Pay it over x402 at `/cover/buy`. |
 
 Before an agent deals with the insurer, it can check the insurer's badge through Concordium's hosted Agent Registry MCP (`check_badge`), as Kuasa agents already do for the shop.
