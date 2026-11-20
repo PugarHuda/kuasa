@@ -5,7 +5,7 @@
  */
 import { type Claim, type Policy } from '@kuasa/core';
 import { solvency } from '@kuasa/cover';
-import { decisionOf, POOL, poolBalance, scan } from './chain.js';
+import { attestationOf, decisionOf, POOL, poolBalance, scan } from './chain.js';
 
 const LABELS: Record<string, string> = {
   '4WmdhhLRPTk92STxiaXQFFNyJFLaM6k5kRq1ryFN8xjho1aq3s': 'Alice (owner)',
@@ -29,12 +29,17 @@ function decidedBy(d: Awaited<ReturnType<typeof decisionOf>> | undefined) {
   return d.by === 'auto' ? '<span class="pill warn">automatic</span>' : '<span class="pill ok">human</span>';
 }
 
+function attested(a: string | null | undefined) {
+  if (!a) return '<span class="muted">–</span>';
+  return a === 'orders-match' ? '<span class="pill ok">orders match</span>' : a === 'orders-unknown' ? '<span class="pill bad">no such orders</span>' : '<span class="pill warn">partial</span>';
+}
+
 function statusPill(tag: string) {
   const cls = tag === 'Paid' || tag === 'Active' ? 'ok' : tag === 'Rejected' || tag === 'Fraud' || tag === 'Cancelled' ? 'bad' : 'warn';
   return `<span class="pill ${cls}">${esc(tag)}</span>`;
 }
 
-function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (Awaited<ReturnType<typeof decisionOf>>)[] = []) {
+function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (Awaited<ReturnType<typeof decisionOf>>)[] = [], attests: (string | null)[] = []) {
   const now = Date.now();
   const s = solvency({ pool, now, policies, claims: claims.map((c) => ({ status: c.status.tag })) });
   $('stats').innerHTML = [
@@ -50,7 +55,7 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
 
   $('claims').innerHTML = claims.map((c, i) => {
     const payout = c.status.tag === 'Paid' ? tx((c.status as { payoutTx: string }).payoutTx) : '–';
-    return `<tr><td>#${i}</td><td>#${c.policyId}</td><td>${esc(c.kind)}</td><td>${acct(c.claimant)}</td><td class="n">${eur(c.amount)}</td><td class="n">${c.payout ? eur(c.payout) : '–'}</td><td>${payout}</td><td>${decidedBy(decisions[i])}</td><td>${statusPill(c.status.tag)}</td></tr>`;
+    return `<tr><td>#${i}</td><td>#${c.policyId}</td><td>${esc(c.kind)}</td><td>${acct(c.claimant)}</td><td class="n">${eur(c.amount)}</td><td class="n">${c.payout ? eur(c.payout) : '–'}</td><td>${payout}</td><td>${decidedBy(decisions[i])}</td><td>${attested(attests[i])}</td><td>${statusPill(c.status.tag)}</td></tr>`;
   }).reverse().join('');
   $('updated').textContent = `Read from Concordium testnet at ${new Date().toLocaleTimeString()}`;
 }
@@ -61,8 +66,12 @@ async function load() {
     render(policies, claims, pool);
     // decisions are read after the first paint (one registry read per claim)
     const decisions: Awaited<ReturnType<typeof decisionOf>>[] = [];
-    for (let i = 0; i < claims.length; i++) decisions.push(await decisionOf(i).catch(() => decisionOf(i)).catch(() => null)); // one at a time: gentle on the public node
-    render(policies, claims, pool, decisions);
+    const attests: (string | null)[] = [];
+    for (let i = 0; i < claims.length; i++) { // one at a time: gentle on the public node
+      decisions.push(await decisionOf(i).catch(() => decisionOf(i)).catch(() => null));
+      attests.push(await attestationOf(i).catch(() => attestationOf(i)).catch(() => null));
+    }
+    render(policies, claims, pool, decisions, attests);
   } catch (e) {
     $('updated').textContent = `Could not read testnet: ${(e as Error).message}`;
   }

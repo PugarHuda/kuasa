@@ -53,7 +53,7 @@
     <div class="panel">
       <div id="solvent"><span class="muted">Reading testnet…</span></div>
       <div class="stats" id="stats"></div>
-      <p class="muted" style="margin:14px 0 0">The live exposure is the cover still owed by every active, unexpired policy (its limit minus what it already paid out). Small claims of 10 EUDemo or less are paid automatically after an objection window, and larger ones need a human claims handler. The insurer publishes who decided each claim on its CIS-8004 entry (<span class="mono">kuasa:decision:&lt;id&gt;</span>), shown in the Claims table.</p>
+      <p class="muted" style="margin:14px 0 0">The live exposure is the cover still owed by every active, unexpired policy (its limit minus what it already paid out). Small claims of 10 EUDemo or less are paid automatically after an objection window, and larger ones need a human claims handler. The insurer publishes who decided each claim on its CIS-8004 entry (<span class="mono">kuasa:decision:&lt;id&gt;</span>), shown in the Claims table. The shop, the other party to every purchase, attests whether each claim's orders are in its records (<span class="mono">kuasa:attest:&lt;id&gt;</span> on its CIS-8004 entry).</p>
     </div>
   </section>
 
@@ -70,7 +70,7 @@
 
   <section>
     <h2>Claims</h2>
-    <div class="panel scroll"><table><thead><tr><th>Claim</th><th>Policy</th><th>Kind</th><th>Filed by</th><th>Amount</th><th>Payout</th><th>Payout tx</th><th>Decided by</th><th>Status</th></tr></thead><tbody id="claims"></tbody></table></div>
+    <div class="panel scroll"><table><thead><tr><th>Claim</th><th>Policy</th><th>Kind</th><th>Filed by</th><th>Amount</th><th>Payout</th><th>Payout tx</th><th>Decided by</th><th>Merchant attests</th><th>Status</th></tr></thead><tbody id="claims"></tbody></table></div>
   </section>
 
   <section>
