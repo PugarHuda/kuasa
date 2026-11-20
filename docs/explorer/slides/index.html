@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kuasa Cover Slides</title>
+<meta name="description" content="Kuasa Cover: insurance for the mistakes AI agents make, live on Concordium testnet.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Public+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root { --paper: #eef1f5; --sheet: #f8fafc; --ink: #13223f; --soft: #4a5872; --rule: #c9d2de; --stamp: #1f7a4d; --claim: #a8322a; --link: #1f4fa8; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --paper: #0d1526; --sheet: #121c31; --ink: #e6ebf3; --soft: #a3afc4; --rule: #2a3854; --stamp: #4cc58a; --claim: #ff8b80; --link: #8fb1ff; } }
+  :root[data-theme="dark"] { --paper: #0d1526; --sheet: #121c31; --ink: #e6ebf3; --soft: #a3afc4; --rule: #2a3854; --stamp: #4cc58a; --claim: #ff8b80; --link: #8fb1ff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font-family: "Public Sans", system-ui, sans-serif; }
+  a { color: var(--link); }
+  a:focus-visible, button:focus-visible { outline: 3px solid var(--link); outline-offset: 3px; }
+  .stage { position: fixed; inset: 0; display: grid; place-items: center; }
+  .deck { width: 1280px; height: 720px; transform-origin: center; position: relative; }
+  .slide { position: absolute; inset: 0; background: var(--sheet); border: 1px solid var(--rule); display: none; grid-template-columns: 210px 1fr; }
+  .slide.on { display: grid; }
+  .margin { border-right: 1px solid var(--rule); padding: 56px 28px; display: flex; flex-direction: column; justify-content: space-between; }
+  .clause { font-family: "Instrument Serif", serif; font-size: 64px; line-height: 1; color: var(--soft); }
+  .doc { font-size: 13px; color: var(--soft); line-height: 1.5; }
+  .body { padding: 56px 72px 48px 64px; display: flex; flex-direction: column; min-width: 0; }
+  h1, h2 { font-family: "Instrument Serif", serif; font-weight: 400; margin: 0; letter-spacing: -0.01em; }
+  h1 { font-size: 104px; line-height: 0.95; }
+  h2 { font-size: 54px; line-height: 1.05; max-width: 22ch; }
+  p { font-size: 22px; line-height: 1.5; max-width: 52ch; margin: 22px 0 0; }
+  .lead { font-size: 30px; line-height: 1.35; max-width: 34ch; margin-top: 28px; }
+  .small { font-size: 17px; color: var(--soft); }
+  ol.steps { list-style: none; padding: 0; margin: 34px 0 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; counter-reset: s; }
+  ol.steps li { counter-increment: s; border-top: 2px solid var(--ink); padding-top: 14px; font-size: 19px; line-height: 1.45; }
+  ol.steps li::before { content: counter(s); font-family: "Instrument Serif", serif; font-size: 40px; display: block; margin-bottom: 6px; }
+  ol.steps b { display: block; font-size: 20px; margin-bottom: 4px; }
+  .trace { margin-top: 28px; border-left: 3px solid var(--rule); padding-left: 22px; font-size: 19px; line-height: 1.6; max-width: 62ch; }
+  .trace .t { color: var(--link); font-weight: 700; }
+  .trace .no { color: var(--claim); }
+  .trace .yes { color: var(--stamp); }
+  .trace q { font-style: italic; quotes: "\201C" "\201D"; }
+  table { border-collapse: collapse; margin-top: 26px; font-size: 18px; width: 100%; max-width: 900px; }
+  th { text-align: left; font-weight: 500; color: var(--soft); padding: 8px 14px 8px 0; border-bottom: 1px solid var(--rule); }
+  td { padding: 10px 14px 10px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  .stamp { display: inline-block; border: 3px solid currentColor; border-radius: 6px; padding: 2px 12px; font-weight: 700; font-size: 15px; letter-spacing: 0.06em; transform: rotate(-4deg); }
+  .stamp.paid { color: var(--stamp); } .stamp.no { color: var(--claim); }
+  .big-stamp { position: absolute; right: 70px; top: 70px; font-size: 34px; padding: 6px 22px; border-width: 5px; transform: rotate(-9deg); color: var(--stamp); opacity: 0.9; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 48px; margin-top: 30px; max-width: 980px; }
+  .grid2 div { border-top: 1px solid var(--rule); padding-top: 12px; font-size: 18px; line-height: 1.45; }
+  .grid2 b { display: block; font-size: 19px; margin-bottom: 2px; }
+  .facts { display: grid; grid-template-columns: repeat(4, auto); justify-content: start; gap: 6px 64px; margin-top: 34px; }
+  .facts .n { font-family: "Instrument Serif", serif; font-size: 72px; line-height: 1; }
+  .facts .l { font-size: 17px; color: var(--soft); }
+  .links { margin-top: auto; display: flex; flex-wrap: wrap; gap: 10px 32px; font-size: 18px; }
+  nav { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; align-items: center; font-size: 14px; color: var(--soft); }
+  nav button { font: inherit; background: var(--sheet); color: var(--ink); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 14px; cursor: pointer; }
+  @media print { nav { display: none; } .stage { position: static; display: block; } .deck { transform: none !important; } .slide { position: relative; display: grid !important; page-break-after: always; } @page { size: 1280px 720px; margin: 0; } }
+  @media (prefers-reduced-motion: no-preference) { .slide.on .big-stamp { animation: press 0.5s ease-out 0.3s both; } @keyframes press { from { transform: rotate(-9deg) scale(1.6); opacity: 0; } to { transform: rotate(-9deg) scale(1); opacity: 0.9; } } }
+</style>
+</head>
+<body>
+<div class="stage"><div class="deck" id="deck">
+
+<section class="slide" aria-label="Kuasa Cover">
+  <div class="margin"><div class="clause">§0</div><div class="doc">Policy wording for AI agent commerce. Concordium testnet, November 2026.</div></div>
+  <div class="body">
+    <h1>Kuasa Cover</h1>
+    <p class="lead">Insurance for the mistakes your AI agent makes when it pays.</p>
+    <p class="small">The agent insures itself, files its own claims, and every claim is checked against the chain.</p>
+    <div class="links"><a href="https://youtu.be/Tqe_CLniIl0">Demo video</a><a href="https://kuasa-explorer.vercel.app">Live explorer</a><a href="https://github.com/PugarHuda/kuasa">Code</a></div>
+  </div>
+</section>
+
+<section class="slide" aria-label="The gap">
+  <div class="margin"><div class="clause">§1</div><div class="doc">The risk being insured</div></div>
+  <div class="body">
+    <h2>Agents can pay now. Nobody carries their mistakes.</h2>
+    <p>An agent orders the same thing twice, buys the wrong item, or harms a merchant. The owner pays, or the merchant does. Conventional insurers are adding AI exclusions.</p>
+    <p>So owners hesitate to let agents spend, and merchants hesitate to sell to them. Escrow protects you from bad sellers. Nothing protects you from your own agent.</p>
+  </div>
+</section>
+
+<section class="slide" aria-label="How it works">
+  <div class="margin"><div class="clause">§2</div><div class="doc">Operation of cover</div></div>
+  <div class="body">
+    <h2>Verify once, insure, check, pay from evidence</h2>
+    <ol class="steps">
+      <li><b>Owner verifies once</b>Concordium ID, then a mandate (budget, categories, merchants) with a ZK proof of 18+ and EU residency bound to one agent.</li>
+      <li><b>Agent insures itself</b>Buys cover over x402 in EUDemo. The premium comes from on-chain facts and its claims history.</li>
+      <li><b>Merchant checks first</b>Mandate, proof, the agent's CIS-8004 entry and live cover, all before any payment.</li>
+      <li><b>Claims paid from evidence</b>The agent files; receipts are matched on-chain; small claims pay automatically, larger ones need a human.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="slide" aria-label="A real agent">
+  <div class="margin"><div class="clause">§3</div><div class="doc">Conduct of the insured agent, as recorded on testnet</div></div>
+  <div class="body">
+    <h2>A real AI agent, told only “buy a bottle of Rioja”</h2>
+    <div class="trace">
+      <div><span class="t">kuasa_quote</span> /shop/wine/rioja <span class="no">refused: cover required, 24 EUDemo</span></div>
+      <div><q>Cover of 24 EUDemo is needed. Let me price it.</q></div>
+      <div><span class="t">cover_quote</span> 24 EUDemo, 30 days: 0.93 EUDemo, claims history ×2</div>
+      <div><span class="t">cover_buy</span> <span class="yes">policy #6 issued</span> · <span class="t">kuasa_buy</span> <span class="yes">paid</span></div>
+      <div><span class="t">kuasa_my_payments</span> two identical charges · <span class="t">file_claim</span> <span class="yes">claim #7, receipts matched</span></div>
+    </div>
+    <p class="small">Claude with the Kuasa MCP tools only. Nobody mentioned insurance or claims.</p>
+  </div>
+</section>
+
+<section class="slide" aria-label="Claims">
+  <div class="margin"><div class="clause">§4</div><div class="doc">Claims settlement</div></div>
+  <div class="body" style="position:relative">
+    <span class="stamp big-stamp">PAID</span>
+    <h2>Every claim rests on three records</h2>
+    <table>
+      <thead><tr><th>Claim</th><th>Receipts on-chain</th><th>Decided by</th><th>Merchant attests</th><th></th></tr></thead>
+      <tbody>
+        <tr><td>#5 duplicate bread</td><td>matched</td><td>automatic, after the objection window</td><td>orders match</td><td><span class="stamp paid">PAID</span></td></tr>
+        <tr><td>#7 duplicate wine</td><td>matched</td><td>human claims handler</td><td>orders match</td><td><span class="stamp paid">PAID</span></td></tr>
+        <tr><td>#2 invented loss</td><td>none</td><td>automatic rejection</td><td>no such orders</td><td><span class="stamp no">FRAUD</span></td></tr>
+      </tbody>
+    </table>
+    <p class="small">Repeat fraud drafts a lawful-disclosure request for the identity provider and Privacy Guardians, anchored only after a human reviews it.</p>
+  </div>
+</section>
+
+<section class="slide" aria-label="Concordium components">
+  <div class="margin"><div class="clause">§5</div><div class="doc">Infrastructure relied upon</div></div>
+  <div class="body">
+    <h2>Built on what only Concordium has</h2>
+    <div class="grid2">
+      <div><b>Concordium ID, Verify &amp; Access</b>Zero-knowledge 18+ and residency, bound to the agent; underwriting input.</div>
+      <div><b>Agent Registry and badges</b>Four Verified-by-Concordium agents, the insurer included; cover, decisions and attestations as metadata.</div>
+      <div><b>x402, sponsored transactions, PLT</b>Premiums and purchases in an allow-listed euro; agents never pay fees.</div>
+      <div><b>Revocable anonymity</b>Fraud leads to a lawful identity disclosure, not just a ban.</div>
+      <div><b>Two Rust contracts</b>Mandates and cover, checking each other on-chain.</div>
+      <div><b>registerData</b>Audit anchors for EU AI Act Article 12 record keeping.</div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" aria-label="Agents everywhere">
+  <div class="margin"><div class="clause">§6</div><div class="doc">Territorial scope</div></div>
+  <div class="body">
+    <h2>Any agent can check it, on any chain</h2>
+    <div class="grid2">
+      <div><b>Agents on Ethereum and Base</b>An Ethereum key bound through the CIS-8 External Key Registry. An EVM merchant sends a nonce; one signature returns the badge and the cover.</div>
+      <div><b>The insurer is an agent</b>Badged, with A2A skills: solvency, risk, cover status, quotes. The read-only skills are public.</div>
+      <div><b>Plugs into existing stacks</b>MCP server for Claude and the OpenAI Agents SDK; AgentKit actions for EVM agents.</div>
+      <div><b>Public proof of solvency</b>The pool against every live limit, recomputed from the contract in your browser.</div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" aria-label="Evidence">
+  <div class="margin"><div class="clause">§7</div><div class="doc">Schedule of evidence, Concordium testnet</div></div>
+  <div class="body">
+    <h2>Live, and checkable by anyone</h2>
+    <div class="facts">
+      <div><div class="n">8</div><div class="l">claims, each with three records</div></div>
+      <div><div class="n">4</div><div class="l">valid badges</div></div>
+      <div><div class="n">×3.4</div><div class="l">pool covers live limits</div></div>
+      <div><div class="n">93</div><div class="l">automated tests</div></div>
+    </div>
+    <p class="small">Every transaction is linked in docs/TESTNET.md. Contracts: kuasa-registry &lt;13065,0&gt;, kuasa-cover &lt;13066,0&gt;.</p>
+    <div class="links"><a href="https://kuasa-explorer.vercel.app">kuasa-explorer.vercel.app</a><a href="https://ccdexplorer.io/testnet/instance/13066/0">kuasa-cover on CCDExplorer</a><a href="https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md">All transactions</a></div>
+  </div>
+</section>
+
+<section class="slide" aria-label="Path to mainnet">
+  <div class="margin"><div class="clause">§8</div><div class="doc">Conditions for going live</div></div>
+  <div class="body">
+    <h2>From testnet to real premiums</h2>
+    <ol class="steps">
+      <li><b>Locked capital</b>The pool moves into a Protocol-Level Lock released only by the cover contract.</li>
+      <li><b>Richer underwriting</b>Agent IDP credentials, KYCaaS, AML and liveness as pricing factors.</li>
+      <li><b>Real money, real carrier</b>EURQ instead of EUDemo; a fronting insurer carries the regulated risk.</li>
+      <li><b>Owners keep their keys</b>Owners sign in their own wallet; auto-pay rules move into the contract.</li>
+    </ol>
+    <div class="links"><a href="https://github.com/PugarHuda/kuasa/blob/main/docs/PRODUCTION.md">Full path to production</a><a href="https://youtu.be/Tqe_CLniIl0">Watch the demo</a></div>
+  </div>
+</section>
+
+</div></div>
+<nav aria-label="Slides"><button id="prev" aria-label="Previous slide">Previous</button><span id="count" aria-live="polite"></span><button id="next" aria-label="Next slide">Next</button></nav>
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  let i = Math.max(0, Math.min(slides.length - 1, (Number(location.hash.slice(1)) || 1) - 1));
+  const show = () => { slides.forEach((s, k) => s.classList.toggle('on', k === i)); document.getElementById('count').textContent = `${i + 1} / ${slides.length}`; history.replaceState(null, '', `#${i + 1}`); };
+  const go = (d) => { i = Math.max(0, Math.min(slides.length - 1, i + d)); show(); };
+  document.getElementById('prev').onclick = () => go(-1);
+  document.getElementById('next').onclick = () => go(1);
+  addEventListener('keydown', (e) => { if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); go(1); } if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); go(-1); } });
+  const fit = () => { const s = Math.min(innerWidth / 1300, (innerHeight - 56) / 740); document.getElementById('deck').style.transform = `scale(${s})`; };
+  addEventListener('hashchange', () => { const n = Number(location.hash.slice(1)); if (n >= 1 && n <= slides.length && n - 1 !== i) { i = n - 1; show(); } });
+  addEventListener('resize', fit); fit(); show();
+</script>
+</body>
+</html>
