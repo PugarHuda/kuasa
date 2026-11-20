@@ -39,12 +39,20 @@ export const bigintJson = (_: string, v: unknown) => (typeof v === 'bigint' ? v.
  * for finalization. With a sponsor, the sender never needs CCD.
  */
 export async function submit(grpc: ConcordiumGRPCClient, tx: Transaction.Builder, from: Wallet, sponsor?: Wallet) {
-  const { nonce } = await grpc.getNextAccountNonce(from.address);
-  const configured = tx.addMetadata({ sender: from.address, nonce, expiry: TransactionExpiry.futureMinutes(10) });
-  const signable = sponsor
-    ? await Transaction.sponsor(await Transaction.sign(configured.addSponsor(sponsor.address).build(), from.signer) as Parameters<typeof Transaction.sponsor>[0], sponsor.signer)
-    : await Transaction.sign(configured.build(), from.signer);
-  const hash = await grpc.sendTransaction(Transaction.finalize(signable));
+  // Several processes sign for the same account (e.g. shop attester + console incident): a nonce
+  // taken by a concurrent sender is retried with a fresh one. Rejected => nothing was submitted.
+  let hash: Awaited<ReturnType<ConcordiumGRPCClient['sendTransaction']>>;
+  for (let attempt = 0; ; attempt++) {
+    const { nonce } = await grpc.getNextAccountNonce(from.address);
+    const configured = tx.addMetadata({ sender: from.address, nonce, expiry: TransactionExpiry.futureMinutes(10) });
+    const signable = sponsor
+      ? await Transaction.sponsor(await Transaction.sign(configured.addSponsor(sponsor.address).build(), from.signer) as Parameters<typeof Transaction.sponsor>[0], sponsor.signer)
+      : await Transaction.sign(configured.build(), from.signer);
+    try { hash = await grpc.sendTransaction(Transaction.finalize(signable)); break; } catch (e) {
+      if (attempt >= 4 || !/duplicate nonce/i.test((e as Error).message)) throw e;
+      await new Promise((r) => setTimeout(r, 1500 + Math.random() * 1500));
+    }
+  }
   const summary = await grpc.waitForTransactionFinalization(hash);
   return { hash: TransactionHash.toHexString(hash), summary };
 }

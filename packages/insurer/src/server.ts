@@ -395,8 +395,8 @@ const capitalSnap = existsSync(CAPITAL_FILE) ? fromJsonBig(readFileSync(CAPITAL_
 const pendingWithdrawals: { provider: string; amount: bigint; tx: string }[] = capitalSnap?.pending ?? [];
 const capital = new CapitalLedger(capitalSnap?.ledger);
 // The seen-counters follow the insurer state of one cover contract; a new contract starts them at zero
-// (provider balances are about the pool and carry over).
-const sameCover = capitalSnap?.cover === state.cover;
+// (provider balances are about the pool and carry over). A snapshot without `cover` predates v2: it is v1's.
+const sameCover = (capitalSnap?.cover ?? String(COVER_V1)) === state.cover;
 let premiumsSeen = sameCover ? capitalSnap?.premiumsSeen ?? 0n : 0n;
 let outSeen = sameCover ? capitalSnap?.outSeen ?? 0n : 0n;
 const saveCapital = () => { const tmp = new URL('capital.json.tmp', ROOT); writeFileSync(tmp, toJsonBig({ ledger: capital.snapshot(), premiumsSeen, outSeen, pending: pendingWithdrawals, cover: state.cover })); renameSync(tmp, CAPITAL_FILE); };
