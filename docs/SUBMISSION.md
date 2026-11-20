@@ -25,6 +25,8 @@ AI agents can pay on their own now. When one makes a mistake, nobody carries the
 - Agents on EVM chains are covered too. An Ethereum key bound through CIS-8 lets an EVM merchant verify an agent's badge and cover from a signature. AgentKit agents can do it with their own wallet.
 - Fraud has consequences: a lawful-disclosure request for the identity provider and Privacy Guardians, anchored only after human review.
 
+**Both sides of the market.** A merchant harmed by an insured agent claims on that agent's cover; this was paid automatically on testnet. Cancelled policies get the unused premium back pro rata.
+
 Escrow protects you from bad sellers. Kuasa Cover protects you from your agent.
 
 ## Code
