@@ -530,3 +530,37 @@ test('AP2: a quote with the user\'s AP2 Intent Mandate is refused if the Kuasa m
   const early = await t.svc.quote({ mandateUrl: 'https://k.example/m.json', limit: 100n * EUR, days: 30, ap2: { ...intent, intent_expiry: '2001-01-01T00:00:00Z' } });
   assert.match('refused' in early ? early.refused : '', /AP2 intent/);
 });
+
+test('an earlier undecided claim on the same orders blocks auto-pay of a later one', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, autoPayLimit: 50n * EUR, autoPayDelayMs: 120_000 });
+  t.setEntry(entry({ incidents: 1n }));
+  const q = await quoteOk(t.svc);
+  const pid = (await t.svc.issue(q.quoteId, h(9)))!;
+  t.events.set('r0', { at: 1_000_500, events: [{ type: 'Receipt', owner: OWNER, id: h(7), order: h(10), paymentTx: h(9), amount: 24n * EUR, spent: 24n * EUR }] });
+  // claim 0: same order, loss at the deductible -> not ok, but not rejected by anyone yet
+  t.claims.set(0n, { policyId: pid, claimant: PAYER, kind: 'MerchantLoss', amount: 1n * EUR, evidence: h(12), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(0n, ['r0']);
+  t.claims.set(1n, { policyId: pid, claimant: PAYER, kind: 'MerchantLoss', amount: 5n * EUR, evidence: h(13), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(1n, ['r0']);
+  const c1 = t.svc.state().claims.find((c) => c.claimId === 1n)!;
+  assert.equal(c1.appealOf, 0n);
+  assert.equal(c1.autoPayAt, undefined);
+});
+
+test('rejecting a claim cancels auto-pay of later claims on the same orders', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, autoPayLimit: 50n * EUR, autoPayDelayMs: 120_000 });
+  await filedClaim(t, true, 0n, 'MerchantLoss'); // claim 0 on order h(10), auto-pay scheduled
+  // a second claim on another order is scheduled too; then claim 0's order shows up in claim 2 (unusual) — simulate overlap
+  const rec0 = t.svc.state().claims[0];
+  assert.ok(rec0.autoPayAt);
+  t.claims.set(2n, { policyId: rec0.policyId, claimant: PAYER, kind: 'MerchantLoss', amount: 24n * EUR, evidence: h(14), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(2n, ['r0']);
+  await t.svc.decide(0n, false); // a human rejects claim 0
+  const c2 = t.svc.state().claims.find((c) => c.claimId === 2n)!;
+  assert.equal(c2.autoPayAt, undefined, 'overlapping claim handed to a human');
+  now += 1_000_000;
+  await t.svc.runAutoPay();
+  assert.ok(!t.calls.some((c) => c.startsWith('pay:')));
+});

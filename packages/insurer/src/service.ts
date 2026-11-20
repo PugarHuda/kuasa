@@ -361,7 +361,8 @@ export class InsurerService {
     const rec: ClaimRecord = {
       claimId, policyId: c.policyId, holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
       assessment: a, receiptTxs, orders: c.orders, mandateId: p.mandate.id,
-      appealOf: [...this.claims.values()].find((x) => x.verdict === 'rejected' && x.mandateId === p.mandate.id && x.orders.some((o) => c.orders.includes(o)))?.claimId,
+      // any earlier claim on these orders that was not approved (rejected, failed or still undecided) makes this a re-filing: a human decides
+      appealOf: [...this.claims.values()].find((x) => x.verdict !== 'approved' && !x.paid && x.mandateId === p.mandate.id && x.orders.some((o) => c.orders.includes(o)))?.claimId,
     };
     const limit = this.deps.autoPayLimit;
     // Automatic only where the chain proves the loss: not for appeals, not for wrong items (a receipt cannot show the item was wrong).
@@ -431,6 +432,8 @@ export class InsurerService {
         if (rec.verdict === 'approved') throw new Error('claim already approved');
         if (rec.verdict !== 'rejected') await this.deps.cover.decide(claimId, false, this.deps.operator);
         rec.verdict = 'rejected';
+        // later claims on the same orders are re-filings now: no automatic payout for them
+        for (const o of this.claims.values()) if (o !== rec && o.autoPayAt !== undefined && o.orders.some((x) => rec.orders.includes(x))) { o.autoPayAt = undefined; o.appealOf ??= claimId; }
         return { decided: true as const };
       }
       if (rec.verdict === 'rejected') throw new Error('claim was rejected; it cannot be paid');
