@@ -413,7 +413,8 @@ app.post('/capital/deposit', async (req, res) => {
     const sum = st.outcome.summary as unknown as { transactionType?: string; events?: { tag: string; tokenId: string; from: { address: string }; to: { address: string }; amount: { value: string }; memo?: string }[] };
     const transfers = (sum.events ?? []).filter((e) => e.tag === 'TokenTransfer' && String(e.tokenId) === ASSET && String(e.to?.address) === treasury.address.address);
     if (sum.transactionType !== 'tokenUpdate' || transfers.length !== 1) return json(res, { error: 'not a single EUDemo transfer into the pool' }, 400);
-    if (!isCapitalMemo(transfers[0].memo)) return json(res, { error: 'a capital deposit carries the memo "kuasa capital"' }, 400);
+    const memoHex = typeof transfers[0].memo === "string" ? transfers[0].memo : (JSON.parse(JSON.stringify(transfers[0].memo ?? null)) as string | null) ?? undefined; // CborMemo serialises to hex
+    if (!isCapitalMemo(memoHex)) return json(res, { error: 'a capital deposit carries the memo "kuasa capital"' }, 400);
     if (isPremiumTx(tx)) return json(res, { error: 'this transfer is a premium payment, not capital' }, 400);
     const provider = String(transfers[0].from.address);
     await serialCapital(async () => {
