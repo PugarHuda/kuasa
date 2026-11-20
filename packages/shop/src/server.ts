@@ -17,7 +17,7 @@ import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
-import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, registerData, TESTNET, wallet } from '@kuasa/chain';
+import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, claimKey, connect, KuasaCover, KuasaRegistry, registerData, TESTNET, wallet } from '@kuasa/chain';
 import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer, verifyPayerProof } from '@kuasa/merchant';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
@@ -152,7 +152,7 @@ async function attestNewClaims() {
   for (let id = attestFrom; ; id++) {
     const c = await cover.claim(id);
     if (!c) { attestFrom = id; return; }
-    const key = `kuasa:attest:${id}`;
+    const key = claimKey('attest', state.cover, id);
     if (await cis8004GetMetadata(grpc, state.shopAgent, key)) continue;
     const mandateId = (await cover.policy(c.policyId))?.mandate.id;
     const found = c.orders.filter((o) => guard.receipts.some((r) => r.order === o && r.mandate === mandateId)).length;

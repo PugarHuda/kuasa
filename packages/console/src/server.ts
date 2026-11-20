@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { bigintJson, cis8004GetMetadata, cis8004SetMetadata, cis8004SetMetadataTx, connect, prepareTx, KuasaCover, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
+import { bigintJson, cis8004GetMetadata, claimKey, cis8004SetMetadata, cis8004SetMetadataTx, connect, prepareTx, KuasaCover, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
 import { sha256Hex } from '@kuasa/core';
 import { isClaimId } from './validate.js';
 import { STEPS } from './demo.js';
@@ -177,7 +177,7 @@ app.post('/api/claims/:id/ai-review', async (req, res) => {
     const facts = {
       claim,
       policy: st.policies.find((p) => String(p.policyId) === String((claim as unknown as { policyId: string }).policyId)) ?? null,
-      merchantAttestation: s.shopAgent ? await cis8004GetMetadata(grpc, s.shopAgent, `kuasa:attest:${id}`) : null,
+      merchantAttestation: s.shopAgent ? await cis8004GetMetadata(grpc, s.shopAgent, claimKey('attest', s.cover ?? '0', id)) : null,
       otherClaimsOfThisAgent: st.claims.filter((c) => String(c.claimId) !== id).map((c) => ({ claimId: String(c.claimId), ...(c as object) })).slice(-10),
     };
     const r = await draftReview(JSON.parse(JSON.stringify(facts, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))));

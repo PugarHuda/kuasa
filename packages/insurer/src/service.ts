@@ -34,6 +34,8 @@ export type InsurerDeps = {
     decide(claimId: bigint, approve: boolean, operator?: Wallet): Promise<TxResult>;
     recordPayout(claimId: bigint, payoutTx: string, amount: bigint, operator?: Wallet): Promise<TxResult>;
     markFraud(claimId: bigint, disclosureHex: string, operator?: Wallet): Promise<TxResult>;
+    /** v2 contracts: automatic approval, accepted only within the contract's published rules. */
+    autoApprove?(claimId: bigint, operator?: Wallet): Promise<TxResult>;
     /** The policy already issued for this premium payment, if any (premium_tx is unique per premium). */
     policyByPremiumTx(premiumTx: string): Promise<bigint | null>;
   };
@@ -450,6 +452,19 @@ export class InsurerService {
       if (rec.autoPayAt === undefined || rec.held || rec.verdict || this.deps.now() < rec.autoPayAt) continue;
       if (this.flagged(rec)) { this.hold(rec.claimId); continue; } // flagged during the window: a human decides
       rec.decidedBy = 'auto';
+      if (this.deps.cover.autoApprove) {
+        // v2: the contract itself enforces the rules (limit, window, kind, objections)
+        try {
+          await this.deps.cover.autoApprove(rec.claimId, this.deps.operator);
+          rec.verdict = 'approved';
+        } catch {
+          rec.decidedBy = undefined;
+          rec.autoPayAt = undefined; // refused on-chain (e.g. an objection): a human decides
+          rec.held = true;
+          this.save();
+          continue;
+        }
+      }
       await this.decide(rec.claimId, true).catch(() => { rec.decidedBy = undefined; });
     }
   }

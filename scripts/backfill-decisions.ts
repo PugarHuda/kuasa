@@ -4,12 +4,13 @@
  * insurer service as they happen. Idempotent: keys already set are skipped.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { cis8004GetMetadata, cis8004SetMetadata, connect, wallet } from '@kuasa/chain';
+import { cis8004GetMetadata, cis8004SetMetadata, claimKey, connect, COVER_V1, wallet } from '@kuasa/chain';
 import { loadProfile } from './lib/identity.js';
 
 const root = new URL('../.kuasa/', import.meta.url);
 const state = JSON.parse(readFileSync(new URL('state.json', root), 'utf8')) as { insurerAgent: string };
-const files = [new URL('insurer-state.json', root), ...readdirSync(new URL('archive/', root)).map((d) => new URL(`archive/${d}/insurer-state.json`, root))].filter(existsSync);
+// archived states only: they hold the v1 contract's claims (current decisions are published live)
+const files = readdirSync(new URL('archive/', root)).map((d) => new URL(`archive/${d}/insurer-state.json`, root)).filter(existsSync);
 const big = (x: unknown) => String((x as { $big?: string })?.$big ?? x);
 
 type Rec = { claimId: unknown; verdict?: string; decidedBy?: string; paid?: string; assessment?: { noEvidence?: boolean } };
@@ -25,7 +26,7 @@ for (const f of files) {
 const grpc = connect();
 const acc = loadProfile('insurer').accounts.find((a) => a.credNumber === 0)!;
 for (const [id, value] of [...decided].sort((a, b) => Number(a[0]) - Number(b[0]))) {
-  const key = `kuasa:decision:${id}`;
+  const key = claimKey('decision', COVER_V1, id); // the archived records belong to the v1 contract
   if (await cis8004GetMetadata(grpc, state.insurerAgent, key)) { console.log(key, 'already published'); continue; }
   const r = await cis8004SetMetadata(grpc, state.insurerAgent, key, value, wallet(acc.address, acc.key));
   console.log(key, value.split(';').slice(0, 2).join(' '), r.hash);

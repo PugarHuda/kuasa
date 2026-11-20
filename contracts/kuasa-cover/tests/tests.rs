@@ -59,7 +59,7 @@ fn setup() -> T {
     }
     let registry = deploy(&mut chain, "../kuasa-registry/concordium-out/module.wasm.v1", "init_kuasa", OwnedParameter::empty());
     let cover = deploy(&mut chain, "concordium-out/module.wasm.v1", "init_kuasa_cover",
-        OwnedParameter::from_serial(&InitParams { operator: OPERATOR, registry }).unwrap());
+        OwnedParameter::from_serial(&InitParams { operator: OPERATOR, registry, auto_pay_limit: 25 * EUR, objection_window_ms: 60_000 }).unwrap());
     let mut t = T { chain, registry, cover };
     let issue = RegistryIssue {
         id: MANDATE_ID, payer: PAYER, agent_registry: ContractAddress::new(12802, 0), agent_token: "ee04".into(),
@@ -307,4 +307,60 @@ fn claims_window_closes_30_days_after_expiry() {
     call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A])).unwrap();
     t.chain.tick_block_time(Duration::from_millis(2 * 86_400_000)).unwrap();
     assert!(call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_B])).is_err());
+}
+
+fn assessed_claim(t: &mut T, kind: ClaimKind, amount: u64) -> u64 {
+    issue(t);
+    let mut c = claim(vec![ORDER_A, ORDER_B]);
+    c.kind = kind;
+    c.amount = amount;
+    if kind != ClaimKind::AgentMistake { c.orders = vec![ORDER_A]; }
+    let from = if kind == ClaimKind::MerchantLoss { MERCHANT } else { PAYER };
+    let id: u64 = call(t, from, "fileClaim", &c).unwrap().parse_return_value().unwrap();
+    call(t, OPERATOR, "assessClaim", &AssessParams { claim_id: id, ok: true, reason: HashSha2256([1; 32]) }).unwrap();
+    id
+}
+
+#[test]
+fn rules_are_public() {
+    let t = setup();
+    let r: AutoRules = view(&t, "rules", &());
+    assert_eq!(r, AutoRules { auto_pay_limit: 25 * EUR, objection_window_ms: 60_000 });
+}
+
+#[test]
+fn auto_approve_only_after_the_window_and_within_the_limit() {
+    let mut t = setup();
+    let id = assessed_claim(&mut t, ClaimKind::AgentMistake, 24 * EUR);
+    assert!(call(&mut t, OPERATOR, "autoApprove", &id).is_err(), "inside the objection window");
+    t.chain.tick_block_time(Duration::from_millis(61_000)).unwrap();
+    assert!(call(&mut t, STRANGER, "autoApprove", &id).is_err(), "operator only");
+    call(&mut t, OPERATOR, "autoApprove", &id).unwrap();
+    let auth: bool = view(&t, "claimsAuthorized", &id);
+    assert!(auth);
+}
+
+#[test]
+fn auto_approve_refuses_big_claims_and_wrong_items() {
+    let mut t = setup();
+    let big = assessed_claim(&mut t, ClaimKind::AgentMistake, 40 * EUR); // due 39 > 25
+    let mut t2 = setup();
+    let wrong = assessed_claim(&mut t2, ClaimKind::WrongItem, 5 * EUR);
+    t.chain.tick_block_time(Duration::from_millis(61_000)).unwrap();
+    t2.chain.tick_block_time(Duration::from_millis(61_000)).unwrap();
+    assert!(call(&mut t, OPERATOR, "autoApprove", &big).is_err(), "above the auto-pay limit");
+    assert!(call(&mut t2, OPERATOR, "autoApprove", &wrong).is_err(), "a wrong item needs a human");
+    call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: big, approve: true }).unwrap(); // a human still can
+}
+
+#[test]
+fn parties_can_object_inside_the_window_and_block_auto_approval() {
+    let mut t = setup();
+    let id = assessed_claim(&mut t, ClaimKind::AgentMistake, 24 * EUR);
+    assert!(call(&mut t, STRANGER, "objectClaim", &id).is_err(), "strangers cannot object");
+    call(&mut t, MERCHANT, "objectClaim", &id).unwrap(); // a recorder of the mandate (the merchant)
+    t.chain.tick_block_time(Duration::from_millis(61_000)).unwrap();
+    assert!(call(&mut t, OWNER, "objectClaim", &id).is_err(), "window closed");
+    assert!(call(&mut t, OPERATOR, "autoApprove", &id).is_err(), "objected claims need a human");
+    call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: id, approve: true }).unwrap();
 }

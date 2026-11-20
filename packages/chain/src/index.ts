@@ -140,6 +140,14 @@ export class KuasaCover {
   claim = async (id: bigint) => decodeClaim(await this.invoke('claim', encodeU64(id)));
   coverOf = async (payer: string, order?: string): Promise<CoverView> => decodeCoverView(await this.invoke('coverOf', encodeCoverQuery(payer, order)));
   claimsAuthorized = async (id: bigint) => (await this.invoke('claimsAuthorized', encodeU64(id)))[0] === 1;
+  /** v2: the published automation rules (null on a v1 contract, which has none). */
+  rules = async (): Promise<{ autoPayLimit: bigint; objectionWindowMs: number } | null> => {
+    try {
+      const b = await this.invoke('rules', new Uint8Array());
+      const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      return { autoPayLimit: v.getBigUint64(0, true), objectionWindowMs: Number(v.getBigUint64(8, true)) };
+    } catch { return null; }
+  };
 
   private async update(method: string, param: Uint8Array, from: Wallet, sponsor?: Wallet) {
     const tx = Transaction.updateContract(
@@ -162,6 +170,10 @@ export class KuasaCover {
   recordPayout = (claimId: bigint, payoutTx: string, amount: bigint, operator: Wallet) => this.update('recordPayout', encodePayout(claimId, payoutTx, amount), operator);
   markFraud = (claimId: bigint, disclosureHex: string, operator: Wallet) => this.update('markFraud', encodeFraud(claimId, disclosureHex), operator);
   cancelPolicy = (policyId: bigint, holder: Wallet) => this.update('cancelPolicy', encodeU64(policyId), holder);
+  /** v2: automatic approval, accepted by the contract only within its published rules. */
+  autoApprove = (claimId: bigint, operator: Wallet) => this.update('autoApprove', encodeU64(claimId), operator);
+  /** v2: a party to the claim objects during the objection window (signed by that party). */
+  objectClaim = (claimId: bigint, party: Wallet) => this.update('objectClaim', encodeU64(claimId), party);
 
   /** issuePolicy / fileClaim ids: the first u64 of the PolicyIssued (tag 0) / ClaimFiled (tag 1) event. */
   static idFromEvents(summary: unknown, index: bigint): bigint | null {
@@ -190,6 +202,12 @@ export async function registryEventsOfTx(grpc: ConcordiumGRPCClient, txHash: str
   const events = contractEvents(st.outcome.summary, registryIndex).map(decodeRegistryEvent).filter((e): e is RegistryEvent => e !== null);
   return { at: info.blockSlotTime.getTime(), events };
 }
+
+/** The first kuasa-cover instance; its claim records keep un-namespaced CIS-8004 keys. */
+export const COVER_V1 = 13066n;
+/** CIS-8004 metadata key for a claim record (decision, attest) on a given cover contract. */
+export const claimKey = (kind: 'decision' | 'attest', cover: bigint | string, claimId: bigint | string) =>
+  BigInt(cover) === COVER_V1 ? `kuasa:${kind}:${claimId}` : `kuasa:${kind}:${cover}:${claimId}`;
 
 /** Concordium's CIS-8004 Agent Registry on testnet. */
 export const AGENT_REGISTRY = ContractAddress.create(12802n, 0n);

@@ -39,6 +39,17 @@ pub struct MandateEntry {
 pub struct InitParams {
     pub operator: AccountAddress,
     pub registry: ContractAddress,
+    /// v2: claims whose amount above the deductible is at most this may be approved automatically.
+    pub auto_pay_limit: u64,
+    /// v2: how long after the assessment parties can object before an automatic approval.
+    pub objection_window_ms: u64,
+}
+
+/// The published automation rules, enforced by `autoApprove` and `objectClaim`.
+#[derive(Serialize, SchemaType, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AutoRules {
+    pub auto_pay_limit: u64,
+    pub objection_window_ms: u64,
 }
 
 #[derive(Serialize, SchemaType, Clone, Copy, PartialEq, Eq, Debug)]
@@ -173,6 +184,9 @@ pub struct State<S = StateApi> {
     claims: StateMap<u64, Claim, S>,
     by_payer: StateMap<AccountAddress, Vec<u64>, S>,
     claimed_orders: StateSet<(u64, HashSha2256), S>,
+    rules: AutoRules,
+    assessed_at: StateMap<u64, Timestamp, S>,
+    objected: StateSet<u64, S>,
 }
 
 #[derive(Debug, PartialEq, Eq, Reject, Serialize, SchemaType)]
@@ -216,6 +230,9 @@ fn init(ctx: &InitContext, state_builder: &mut StateBuilder) -> InitResult<State
         claims: state_builder.new_map(),
         by_payer: state_builder.new_map(),
         claimed_orders: state_builder.new_set(),
+        rules: AutoRules { auto_pay_limit: p.auto_pay_limit, objection_window_ms: p.objection_window_ms },
+        assessed_at: state_builder.new_map(),
+        objected: state_builder.new_set(),
     })
 }
 
@@ -236,6 +253,10 @@ pub enum Event {
     ClaimFraud { claim_id: u64, disclosure: HashSha2256 },
     #[concordium(tag = 6)]
     PolicyCancelled { policy_id: u64 },
+    #[concordium(tag = 7)]
+    ClaimObjected { claim_id: u64, by: AccountAddress },
+    #[concordium(tag = 8)]
+    ClaimAutoApproved { claim_id: u64 },
 }
 
 fn sender_account(ctx: &ReceiveContext) -> CResult<AccountAddress> {
@@ -358,6 +379,9 @@ fn assess_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     let mut c = host.state_mut().claims.get_mut(&p.claim_id).ok_or(Error::NotFound)?;
     ensure!(matches!(c.status, ClaimStatus::Filed | ClaimStatus::Assessed { .. }), Error::WrongStatus);
     c.status = ClaimStatus::Assessed { ok: p.ok, reason: p.reason };
+    drop(c);
+    let now = ctx.metadata().slot_time();
+    let _ = host.state_mut().assessed_at.insert(p.claim_id, now); // the objection window starts here
     logger.log(&Event::ClaimAssessed { claim_id: p.claim_id, ok: p.ok, reason: p.reason })?;
     Ok(())
 }
@@ -384,6 +408,62 @@ fn decide_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     }
     logger.log(&Event::ClaimDecided { claim_id: p.claim_id, approve: p.approve })?;
     Ok(())
+}
+
+fn window_end(host: &Host<State>, claim_id: u64) -> CResult<Timestamp> {
+    let at = host.state().assessed_at.get(&claim_id).map(|t| *t).ok_or(Error::WrongStatus)?;
+    at.checked_add(Duration::from_millis(host.state().rules.objection_window_ms)).ok_or(Error::InvalidParams)
+}
+
+/// During the objection window a party to the claim (policy holder, agent payer, claimant, or a
+/// recorder of the mandate, i.e. the merchant) can object; an objected claim is never approved
+/// automatically, only by a human decision.
+#[receive(contract = "kuasa_cover", name = "objectClaim", parameter = "u64", error = "Error", mutable, enable_logger)]
+fn object_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
+    let id: u64 = ctx.parameter_cursor().get()?;
+    let by = sender_account(ctx)?;
+    let (policy_id, claimant) = {
+        let c = host.state().claims.get(&id).ok_or(Error::NotFound)?;
+        ensure!(matches!(c.status, ClaimStatus::Assessed { ok: true, .. }), Error::WrongStatus);
+        (c.policy_id, c.claimant)
+    };
+    ensure!(ctx.metadata().slot_time() < window_end(host, id)?, Error::WrongStatus);
+    let (holder, payer, mandate) = {
+        let p = host.state().policies.get(&policy_id).ok_or(Error::NotFound)?;
+        (p.holder, p.agent_payer, p.mandate)
+    };
+    let party = by == holder || by == payer || by == claimant || read_mandate(host, &mandate)?.recorders.contains(&by);
+    ensure!(party, Error::Unauthorized);
+    let _ = host.state_mut().objected.insert(id);
+    logger.log(&Event::ClaimObjected { claim_id: id, by })?;
+    Ok(())
+}
+
+/// Automatic approval (operator), only within the published rules: a positively assessed claim,
+/// not a wrong item, at most `auto_pay_limit` above the deductible, after the objection window,
+/// and with no objection. Everything else needs `decideClaim` (a human).
+#[receive(contract = "kuasa_cover", name = "autoApprove", parameter = "u64", error = "Error", mutable, enable_logger)]
+fn auto_approve(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
+    only_operator(ctx, host)?;
+    let id: u64 = ctx.parameter_cursor().get()?;
+    ensure!(ctx.metadata().slot_time() >= window_end(host, id)?, Error::WrongStatus);
+    ensure!(!host.state().objected.contains(&id), Error::Unauthorized);
+    let (kind, amount, policy_id) = {
+        let c = host.state().claims.get(&id).ok_or(Error::NotFound)?;
+        ensure!(matches!(c.status, ClaimStatus::Assessed { ok: true, .. }), Error::WrongStatus);
+        (c.kind, c.amount, c.policy_id)
+    };
+    ensure!(kind != ClaimKind::WrongItem, Error::Unauthorized);
+    let deductible = host.state().policies.get(&policy_id).ok_or(Error::NotFound)?.deductible;
+    ensure!(amount.saturating_sub(deductible) <= host.state().rules.auto_pay_limit, Error::OverLimit);
+    host.state_mut().claims.get_mut(&id).ok_or(Error::NotFound)?.status = ClaimStatus::Approved;
+    logger.log(&Event::ClaimAutoApproved { claim_id: id })?;
+    Ok(())
+}
+
+#[receive(contract = "kuasa_cover", name = "rules", return_value = "AutoRules", error = "Error")]
+fn view_rules(_ctx: &ReceiveContext, host: &Host<State>) -> CResult<AutoRules> {
+    Ok(host.state().rules)
 }
 
 /// Record the treasury payout of an approved claim; never beyond the policy limit.
