@@ -12,7 +12,8 @@
     "@kuasa/chain": "workspace:*",
     "@kuasa/core": "workspace:*",
     "@kuasa/cover": "workspace:*",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "viem": "2.58.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6"

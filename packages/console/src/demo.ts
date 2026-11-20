@@ -4,7 +4,24 @@
  * teen's refused purchase are scripted. Used to record the submission video. Localhost only.
  */
 import { KuasaAgent } from '@kuasa/agent';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { privateKeyToAccount } from 'viem/accounts';
 import { runAiAgent } from './ai-agent.js';
+
+const A2A = process.env.KUASA_A2A_URL ?? 'https://kuasa-explorer.vercel.app/a2a';
+/** An agent on an EVM chain proves itself with its Ethereum key; the public Kuasa A2A endpoint answers. */
+async function evmCheck() {
+  const key = JSON.parse(readFileSync(new URL('../../../.kuasa/eth-alice-agent.json', import.meta.url), 'utf8')).privateKey;
+  const eth = privateKeyToAccount(key);
+  const nonce = randomBytes(16).toString('hex'); // issued by the EVM merchant
+  const message = `kuasa-evm-agent:v1:${new URL(A2A).host}:${nonce}:${Date.now()}`;
+  const signature = await eth.signMessage({ message });
+  const r = await fetch(A2A, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'message/send', params: { message: { role: 'user', messageId: nonce, parts: [{ kind: 'data', data: { skill: 'verify-evm-agent', message, signature, nonce } }] } } }) });
+  const out = (await r.json()) as { result?: { parts: { data: unknown }[] }; error?: { message: string } };
+  if (out.error) throw new Error(out.error.message);
+  return { message, endpoint: A2A, answer: out.result!.parts[0].data };
+}
 
 const WINE = '/shop/wine/rioja';
 let alice: KuasaAgent | undefined;
@@ -38,6 +55,9 @@ export const STEPS: DemoStep[] = [
     run: () => runAiAgent('Check your recent purchases at the shop and sort out anything that went wrong.') },
   { id: 'approve', title: 'Tiered autonomy: a human decides the bigger claims',
     caption: 'Claims up to the auto-pay limit are paid automatically after an objection window. This one is above it, so a human claims handler approves. Escrow protects you from bad sellers; Kuasa Cover protects you from your agent.' },
+  { id: 'evm', title: 'An agent on Ethereum asks: is this agent insured?',
+    caption: 'Alice’s agent also has an Ethereum key, bound to its Concordium identity in the CIS-8 External Key Registry. A merchant on an EVM chain sends a nonce, the agent signs it, and Kuasa’s public A2A endpoint answers from Concordium: verified, insured.',
+    run: () => evmCheck() },
   { id: 'proof', title: 'Everything is verifiable',
     caption: 'A valid Verified-by-Concordium badge, a public proof of solvency computed from the cover contract, receipts, payouts and anchored audit batches (EU AI Act Art. 12). Live on testnet.',
     run: async (c) => ({ badge: await c.badge('alice'), solvency: await c.solvency() }) },
