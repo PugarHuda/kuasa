@@ -1,7 +1,8 @@
 {
   "name": "Kuasa Cover insurer",
-  "description": "Insures AI shopping agents against their own mistakes. Prices cover from on-chain facts, sells it over x402, assesses claims from on-chain receipts, pays small claims automatically and big ones after a human approves. Talk to it over A2A (message/send with a data part { skill, ... }).",
-  "url": "https://pugarhuda.github.io/kuasa/agents/insurer.json",
+  "description": "Insures AI shopping agents against their own mistakes. Prices cover from on-chain facts, sells it over x402, assesses claims from on-chain receipts, pays small claims automatically and big ones after a human approves. Talk to it over A2A (message/send with a data part { skill, ... }); the public endpoint serves the read-only skills, quotes go through the insurer service.",
+  "url": "https://kuasa-explorer.vercel.app/a2a",
+  "preferredTransport": "JSONRPC",
   "version": "1.0.0",
   "provider": {
     "organization": "Kuasa",

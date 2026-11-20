@@ -28,7 +28,7 @@ const cast = [
   { name: 'shop', profile: 'merchant', token: state.shopAgent, title: 'Kuasa demo shop', role: 'merchant',
     description: 'Regulated-goods shop for AI agents: checks mandates, ZK proofs, CIS-8004 status and Kuasa Cover before accepting x402 payments in EUDemo.' },
   { name: 'insurer', profile: 'insurer', token: state.insurerAgent, title: 'Kuasa Cover insurer', role: 'insurer',
-    description: 'Insures AI shopping agents against their own mistakes. Prices cover from on-chain facts, sells it over x402, assesses claims from on-chain receipts, pays small claims automatically and big ones after a human approves. Talk to it over A2A (message/send with a data part { skill, ... }).' },
+    description: 'Insures AI shopping agents against their own mistakes. Prices cover from on-chain facts, sells it over x402, assesses claims from on-chain receipts, pays small claims automatically and big ones after a human approves. Talk to it over A2A (message/send with a data part { skill, ... }); the public endpoint serves the read-only skills, quotes go through the insurer service.' },
 ];
 
 const only = process.env.ONLY?.split(',');
@@ -41,7 +41,7 @@ async function build() {
   for (const a of picked()) {
     const owner = loadProfile(a.profile).accounts.find((x) => x.credNumber === 0)!.address;
     const card = {
-      name: a.title, description: a.description, url: uriOf(a.name), version: '1.0.0',
+      name: a.title, description: a.description, url: a.role === 'insurer' ? (process.env.KUASA_A2A_URL ?? 'https://kuasa-explorer.vercel.app/a2a') : uriOf(a.name), ...(a.role === 'insurer' ? { preferredTransport: 'JSONRPC' } : {}), version: '1.0.0',
       provider: { organization: 'Kuasa', url: 'https://github.com/PugarHuda/kuasa' },
       defaultInputModes: ['application/json'], defaultOutputModes: ['application/json'],
       capabilities: {

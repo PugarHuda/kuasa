@@ -3,13 +3,10 @@
  * chain over gRPC-web (no backend, no keys). Policies, claims, the pool and proof of solvency are
  * recomputed in the browser from the kuasa-cover contract and the pool account.
  */
-import { AccountAddress, ConcordiumGRPCWebClient, ContractAddress, Parameter, ReceiveName, ReturnValue } from '@concordium/web-sdk';
-
-import { decodeClaim, decodePolicy, encodeU64, type Claim, type Policy } from '@kuasa/core';
+import { type Claim, type Policy } from '@kuasa/core';
 import { solvency } from '@kuasa/cover';
+import { POOL, poolBalance, scan } from './chain.js';
 
-const COVER = ContractAddress.create(13066n, 0n);
-const POOL = '3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut';
 const LABELS: Record<string, string> = {
   '4WmdhhLRPTk92STxiaXQFFNyJFLaM6k5kRq1ryFN8xjho1aq3s': 'Alice (owner)',
   '4DRGyL6GkXQXs8CT7KovczM9SbwVgn8KsKAvQtFt4G4puhXKLc': "Alice's agent",
@@ -20,31 +17,12 @@ const LABELS: Record<string, string> = {
   '4Tw9uzZZSQmbLytV8XqRYU5dCDyrhu8yWU2xwvXovaS54sTZzJ': 'Kuasa Cover operator',
 };
 
-const grpc = new ConcordiumGRPCWebClient('https://grpc.testnet.concordium.com', 20000);
 const $ = (id: string) => document.getElementById(id)!;
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const eur = (v: bigint) => (Number(v) / 1e6).toLocaleString('en', { maximumFractionDigits: 4 }) + ' EUDemo';
 const acct = (a: string) => `<a href="https://ccdexplorer.io/testnet/account/${esc(a)}" target="_blank" rel="noopener" title="${esc(a)}">${esc(LABELS[a] ?? a.slice(0, 8) + '…')}</a>`;
 const tx = (h: string) => `<a class="mono" href="https://ccdexplorer.io/testnet/transaction/${esc(h)}" target="_blank" rel="noopener">${esc(h.slice(0, 8))}…</a>`;
 const day = (ms: bigint) => new Date(Number(ms)).toISOString().slice(0, 10);
-
-async function view(method: string, id: bigint) {
-  const r = await grpc.invokeContract({ contract: COVER, method: ReceiveName.fromString(`kuasa_cover.${method}`), parameter: Parameter.fromBuffer(encodeU64(id).slice().buffer as ArrayBuffer) });
-  if (r.tag !== 'success' || !r.returnValue) throw new Error(`${method} failed`);
-  return new Uint8Array(ReturnValue.toBuffer(r.returnValue));
-}
-
-async function all<T>(read: (id: bigint) => Promise<T | null>) {
-  const out: T[] = [];
-  for (let i = 0n; ; i++) { const x = await read(i); if (!x) break; out.push(x); }
-  return out;
-}
-
-async function poolBalance() {
-  const info = await grpc.getAccountInfo(AccountAddress.fromBase58(POOL));
-  const t = (info as unknown as { accountTokens?: { id: unknown; state: { balance: { value: bigint | string } } }[] }).accountTokens?.find((x) => String(x.id) === 'EUDemo');
-  return t ? BigInt(t.state.balance.value) : 0n;
-}
 
 function statusPill(tag: string) {
   const cls = tag === 'Paid' || tag === 'Active' ? 'ok' : tag === 'Rejected' || tag === 'Fraud' || tag === 'Cancelled' ? 'bad' : 'warn';
@@ -74,12 +52,7 @@ function render(policies: Policy[], claims: Claim[], pool: bigint) {
 
 async function load() {
   try {
-    const cover = (m: string, d: (b: Uint8Array) => unknown) => (id: bigint) => view(m, id).then(d);
-    const [policies, claims, pool] = await Promise.all([
-      all(cover('policy', decodePolicy) as (id: bigint) => Promise<Policy | null>),
-      all(cover('claim', decodeClaim) as (id: bigint) => Promise<Claim | null>),
-      poolBalance(),
-    ]);
+    const [{ policies, claims }, pool] = await Promise.all([scan(), poolBalance()]);
     render(policies, claims, pool);
   } catch (e) {
     $('updated').textContent = `Could not read testnet: ${(e as Error).message}`;
