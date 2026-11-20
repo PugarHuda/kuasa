@@ -82,6 +82,8 @@ type ClaimRecord = {
   autoPayAt?: number; held?: boolean; decidedBy?: 'auto';
   /** Re-filed orders of an earlier rejected claim: an appeal, always decided by a human. */
   appealOf?: bigint;
+  /** Objections raised during the objection window (each holds the claim for a human). */
+  objections?: { by: string; reason: string; at: number }[];
   /** Why an approved claim is not paid (e.g. insufficient pool); `final` when it never will be. */
   payoutBlocked?: string; final?: boolean;
   busy?: Promise<{ decided: true; paid?: string; reason?: string }>;
@@ -394,6 +396,27 @@ export class InsurerService {
   /** Any party to the claim (filer, policy holder, paid account) with a rejected no-evidence claim. */
   private flagged(rec: ClaimRecord) {
     return [rec.claimant, rec.holder, rec.recipient].some((a) => (this.fraud.get(a) ?? 0) > 0);
+  }
+
+  private objectionsBy = new Map<string, number[]>();
+
+  /**
+   * Optimistic payouts can be challenged: during the objection window any party that proves control
+   * of a Concordium account (signed, like the payer proof) can object. An objection moves no money;
+   * it only hands the claim to a human. At most 3 objections per account per day.
+   */
+  async object(claimId: bigint, o: { by: string; reason: string; proof: unknown }) {
+    const rec = this.claims.get(claimId);
+    if (!rec || rec.autoPayAt === undefined || rec.verdict) throw new Error('no automatic payout pending for this claim');
+    if (!(await this.deps.verifyPayer(o.by, o.proof).catch(() => false))) throw new Error('objector proof required: sign with the objecting account');
+    const now = this.deps.now();
+    const recent = (this.objectionsBy.get(o.by) ?? []).filter((t) => now - t < 86_400_000);
+    if (recent.length >= 3) throw new Error('too many objections from this account today');
+    this.objectionsBy.set(o.by, [...recent, now]);
+    rec.objections = [...(rec.objections ?? []), { by: o.by, reason: String(o.reason).slice(0, 280), at: now }];
+    rec.autoPayAt = undefined;
+    rec.held = true;
+    this.save();
   }
 
   /** A human takes the claim over: no automatic payout. */

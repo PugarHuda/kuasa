@@ -21,12 +21,27 @@ const tokenHex = (id: string) => { let v = BigInt(id); let h = ''; for (let i = 
 export const coverBindsToAgent = (p: { agentToken: string; holder: string }, a: { token_id: string; owner_account: string }) =>
   p.agentToken === tokenHex(a.token_id) && p.holder === a.owner_account;
 
-async function mcp<T>(name: string, args: object): Promise<T> {
+/** One retry for transient failures of the hosted registry service, and a short cache of answers. */
+export function withRetryAndCache<T>(fn: (key: string) => Promise<T>, ttlMs: number) {
+  const cache = new Map<string, { at: number; v: T }>();
+  return async (key: string): Promise<T> => {
+    const hit = cache.get(key);
+    if (hit && Date.now() - hit.at < ttlMs) return hit.v;
+    const v = await fn(key).catch(() => new Promise((r) => setTimeout(r, 400)).then(() => fn(key)));
+    cache.set(key, { at: Date.now(), v });
+    return v;
+  };
+}
+
+const mcpCached = withRetryAndCache((key: string) => { const { name, args } = JSON.parse(key) as { name: string; args: object }; return mcpOnce(name, args); }, 30_000);
+const mcp = <T>(name: string, args: object) => mcpCached(JSON.stringify({ name, args })) as Promise<T>;
+
+async function mcpOnce(name: string, args: object): Promise<unknown> {
   const r = await fetch(MCP, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) });
   const raw = await r.text();
   const res = JSON.parse(raw.slice(raw.indexOf('{'))).result;
   if (res?.isError) throw new Error(res.content?.[0]?.text ?? `${name} failed`);
-  return JSON.parse(res.content[0].text) as T;
+  return JSON.parse(res.content[0].text);
 }
 
 export async function verifyEvmAgent(d: { message?: unknown; signature?: unknown; nonce?: unknown }, now = Date.now()) {

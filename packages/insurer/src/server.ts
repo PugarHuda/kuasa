@@ -248,6 +248,13 @@ app.post('/a2a', async (req, res) => json(res, await handleA2a(req.body, {
     sdk.AccountAddress.fromBase58(payer);
     return { onChain: await cover.coverOf(payer), policies: svc.state().policies.filter((p) => p.payer === payer) };
   },
+  object: async (d) => {
+    const proof = (d.proof ?? {}) as Record<string, unknown>;
+    const by = String(proof['x-kuasa-payer'] ?? '');
+    await svc.object(big(d.claimId), { by, reason: String(d.reason ?? ''), proof: (n: string) => (typeof proof[n] === 'string' ? (proof[n] as string) : undefined) });
+    audit.append({ kind: 'claim-objection', claimId: String(d.claimId), by, reason: String(d.reason ?? '').slice(0, 280) });
+    return { held: true };
+  },
   // Same rules as GET /cover/quote: the requester proves control of the payer (headers as fields of `proof`).
   quote: async (d) => {
     const proof = (d.proof ?? {}) as Record<string, unknown>;
@@ -347,6 +354,16 @@ app.get('/solvency', async (_req, res) => {
   try {
     json(res, await solvencyNow());
   } catch (e) { json(res, { error: (e as Error).message }, 502); }
+});
+
+/** Anyone who proves control of a Concordium account (x-kuasa-payer* headers, payer = objector) can hold an automatic payout. */
+app.post('/claims/:id/object', async (req, res) => {
+  const by = String(req.header('x-kuasa-payer') ?? '');
+  try {
+    await svc.object(big(req.params.id), { by, reason: String(req.body?.reason ?? ''), proof: (n: string) => req.header(n) });
+    audit.append({ kind: 'claim-objection', claimId: req.params.id, by, reason: String(req.body?.reason ?? '').slice(0, 280) });
+    json(res, { held: true });
+  } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
 
 /** A human takes a claim over (no automatic payout). */

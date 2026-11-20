@@ -8,6 +8,7 @@
     "@kuasa/chain": "workspace:*",
     "@kuasa/core": "workspace:*",
     "@kuasa/cover": "workspace:*",
+    "@kuasa/merchant": "workspace:*",
     "viem": "2.58.0"
   }
 }

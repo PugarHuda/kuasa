@@ -13,6 +13,7 @@ import { sha256Hex } from '@kuasa/core';
 import { isClaimId } from './validate.js';
 import { STEPS } from './demo.js';
 import { trace } from './ai-agent.js';
+import { draftReview, type Review } from './ai-review.js';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4022);
@@ -21,7 +22,7 @@ const INSURER = process.env.KUASA_INSURER_URL ?? 'http://localhost:4023';
 /** Calls the insurer's console-only routes (localhost + header). */
 const insurer = (path: string, init: RequestInit = {}) =>
   fetch(`${INSURER}${path}`, { ...init, headers: { 'x-kuasa-console': '1', 'content-type': 'application/json', ...(init.headers ?? {}) } });
-type State = { registry: string; cover?: string; agents: Record<string, string>; mandates: Record<string, { id: string; owner: string; payer: string; issueTx: string; proofAnchorTx: string }> };
+type State = { registry: string; cover?: string; shopAgent?: string; agents: Record<string, string>; mandates: Record<string, { id: string; owner: string; payer: string; issueTx: string; proofAnchorTx: string }> };
 const loadState = (): State => JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8'));
 const account = (name: string, n: number) => {
   const a = JSON.parse(readFileSync(new URL(`accounts/${name}.json`, ROOT), 'utf8')).accounts.find((x: { credNumber: number }) => x.credNumber === n);
@@ -159,6 +160,29 @@ app.post('/api/revoke/:name', async (req, res) => {
   try {
     const reason = await sha256Hex(`revoked from Kuasa console at ${new Date().toISOString()}`);
     json(res, { tx: (await registry.revoke(m.id, reason, account(req.params.name, 0))).hash });
+  } catch (e) { json(res, { error: (e as Error).message }, 500); }
+});
+
+/** AI-drafted review for a claim waiting for a human. Advisory only: it never decides or pays. */
+const reviews = new Map<string, Review>();
+app.get('/api/reviews', (_req, res) => json(res, Object.fromEntries(reviews)));
+app.post('/api/claims/:id/ai-review', async (req, res) => {
+  const id = String(req.params.id);
+  if (!isClaimId(id)) return json(res, { error: 'bad claim id' }, 400);
+  try {
+    const st = await (await insurer('/state')).json() as { claims: { claimId: string }[]; policies: { policyId: string }[] };
+    const claim = st.claims.find((c) => String(c.claimId) === id);
+    if (!claim) return json(res, { error: 'claim not assessed yet' }, 404);
+    const s = loadState();
+    const facts = {
+      claim,
+      policy: st.policies.find((p) => String(p.policyId) === String((claim as unknown as { policyId: string }).policyId)) ?? null,
+      merchantAttestation: s.shopAgent ? await cis8004GetMetadata(grpc, s.shopAgent, `kuasa:attest:${id}`) : null,
+      otherClaimsOfThisAgent: st.claims.filter((c) => String(c.claimId) !== id).map((c) => ({ claimId: String(c.claimId), ...(c as object) })).slice(-10),
+    };
+    const r = await draftReview(JSON.parse(JSON.stringify(facts, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))));
+    reviews.set(id, r);
+    json(res, r);
   } catch (e) { json(res, { error: (e as Error).message }, 500); }
 });
 
