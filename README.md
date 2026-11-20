@@ -2,7 +2,7 @@
 
 **Insurance for AI agent commerce, on Concordium.**
 
-**[Demo video (3 min)](https://youtu.be/SZ-K-HClFHo)** · **[Live explorer](https://kuasa-explorer.vercel.app)** · [Public A2A endpoint](docs/INTEGRATIONS.md#a2a-talking-to-the-insurer) · [Every testnet transaction](docs/TESTNET.md) · [Integrations (MCP, A2A, OpenAI Agents SDK)](docs/INTEGRATIONS.md)
+**[Demo video (3 min)](https://youtu.be/Tqe_CLniIl0)** · **[Live explorer](https://kuasa-explorer.vercel.app)** · [Public A2A endpoint](docs/INTEGRATIONS.md#a2a-talking-to-the-insurer) · [Every testnet transaction](docs/TESTNET.md) · [Integrations (MCP, A2A, OpenAI Agents SDK)](docs/INTEGRATIONS.md)
 
 AI agents can pay on their own now. When one makes a mistake, nobody carries the loss: an agent buys the same thing twice, gets something wrong or counterfeit, or harms a merchant. So owners hesitate to let agents spend, and merchants hesitate to sell to them. Conventional insurers are moving to explicit AI exclusions.
 
