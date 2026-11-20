@@ -441,3 +441,55 @@ test('a cancelled policy gets the unused premium back, pro rata, once; none afte
   await u.svc.refundCancelled();
   assert.ok(!u.calls.some((c) => c.startsWith('pay:')), 'no refund once a claim was paid');
 });
+
+test('refunds never double up with claims: no refund while a claim is live, no payout after a refund', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now });
+  await filedClaim(t, true, 0n); // policy 0, claim 0 assessed ok, not decided yet
+  const p = t.policies.get(0n)!;
+  now = Number(p.validFromMs) + 1000;
+  p.status = 'Cancelled';
+  await t.svc.refundCancelled();
+  assert.ok(!t.calls.some((c) => c.startsWith('pay:')), 'a live claim blocks the refund');
+
+  const u = harness({ now: () => now });
+  await filedClaim(u, true, 0n);
+  u.claims.get(0n)!.status = { tag: 'Assessed', ok: true } as never;
+  // the claim is rejected later -> the refund may go ahead; then an approval must not pay
+  await u.svc.decide(0n, false);
+  u.policies.get(0n)!.status = 'Cancelled';
+  await u.svc.refundCancelled();
+  assert.equal(u.calls.filter((c) => c.startsWith('pay:')).length, 1, 'refund after the claim was rejected');
+  await assert.rejects(u.svc.decide(0n, true), /rejected/);
+});
+
+test('concurrent refund runs pay once', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now });
+  const q = await quoteOk(t.svc);
+  t.svc.markSettled(q.quoteId);
+  const id = (await t.svc.issue(q.quoteId, h(9)))!;
+  t.policies.get(id)!.status = 'Cancelled';
+  now += 1000;
+  await Promise.all([t.svc.refundCancelled(), t.svc.refundCancelled()]);
+  assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 1);
+});
+
+test('a claim on a refunded policy is never paid', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now });
+  const q = await quoteOk(t.svc);
+  t.svc.markSettled(q.quoteId);
+  const id = (await t.svc.issue(q.quoteId, h(9)))!;
+  t.policies.get(id)!.status = 'Cancelled';
+  now += 1000;
+  await t.svc.refundCancelled();
+  // a claim filed before the cancellation shows up late
+  t.claims.set(5n, { policyId: id, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: h(12), orders: [h(15)], status: { tag: 'Filed' }, payout: 0n });
+  t.events.set('r5', { at: 1_000_500, events: [{ type: 'Receipt', owner: OWNER, id: h(7), order: h(15), paymentTx: h(9), amount: 24n * EUR, spent: 24n * EUR }] });
+  await t.svc.assessClaim(5n, ['r5']);
+  const d = await t.svc.decide(5n, true);
+  assert.equal(d.paid, undefined);
+  assert.match(d.reason ?? '', /refunded/);
+  assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 1, 'only the refund');
+});

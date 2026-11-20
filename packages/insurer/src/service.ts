@@ -101,6 +101,8 @@ export class InsurerService {
   private needsRefund: { quoteId: string; premiumTx: string; reason: string }[] = [];
   /** Unused premium returned when a holder cancels (pro rata, only if no claim was paid). */
   private refunds: { policyId: bigint; to: string; amount: bigint; tx?: string }[] = [];
+  private refunding = false;
+  private refunded = (policyId: bigint) => this.refunds.some((r) => r.policyId === policyId);
   private retrying = false;
   private assessing = new Set<bigint>();
   private claims = new Map<bigint, ClaimRecord>();
@@ -417,6 +419,10 @@ export class InsurerService {
       }
       if (rec.verdict === 'rejected') throw new Error('claim was rejected; it cannot be paid');
       if (!rec.assessment.ok) throw new Error('only positively assessed claims can be approved');
+      if (this.refunded(rec.policyId)) {
+        rec.autoPayAt = undefined;
+        return { decided: true as const, reason: 'the policy was cancelled and its unused premium refunded; this claim needs a manual review' };
+      }
       if (!rec.verdict) {
         await this.deps.cover.decide(claimId, true, this.deps.operator);
         rec.verdict = 'approved';
@@ -527,8 +533,20 @@ export class InsurerService {
    * paid a claim keeps its premium. Run periodically.
    */
   async refundCancelled() {
+    if (this.refunding) return; // one run at a time: a refund is never paid twice
+    this.refunding = true;
+    try {
+      await this.refundCancelledOnce();
+    } finally {
+      this.refunding = false;
+    }
+  }
+
+  private async refundCancelledOnce() {
     for (const rec of this.policies) {
-      if (this.refunds.some((r) => r.policyId === rec.policyId)) continue;
+      if (this.refunded(rec.policyId)) continue;
+      // Any claim on this policy that is not finally rejected keeps the premium: refund or payout, never both.
+      if ([...this.claims.values()].some((c) => c.policyId === rec.policyId && c.verdict !== 'rejected')) continue;
       const p = await this.deps.cover.policy(rec.policyId);
       if (!p || p.status !== 'Cancelled' || p.paidOut > 0n) continue;
       const now = BigInt(this.deps.now());
