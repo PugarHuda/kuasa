@@ -1,8 +1,8 @@
 AI agents can now pay for things. But when an agent gets it wrong, who carries the loss? Kuasa Cover makes agent commerce insurable, on Concordium.
-Here a real AI agent, Claude, shops for Alice, using only the Kuasa tools. The shop sells wine only to insured agents, so the first purchase is refused before any money moves. The agent works it out by itself: it buys Kuasa Cover over x402, priced from on-chain facts, and the insurer writes the policy to the cover contract. Then it retries, and the purchase goes through.
+Here a real AI agent, Claude, shops for Alice, using only the Kuasa tools. Its whole task is: buy one bottle of Rioja. Nobody mentions insurance. The shop answers that cover is required, so the agent prices the smallest cover that fits, twenty-four euros, buys it over x402, and completes the purchase. This agent has claimed before, so its premium is doubled.
 A sixteen-year-old's agent tries the same wine. No over-eighteen proof exists, so it is refused. The shop never sees a birth date.
-Alice publishes the policy on her agent's entry in Concordium's Agent Registry, so any merchant can see it is insured.
+Alice publishes the policy in Concordium's Agent Registry, with the agent's claims history, so any merchant can check it.
 Now a simulated retry bug repeats the checkout. Alice is charged twice for one bottle, and both payments leave receipts on-chain.
-The agent reviews its own payments, spots the double charge, and files a claim by itself, with a sponsored transaction. The assessor matches both receipts on-chain and recommends twenty-three euros.
+Asked only to check its purchases and sort out anything wrong, the agent finds the double charge and files a claim by itself, with a sponsored transaction. The assessor matches both receipts on-chain and recommends twenty-three euros.
 This is tiered autonomy. Small claims, up to ten euros, are paid automatically after an objection window. This one is bigger, so a human approves it. Escrow protects you from bad sellers. Kuasa Cover protects you from your own agent.
-And everything is verifiable: a valid Verified by Concordium badge, and a public proof of solvency, computed from the cover contract. Kuasa Cover. Insurance for the agent economy.
+And everything is verifiable: a valid Verified by Concordium badge, a public explorer that recomputes solvency from the contract, and an insurer other agents can reach over A2A. Kuasa Cover. Insurance for the agent economy.
