@@ -213,6 +213,14 @@ export class KuasaGuard {
   settleFailed = async (ctx: { paymentPayload: { payload: unknown } }) => {
     this.inFlight.delete(paymentKey(ctx.paymentPayload.payload).key);
   };
+  /** x402 `onVerifyFailure` (verification threw, e.g. the facilitator was unreachable): release. */
+  verifyFailed = this.settleFailed;
+  /** x402 `onVerifiedPaymentCanceled`: release. */
+  verifiedCanceled = this.settleFailed;
+  /** x402 `onAfterVerify`: release when the facilitator found the payment invalid. */
+  afterVerify = async (ctx: { paymentPayload: { payload: unknown }; result: { isValid: boolean } }) => {
+    if (!ctx.result.isValid) await this.settleFailed(ctx);
+  };
 
   /** x402 `onAfterSettle`: anchor the receipt and draw down the on-chain budget. */
   afterSettle = async (ctx: { paymentPayload: { payload: unknown }; requirements: { payTo: string; asset: string; amount: string }; result: { transaction: string; success?: boolean } }) => {

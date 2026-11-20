@@ -7718,11 +7718,13 @@ function solvency({ pool, now, policies, claims }) {
 }
 
 // src/chain.ts
-var COVER = ContractAddress.create(13066n, 0n);
+var COVER_V1 = 13066n;
+var COVERS = [COVER_V1, 13100n];
+var CURRENT = COVERS[COVERS.length - 1];
 var POOL = "3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut";
 var grpc = new ConcordiumGRPCWebClient("https://grpc.testnet.concordium.com", 2e4);
-async function viewCover(method, param) {
-  const r = await grpc.invokeContract({ contract: COVER, method: ReceiveName.fromString(`kuasa_cover.${method}`), parameter: Parameter.fromBuffer(param.slice().buffer) });
+async function viewCover(method, param, cover = CURRENT) {
+  const r = await grpc.invokeContract({ contract: ContractAddress.create(cover, 0n), method: ReceiveName.fromString(`kuasa_cover.${method}`), parameter: Parameter.fromBuffer(param.slice().buffer) });
   if (r.tag !== "success" || !r.returnValue) throw new Error(`${method} failed`);
   return new Uint8Array(ReturnValue.toBuffer(r.returnValue));
 }
@@ -7735,12 +7737,22 @@ async function all(read) {
   }
   return out;
 }
-async function scan() {
+async function scanBook(cover) {
   const [policies, claims] = await Promise.all([
-    all((id) => viewCover("policy", encodeU64(id)).then(decodePolicy)),
-    all((id) => viewCover("claim", encodeU64(id)).then(decodeClaim))
+    all((id) => viewCover("policy", encodeU64(id), cover).then(decodePolicy)),
+    all((id) => viewCover("claim", encodeU64(id), cover).then(decodeClaim))
   ]);
-  return { policies, claims };
+  return { cover, policies, claims };
+}
+async function scan() {
+  const books = await Promise.all(COVERS.map(scanBook));
+  return {
+    books,
+    policies: books.flatMap((b) => b.policies),
+    claims: books.flatMap((b) => b.claims),
+    policyRefs: books.flatMap((b) => b.policies.map((_, id) => ({ cover: b.cover, id }))),
+    claimRefs: books.flatMap((b) => b.claims.map((_, id) => ({ cover: b.cover, id })))
+  };
 }
 async function poolBalance() {
   const info = await grpc.getAccountInfo(AccountAddress2.fromBase58(POOL));
@@ -7753,13 +7765,13 @@ async function solvencyNow(s) {
 }
 async function riskOf(payer) {
   AccountAddress2.fromBase58(payer);
-  const { policies, claims } = await scan();
-  const paidClaims = claims.filter((c) => c.status.tag === "Paid" && policies[Number(c.policyId)]?.agentPayer === payer).length;
-  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: "kuasa-cover <13066,0>" };
+  const { books } = await scan();
+  const paidClaims = books.reduce((n, b) => n + b.claims.filter((c) => c.status.tag === "Paid" && b.policies[Number(c.policyId)]?.agentPayer === payer).length, 0);
+  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: COVERS.map((c) => `kuasa-cover <${c},0>`).join(" + ") };
 }
-async function coverOf(payer) {
+async function coverOf(payer, cover = CURRENT) {
   AccountAddress2.fromBase58(payer);
-  return decodeCoverView(await viewCover("coverOf", encodeCoverQuery(payer)));
+  return decodeCoverView(await viewCover("coverOf", encodeCoverQuery(payer), cover));
 }
 var REGISTRY = ContractAddress.create(12802n, 0n);
 
@@ -7912,9 +7924,10 @@ async function verifyEvmAgent(d, now = Date.now()) {
     mcp("get_metadata", { network: "testnet", token_id: agent.token_id, key: "kuasa:cover" }).catch(() => null)
   ]);
   const policyId = coverMeta?.value_text?.match(/^policy=(\d+);/)?.[1];
-  const found = policyId ? decodePolicy(await viewCover("policy", encodeU64(BigInt(policyId)))) : null;
+  const coverIdx = BigInt(coverMeta?.value_text?.match(/;cover=(d+)./)?.[1] ?? COVER_V1);
+  const found = policyId && COVERS.includes(coverIdx) ? decodePolicy(await viewCover("policy", encodeU64(BigInt(policyId)), coverIdx)) : null;
   const policy = found && coverBindsToAgent(found, agent) ? found : null;
-  const cover = policy ? await coverOf(policy.agentPayer) : null;
+  const cover = policy ? await coverOf(policy.agentPayer, coverIdx) : null;
   return {
     nonce,
     evmAddress,

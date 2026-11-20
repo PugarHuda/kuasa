@@ -82,6 +82,14 @@ if (!state.registry) {
 const registry = new KuasaRegistry(grpc, BigInt(state.registry));
 
 // 1b. Kuasa Cover contract (books for policies and claims; operator = insurer #1)
+// --cover-v2 deploys the v2 module (automation rules enforced on-chain) next to the v1 instance,
+// which is kept as coverV1 for its history.
+if (process.argv.includes('--cover-v2') && !(state as { coverV1?: string }).coverV1) {
+  Object.assign(state, { coverV1: state.cover, coverV1ModuleRef: state.coverModuleRef });
+  state.cover = undefined as never;
+  state.coverModuleRef = undefined;
+  save();
+}
 if (!state.cover) {
   const source = new Uint8Array(readFileSync(new URL('../contracts/kuasa-cover/concordium-out/module.wasm.v1', import.meta.url)));
   if (!state.coverModuleRef) {
@@ -92,8 +100,10 @@ if (!state.cover) {
     save();
     log('cover module', state.coverModuleRef, r.hash);
   }
-  // InitParams { operator: AccountAddress, registry: ContractAddress }
-  const init = new Uint8Array([...insurerOperator.address.decodedAddress, ...new Uint8Array(new BigUint64Array([BigInt(state.registry), 0n]).buffer)]);
+  // InitParams { operator, registry, auto_pay_limit: u64, objection_window_ms: u64 } (v2)
+  const AUTO_PAY_LIMIT = BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000);
+  const OBJECTION_WINDOW_MS = BigInt(process.env.KUASA_AUTOPAY_DELAY_MS ?? 120_000);
+  const init = new Uint8Array([...insurerOperator.address.decodedAddress, ...new Uint8Array(new BigUint64Array([BigInt(state.registry), 0n, AUTO_PAY_LIMIT, OBJECTION_WINDOW_MS]).buffer)]);
   const r = await submit(grpc, Transaction.initContract({
     amount: sdk.CcdAmount.zero(), moduleRef: sdk.ModuleReference.fromHexString(state.coverModuleRef),
     initName: sdk.ContractName.fromString('kuasa_cover'), param: sdk.Parameter.fromBuffer(ab(init)),

@@ -21,7 +21,7 @@ import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/se
 import { solvency } from '@kuasa/cover';
 import { handleA2a } from './a2a.js';
 import { CapitalLedger, isCapitalMemo } from './capital.js';
-import { AuditLog, bigintJson, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
+import { AuditLog, bigintJson, cis8004SetMetadata, claimKey, COVER_V1, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyPayerProof } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
@@ -33,7 +33,7 @@ const PORT = Number(process.env.PORT ?? 4023);
 const PUBLIC_URL = process.env.KUASA_INSURER_URL ?? `http://localhost:${PORT}`;
 const SHOP_ORIGIN = process.env.KUASA_SHOP_URL ?? 'http://localhost:4021';
 const ASSET = process.env.KUASA_ASSET ?? 'EUDemo';
-const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover: string; insurerAgent?: string };
+const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover: string; coverV1?: string; insurerAgent?: string };
 const accounts = JSON.parse(readFileSync(new URL('accounts/insurer.json', ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const treasuryAcc = accounts.find((a) => a.credNumber === 0)!;
 const operatorAcc = accounts.find((a) => a.credNumber === 1)!;
@@ -72,7 +72,7 @@ const ap2Of = (v: unknown) => { try { return v ? JSON.parse(Buffer.from(String(v
 function publishDecision(claimId: bigint | string, by: 'auto' | 'human', verdict: 'approved' | 'rejected', paid?: string) {
   if (!state.insurerAgent) return;
   const value = `by=${by};verdict=${verdict};paid=${paid ?? '-'};at=${Math.floor(Date.now() / 1000)}`;
-  void cis8004SetMetadata(grpc, state.insurerAgent, `kuasa:decision:${claimId}`, value, treasury)
+  void cis8004SetMetadata(grpc, state.insurerAgent, claimKey('decision', state.cover, claimId), value, treasury)
     .catch((e) => console.error('[insurer] publishing decision failed', String(claimId), (e as Error).message));
 }
 
@@ -81,6 +81,13 @@ const registryIndex = BigInt(state.registry);
 const coverIndex = BigInt(state.cover);
 const registry = new KuasaRegistry(grpc, registryIndex);
 const cover = new KuasaCover(grpc, coverIndex);
+/** The version comes from configuration (any instance after v1 is v2); a v2 contract's rules are mandatory. */
+const isV2 = coverIndex !== COVER_V1;
+let rules: Awaited<ReturnType<KuasaCover['rules']>> = null;
+for (let i = 0; isV2 && !rules && i < 5; i++) { rules = await cover.rules(); if (!rules) await new Promise((r) => setTimeout(r, 2000)); }
+if (isV2 && !rules) throw new Error(`cannot read the automation rules of kuasa-cover <${coverIndex},0>; refusing to start`);
+const AUTO_PAY_LIMIT = rules?.autoPayLimit ?? BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000);
+const AUTO_PAY_DELAY_MS = rules?.objectionWindowMs ?? Number(process.env.KUASA_AUTOPAY_DELAY_MS ?? 120_000);
 const fetchDoc = (url: string) => safeFetchText(url, { localOrigin: SHOP_ORIGIN });
 const disclosureDir = new URL('disclosures/', ROOT);
 
@@ -109,6 +116,7 @@ const svc = new InsurerService({
     issuePolicy: async (p) => { const r = await cover.issuePolicy(p, operator); return { hash: r.hash, id: KuasaCover.idFromEvents(r.summary, coverIndex) }; },
     policy: (id) => cover.policy(id),
     claim: (id) => cover.claim(id),
+    ...(rules ? { autoApprove: (id: bigint) => cover.autoApprove(id, operator) } : {}),
     assess: (id, ok, reason) => cover.assess(id, ok, reason, operator),
     decide: (id, approve) => cover.decide(id, approve, operator),
     recordPayout: (id, tx, amount) => cover.recordPayout(id, tx, amount, operator),
@@ -126,11 +134,10 @@ const svc = new InsurerService({
   registryEvents: (tx) => registryEventsOfTx(grpc, tx, registryIndex),
   treasuryBalance: () => eudemoBalance(treasury.address.address),
   paidClaims: async (payer) => {
-    const { policies, claims } = await scanCover();
-    return claims.filter((c) => c.status.tag === 'Paid' && policies[Number(c.policyId)]?.agentPayer === payer).length;
+    return paidClaimsOf(payer);
   },
-  autoPayLimit: BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000), // 10 EUDemo: smaller claims pay after the objection window
-  autoPayDelayMs: Number(process.env.KUASA_AUTOPAY_DELAY_MS ?? 120_000),
+  autoPayLimit: AUTO_PAY_LIMIT, // smaller claims pay after the objection window (enforced by a v2 contract)
+  autoPayDelayMs: AUTO_PAY_DELAY_MS,
   pay: (to, amount, memo) => treasuryPay(to, amount, memo), // submitted; txOutcome confirms it
   txOutcome: (hash) => txOutcomeOf(hash),
   saveDisclosure: async (doc) => {
@@ -188,6 +195,7 @@ server.onAfterSettle((async (ctx: Parameters<KuasaGuard['afterSettle']>[0]) => {
     audit.append({ kind: 'premium', payer: payerOf(ctx), amount: ctx.requirements.amount, premiumTx: ctx.result.transaction, policyId });
   }
 }) as never);
+server.onAfterVerify(guard.afterVerify as never).onVerifyFailure(guard.verifyFailed as never).onVerifiedPaymentCanceled(guard.verifiedCanceled as never);
 server.onSettleFailure((async (ctx: Parameters<KuasaGuard['settleFailed']>[0]) => {
   await guard.settleFailed(ctx);
   svc.releaseQuote(quoteIdOf(ctx)); // the premium did not settle: the quote may be paid again
@@ -236,16 +244,15 @@ app.get('/cover/status', async (req, res) => {
 /** Experience rating inputs, recomputed from the cover contract (public: it is all on-chain). */
 async function riskOf(payer: string) {
   sdk.AccountAddress.fromBase58(payer); // throws on a bad address
-  const { policies, claims } = await scanCover();
-  const paidClaims = claims.filter((c) => c.status.tag === 'Paid' && policies[Number(c.policyId)]?.agentPayer === payer).length;
-  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: `kuasa-cover <${state.cover},0>` };
+  const paidClaims = await paidClaimsOf(payer);
+  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: books.map((b) => `kuasa-cover <${b.address.index},0>`).join(" + ") };
 }
 app.get('/risk/:payer', async (req, res) => { try { json(res, await riskOf(req.params.payer)); } catch (e) { json(res, { error: (e as Error).message }, 400); } });
 
 async function solvencyNow() {
   const { policies, claims } = await scanCover();
   const s = solvency({ pool: await eudemoBalance(treasury.address.address), now: Date.now(), policies, claims: claims.map((c) => ({ status: c.status.tag })) });
-  return { ...s, cover: `<${state.cover},0>`, treasury: treasury.address.address, asset: ASSET, autoPayLimit: String(BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000)) };
+  return { ...s, cover: `<${state.cover},0>`, treasury: treasury.address.address, asset: ASSET, autoPayLimit: String(AUTO_PAY_LIMIT), objectionWindowMs: AUTO_PAY_DELAY_MS, rulesEnforcedOnChain: !!rules };
 }
 
 /** The insurer as an agent: its badged Agent Card, and A2A message/send for the skills on it. */
@@ -353,16 +360,23 @@ app.post('/disclosures/:id/approve', consoleOnly, async (req, res) => {
 });
 
 /** Every policy and claim on the cover contract (ids are sequential), cached for 30 s. */
-let scanned: { at: number; policies: NonNullable<Awaited<ReturnType<KuasaCover['policy']>>>[]; claims: NonNullable<Awaited<ReturnType<KuasaCover['claim']>>>[] } | undefined;
+let scanned: { at: number; per: { policies: NonNullable<Awaited<ReturnType<KuasaCover['policy']>>>[]; claims: NonNullable<Awaited<ReturnType<KuasaCover['claim']>>>[] }[]; policies: NonNullable<Awaited<ReturnType<KuasaCover['policy']>>>[]; claims: NonNullable<Awaited<ReturnType<KuasaCover['claim']>>>[] } | undefined;
+const books = [cover, ...(state.coverV1 && BigInt(state.coverV1) !== coverIndex ? [new KuasaCover(grpc, BigInt(state.coverV1))] : [])];
 async function scanCover() {
   if (scanned && Date.now() - scanned.at < 30_000) return scanned;
-  const policies = [];
-  for (let i = 0n; ; i++) { const p = await cover.policy(i); if (!p) break; policies.push(p); }
-  const claims = [];
-  for (let i = 0n; ; i++) { const c = await cover.claim(i); if (!c) break; claims.push(c); }
-  scanned = { at: Date.now(), policies, claims };
+  const per: { policies: NonNullable<Awaited<ReturnType<KuasaCover['policy']>>>[]; claims: NonNullable<Awaited<ReturnType<KuasaCover['claim']>>>[] }[] = [];
+  for (const c of books) {
+    const policies = [];
+    for (let i = 0n; ; i++) { const p = await c.policy(i); if (!p) break; policies.push(p); }
+    const claims = [];
+    for (let i = 0n; ; i++) { const x = await c.claim(i); if (!x) break; claims.push(x); }
+    per.push({ policies, claims });
+  }
+  scanned = { at: Date.now(), per, policies: per.flatMap((b) => b.policies), claims: per.flatMap((b) => b.claims) };
   return scanned;
 }
+/** Paid claims of an agent payer, across every cover contract (policy ids are per contract). */
+const paidClaimsOf = async (payer: string) => (await scanCover()).per.reduce((n, b) => n + b.claims.filter((c) => c.status.tag === 'Paid' && b.policies[Number(c.policyId)]?.agentPayer === payer).length, 0);
 
 /** Public proof of solvency: pool vs the cover still owed by live policies, from on-chain data. */
 app.get('/solvency', async (_req, res) => {
@@ -376,11 +390,16 @@ app.get('/solvency', async (_req, res) => {
  * reconciled into it every 15 s. Deposits are plain EUDemo transfers into the pool, verified on-chain.
  */
 const CAPITAL_FILE = new URL('capital.json', ROOT);
-const capitalSnap = existsSync(CAPITAL_FILE) ? fromJsonBig(readFileSync(CAPITAL_FILE, 'utf8')) as { ledger: ReturnType<CapitalLedger['snapshot']>; premiumsSeen: bigint; outSeen: bigint } : undefined;
+const capitalSnap = existsSync(CAPITAL_FILE) ? fromJsonBig(readFileSync(CAPITAL_FILE, 'utf8')) as { ledger: ReturnType<CapitalLedger['snapshot']>; premiumsSeen: bigint; outSeen: bigint; pending?: { provider: string; amount: bigint; tx: string }[]; cover?: string } : undefined;
+/** Withdrawals submitted but not yet final (persisted; re-checked on startup). */
+const pendingWithdrawals: { provider: string; amount: bigint; tx: string }[] = capitalSnap?.pending ?? [];
 const capital = new CapitalLedger(capitalSnap?.ledger);
-let premiumsSeen = capitalSnap?.premiumsSeen ?? 0n;
-let outSeen = capitalSnap?.outSeen ?? 0n;
-const saveCapital = () => { const tmp = new URL('capital.json.tmp', ROOT); writeFileSync(tmp, toJsonBig({ ledger: capital.snapshot(), premiumsSeen, outSeen })); renameSync(tmp, CAPITAL_FILE); };
+// The seen-counters follow the insurer state of one cover contract; a new contract starts them at zero
+// (provider balances are about the pool and carry over). A snapshot without `cover` predates v2: it is v1's.
+const sameCover = (capitalSnap?.cover ?? String(COVER_V1)) === state.cover;
+let premiumsSeen = sameCover ? capitalSnap?.premiumsSeen ?? 0n : 0n;
+let outSeen = sameCover ? capitalSnap?.outSeen ?? 0n : 0n;
+const saveCapital = () => { const tmp = new URL('capital.json.tmp', ROOT); writeFileSync(tmp, toJsonBig({ ledger: capital.snapshot(), premiumsSeen, outSeen, pending: pendingWithdrawals, cover: state.cover })); renameSync(tmp, CAPITAL_FILE); };
 function reconcileCapital() {
   const st = svc.state();
   const out = st.payouts.reduce((a, p) => a + p.amount, 0n) + st.refunds.reduce((a, r) => a + (r.tx ? r.amount : 0n), 0n);
@@ -402,7 +421,25 @@ void (async () => {
 /** Capital operations run one at a time (deposits, withdrawals and their reconciliation). */
 let capitalLock: Promise<unknown> = Promise.resolve();
 const serialCapital = <T>(fn: () => Promise<T>) => { const r = capitalLock.then(fn); capitalLock = r.catch(() => undefined); return r; };
-let pendingOut = 0n; // withdrawals submitted but not yet final
+const pendingOut = () => pendingWithdrawals.reduce((a, p) => a + p.amount, 0n); // withdrawals submitted but not yet final
+/** Settle a pending withdrawal once final: drop it, and roll it back if it failed. Retries on any error. */
+function watchWithdrawal(p: { provider: string; amount: bigint; tx: string }) {
+  const settle = async () => {
+    const o = await txOutcomeOf(p.tx);
+    if (o === 'pending') { setTimeout(run, 30_000); return; }
+    await serialCapital(async () => {
+      const i = pendingWithdrawals.indexOf(p);
+      if (i < 0) return; // already settled by an earlier run
+      pendingWithdrawals.splice(i, 1);
+      if (o === 'failed') capital.unwithdraw(p.provider, p.amount);
+      saveCapital();
+    });
+    audit.append({ kind: 'capital-withdrawal-settled', provider: p.provider, amount: String(p.amount), tx: p.tx, outcome: o });
+  };
+  const run = () => { settle().catch(() => setTimeout(run, 30_000)); };
+  setTimeout(run, 30_000);
+}
+for (const p of pendingWithdrawals) watchWithdrawal(p); // re-check after a restart
 const LOCKUP_MS = Number(process.env.KUASA_CAPITAL_LOCKUP_MS ?? 7 * 86_400_000);
 /** Premium payments also land in the pool; they are never capital. */
 const isPremiumTx = (tx: string) => { const st = svc.state(); return [...st.policies, ...st.unissued, ...st.needsRefund].some((p) => (p as { premiumTx?: string }).premiumTx === tx); };
@@ -447,7 +484,7 @@ app.post('/capital/withdraw', async (req, res) => {
     const paid = await serialCapital(async () => {
       reconcileCapital();
       const sv = await solvencyNow();
-      capital.withdraw(provider, amount, { pool: sv.pool - pendingOut, exposure: sv.exposure }, Date.now(), LOCKUP_MS); // in-flight withdrawals already left
+      capital.withdraw(provider, amount, { pool: sv.pool - pendingOut(), exposure: sv.exposure }, Date.now(), LOCKUP_MS); // in-flight withdrawals already left
       saveCapital();
       let hash: string;
       try {
@@ -467,17 +504,10 @@ app.post('/capital/withdraw', async (req, res) => {
       }
       if (outcome === 'pending') {
         audit.append({ kind: 'capital-withdrawal-pending', provider, amount: String(amount), tx: hash });
-        pendingOut += amount;
-        const settle = async () => {
-          const o = await txOutcomeOf(hash);
-          if (o === 'pending') { setTimeout(() => void settle(), 30_000); return; }
-          await serialCapital(async () => {
-            pendingOut -= amount;
-            if (o === 'failed') { capital.unwithdraw(provider, amount); saveCapital(); }
-          });
-          audit.append({ kind: 'capital-withdrawal-settled', provider, amount: String(amount), tx: hash, outcome: o });
-        };
-        setTimeout(() => void settle(), 30_000);
+        const p = { provider, amount, tx: hash };
+        pendingWithdrawals.push(p);
+        saveCapital();
+        watchWithdrawal(p);
       }
       return hash;
     });
@@ -514,7 +544,7 @@ setInterval(() => {
     for (const c of svc.state().claims) {
       if (c.decidedBy !== 'auto' || !c.paid || autoAudited.has(String(c.claimId))) continue;
       autoAudited.add(String(c.claimId));
-      audit.append({ kind: 'claim-decided', claimId: String(c.claimId), approve: true, by: 'automatic (below the auto-pay limit, objection window passed)', paid: c.paid });
+      audit.append({ kind: 'claim-decided', claimId: String(c.claimId), approve: true, by: c.autoApproveTx ? 'automatic, accepted on-chain by the contract rules (autoApprove)' : 'automatic (below the auto-pay limit, objection window passed)', autoApproveTx: c.autoApproveTx, paid: c.paid });
       publishDecision(c.claimId, 'auto', 'approved', c.paid);
     }
   });

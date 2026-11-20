@@ -8,7 +8,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import * as sdk from '@concordium/web-sdk';
-import { cis8004GetMetadata, cis8004SetMetadata, connect, KuasaCover, registryEventsOfTx, wallet } from '@kuasa/chain';
+import { cis8004GetMetadata, cis8004SetMetadata, claimKey, connect, KuasaCover, registryEventsOfTx, wallet } from '@kuasa/chain';
 import { loadProfile } from './lib/identity.js';
 
 const root = new URL('../.kuasa/', import.meta.url);
@@ -44,7 +44,7 @@ const backed = new Set<string>();
 for (let id = 0n; ; id++) {
   const c = await cover.claim(id);
   if (!c) break;
-  const key = `kuasa:attest:${id}`;
+  const key = claimKey('attest', state.cover, id);
   const prior = await cis8004GetMetadata(grpc, state.shopAgent, key);
   // An order counts only if it was sold under the mandate of the policy being claimed on.
   const policy = await cover.policy(c.policyId);

@@ -600,3 +600,26 @@ test('isPaying: a premium from this payer is settling', async () => {
   assert.equal(t.svc.isPaying(PAYER), true);
   assert.equal(t.svc.isPaying(SHOP), false);
 });
+
+test('v2: automatic approval goes through the contract; if the contract refuses, a human decides', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
+  const approved: bigint[] = [];
+  t.svc['deps'].cover.autoApprove = async (id: bigint) => { approved.push(id); t.claims.get(id)!.status = { tag: 'Approved' }; return { hash: 'tx', summary: {} }; };
+  await filedClaim(t, true, 0n, 'MerchantLoss');
+  now += 200_000;
+  await t.svc.runAutoPay();
+  assert.deepEqual(approved, [0n]);
+  assert.ok(!t.calls.includes('decide:0:true'), 'not the human decision entrypoint');
+  assert.ok(t.calls.some((c) => c.startsWith('pay:')));
+
+  const u = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
+  u.svc['deps'].cover.autoApprove = async () => { throw new Error('rejected: Unauthorized (objected)'); };
+  await filedClaim(u, true, 0n, 'MerchantLoss');
+  now += 200_000;
+  await u.svc.runAutoPay();
+  const rec = u.svc.state().claims[0];
+  assert.equal(rec.held, true);
+  assert.equal(rec.autoPayAt, undefined);
+  assert.ok(!u.calls.some((c) => c.startsWith('pay:')));
+});
