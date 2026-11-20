@@ -565,18 +565,19 @@ test('rejecting a claim cancels auto-pay of later claims on the same orders', as
   assert.ok(!t.calls.some((c) => c.startsWith('pay:')));
 });
 
-test('objections: a proven party can hold an automatic payout during the window; a human then decides', async () => {
+test('objections: a proven party to the claim can hold an automatic payout; a human then decides', async () => {
   let now = 1_000_000;
   let proofOk = true;
   const t = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000, verifyPayer: async () => proofOk });
   await filedClaim(t, true, 0n, 'MerchantLoss');
+  await assert.rejects(t.svc.object(0n, { by: SHOP, reason: 'not my business', proof: {} }), /party to this claim/, 'strangers cannot hold payouts');
   proofOk = false;
-  await assert.rejects(t.svc.object(0n, { by: SHOP, reason: 'never delivered', proof: {} }), /proof/);
+  await assert.rejects(t.svc.object(0n, { by: OPERATOR, reason: 'never delivered', proof: {} }), /proof/);
   proofOk = true;
-  await t.svc.object(0n, { by: SHOP, reason: 'the goods were returned unused', proof: {} });
+  await t.svc.object(0n, { by: OPERATOR, reason: 'the goods were returned unused', proof: {} }); // the mandate's recorder (the shop)
   const rec = t.svc.state().claims[0];
   assert.equal(rec.autoPayAt, undefined, 'held');
-  assert.equal(rec.objections?.[0].by, SHOP);
+  assert.equal(rec.objections?.[0].by, OPERATOR);
   now += 1_000_000;
   await t.svc.runAutoPay();
   assert.ok(!t.calls.some((c) => c.startsWith('pay:')));
@@ -587,6 +588,6 @@ test('objections are limited per objector', async () => {
   let now = 1_000_000;
   const t = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
   for (let i = 0n; i < 4n; i++) await filedClaim(t, true, i, 'MerchantLoss');
-  for (let i = 0n; i < 3n; i++) await t.svc.object(i, { by: SHOP, reason: 'x', proof: {} });
-  await assert.rejects(t.svc.object(3n, { by: SHOP, reason: 'x', proof: {} }), /too many objections/);
+  for (let i = 0n; i < 3n; i++) await t.svc.object(i, { by: OPERATOR, reason: 'x', proof: {} });
+  await assert.rejects(t.svc.object(3n, { by: OPERATOR, reason: 'x', proof: {} }), /too many objections/);
 });

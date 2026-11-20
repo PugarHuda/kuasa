@@ -19,6 +19,7 @@ import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exa
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
 import { solvency } from '@kuasa/cover';
 import { handleA2a } from './a2a.js';
+import { CapitalLedger } from './capital.js';
 import { AuditLog, bigintJson, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyPayerProof } from '@kuasa/merchant';
@@ -37,6 +38,16 @@ const treasuryAcc = accounts.find((a) => a.credNumber === 0)!;
 const operatorAcc = accounts.find((a) => a.credNumber === 1)!;
 const treasury = wallet(treasuryAcc.address, treasuryAcc.key);
 const operator = wallet(operatorAcc.address, operatorAcc.key);
+/** EUDemo out of the pool (claim payouts, refunds, capital withdrawals); returns the submitted hash. */
+async function treasuryPay(to: string, amount: bigint, memo: string) {
+  const token = await sdk.Token.fromId(grpc, sdk.TokenId.fromString(ASSET));
+  const hash = await sdk.Token.transfer(token, treasury.address,
+    { recipient: sdk.AccountAddress.fromBase58(to), amount: sdk.TokenAmount.create(amount, 6), memo: sdk.CborMemo.fromString(memo) },
+    treasury.signer, undefined, { autoScale: false, validate: true });
+  return sdk.TransactionHash.toHexString(hash);
+}
+const toJsonBig = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? { $big: x.toString() } : x));
+const fromJsonBig = (t: string) => JSON.parse(t, (_k, x) => (x && typeof x === 'object' && typeof x.$big === 'string' && Object.keys(x).length === 1 ? BigInt(x.$big) : x));
 const AP2_MERCHANTS: Record<string, string> = {
   'Kuasa Cover': treasuryAcc.address,
   ...(existsSync(new URL('accounts/merchant.json', ROOT)) ? { 'Kuasa demo shop': JSON.parse(readFileSync(new URL('accounts/merchant.json', ROOT), 'utf8')).accounts.find((a: { credNumber: number }) => a.credNumber === 0).address } : {}),
@@ -110,13 +121,7 @@ const svc = new InsurerService({
   },
   autoPayLimit: BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000), // 10 EUDemo: smaller claims pay after the objection window
   autoPayDelayMs: Number(process.env.KUASA_AUTOPAY_DELAY_MS ?? 120_000),
-  pay: async (to, amount, memo) => {
-    const token = await sdk.Token.fromId(grpc, sdk.TokenId.fromString(ASSET));
-    const hash = await sdk.Token.transfer(token, treasury.address,
-      { recipient: sdk.AccountAddress.fromBase58(to), amount: sdk.TokenAmount.create(amount, 6), memo: sdk.CborMemo.fromString(memo) },
-      treasury.signer, undefined, { autoScale: false, validate: true });
-    return sdk.TransactionHash.toHexString(hash); // submitted; txOutcome confirms it
-  },
+  pay: (to, amount, memo) => treasuryPay(to, amount, memo), // submitted; txOutcome confirms it
   txOutcome: async (hash) => {
     const tx = sdk.TransactionHash.fromHexString(hash);
     const done = await Promise.race([grpc.waitForTransactionFinalization(tx).then(() => true), new Promise<false>((r) => setTimeout(() => r(false), 30_000))]).catch(() => false);
@@ -242,6 +247,7 @@ const CARD = new URL('../../../docs/agents/insurer.json', import.meta.url);
 app.get('/.well-known/agent-card.json', (_req, res) => (existsSync(CARD) ? res.type('json').send(readFileSync(CARD, 'utf8')) : json(res, { error: 'card not built' }, 404)));
 app.post('/a2a', async (req, res) => json(res, await handleA2a(req.body, {
   solvency: () => solvencyNow(),
+  capital: () => capitalView(),
   risk: async (d) => riskOf(String(d.payer ?? '')),
   'cover-status': async (d) => {
     const payer = String(d.payer ?? '');
@@ -354,6 +360,74 @@ app.get('/solvency', async (_req, res) => {
   try {
     json(res, await solvencyNow());
   } catch (e) { json(res, { error: (e as Error).message }, 502); }
+});
+
+/**
+ * Capital providers. The ledger is kept next to the insurer state; premiums, payouts and refunds are
+ * reconciled into it every 15 s. Deposits are plain EUDemo transfers into the pool, verified on-chain.
+ */
+const CAPITAL_FILE = new URL('capital.json', ROOT);
+const capitalSnap = existsSync(CAPITAL_FILE) ? fromJsonBig(readFileSync(CAPITAL_FILE, 'utf8')) as { ledger: ReturnType<CapitalLedger['snapshot']>; premiumsSeen: bigint; outSeen: bigint } : undefined;
+const capital = new CapitalLedger(capitalSnap?.ledger);
+let premiumsSeen = capitalSnap?.premiumsSeen ?? 0n;
+let outSeen = capitalSnap?.outSeen ?? 0n;
+const saveCapital = () => { const tmp = new URL('capital.json.tmp', ROOT); writeFileSync(tmp, toJsonBig({ ledger: capital.snapshot(), premiumsSeen, outSeen })); renameSync(tmp, CAPITAL_FILE); };
+function reconcileCapital() {
+  const st = svc.state();
+  const out = st.payouts.reduce((a, p) => a + p.amount, 0n) + st.refunds.reduce((a, r) => a + (r.tx ? r.amount : 0n), 0n);
+  if (st.premiumsIn > premiumsSeen) { capital.onPremium(st.premiumsIn - premiumsSeen); premiumsSeen = st.premiumsIn; }
+  if (out > outSeen) { capital.onPayout(out - outSeen); outSeen = out; }
+  saveCapital();
+}
+void (async () => {
+  if (capital.balances().length === 0) { // first run: the pool as it stands is the insurer's own capital
+    capital.deposit(treasury.address.address, await eudemoBalance(treasury.address.address), 'genesis');
+    const st = svc.state();
+    premiumsSeen = st.premiumsIn;
+    outSeen = st.payouts.reduce((a, p) => a + p.amount, 0n) + st.refunds.reduce((a, r) => a + (r.tx ? r.amount : 0n), 0n);
+    saveCapital();
+  }
+  setInterval(reconcileCapital, 15_000);
+})();
+
+const capitalView = async () => {
+  const s = await solvencyNow();
+  return { pool: s.pool, exposure: s.exposure, providers: capital.balances().map((b) => ({ ...b, share: s.pool > 0n ? Number((b.balance * 10_000n) / s.pool) / 100 : 0 })) };
+};
+app.get('/capital', async (_req, res) => { try { json(res, await capitalView()); } catch (e) { json(res, { error: (e as Error).message }, 502); } });
+
+/** A provider sends EUDemo to the pool, then registers the transfer here (verified on-chain). */
+app.post('/capital/deposit', async (req, res) => {
+  const tx = String(req.body?.tx ?? '');
+  if (!/^[0-9a-f]{64}$/.test(tx)) return json(res, { error: 'send { tx: <transfer hash> }' }, 400);
+  try {
+    const st = await grpc.getBlockItemStatus(sdk.TransactionHash.fromHexString(tx));
+    if (st.status !== 'finalized' || !st.outcome) return json(res, { error: 'transaction not finalized' }, 400);
+    const sum = st.outcome.summary as unknown as { transactionType?: string; events?: { tag: string; tokenId: string; from: { address: string }; to: { address: string }; amount: { value: string } }[] };
+    const transfers = (sum.events ?? []).filter((e) => e.tag === 'TokenTransfer' && String(e.tokenId) === ASSET && String(e.to?.address) === treasury.address.address);
+    if (sum.transactionType !== 'tokenUpdate' || transfers.length !== 1) return json(res, { error: 'not a single EUDemo transfer into the pool' }, 400);
+    const provider = String(transfers[0].from.address);
+    capital.deposit(provider, BigInt(transfers[0].amount.value), tx);
+    saveCapital();
+    audit.append({ kind: 'capital-deposit', provider, amount: transfers[0].amount.value, tx });
+    json(res, await capitalView());
+  } catch (e) { json(res, { error: (e as Error).message }, 400); }
+});
+
+/** A provider withdraws (signed x-kuasa-payer* proof); refused if live cover would be left uncovered. */
+app.post('/capital/withdraw', async (req, res) => {
+  const provider = String(req.header('x-kuasa-payer') ?? '');
+  try {
+    if (!(await verifyPayerProof({ header: (n) => req.header(n), payer: provider, audience: PUBLIC_URL, accountInfo: (a) => grpc.getAccountInfo(a) }))) return json(res, { error: 'provider proof required' }, 401);
+    const amount = big(req.body?.amount);
+    const s = await solvencyNow();
+    reconcileCapital();
+    capital.withdraw(provider, amount, { pool: s.pool, exposure: s.exposure });
+    saveCapital();
+    const paid = await treasuryPay(provider, amount, 'kuasa cover capital withdrawal');
+    audit.append({ kind: 'capital-withdrawal', provider, amount: String(amount), tx: paid });
+    json(res, { tx: paid, ...(await capitalView()) });
+  } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
 
 /** Anyone who proves control of a Concordium account (x-kuasa-payer* headers, payer = objector) can hold an automatic payout. */

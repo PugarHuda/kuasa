@@ -1,3 +1,4 @@
+import { AccountAddress } from '@concordium/web-sdk';
 import type { Wallet } from '@kuasa/chain';
 import { canonicalJson, type Claim, type IssuePolicyParams, type Mandate, type MandateEntry, type Policy, type RegistryEvent, sha256Hex } from '@kuasa/core';
 import { assess, type Assessment, quote, type Quote, type RiskInput, scopeFromAp2Intent, type Ap2IntentMandate } from '@kuasa/cover';
@@ -63,6 +64,9 @@ export type InsurerDeps = {
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
 const toSnapshot = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? { $big: x.toString() } : x));
 const fromSnapshot = (s: string) => JSON.parse(s, (_k, x) => (x && typeof x === 'object' && typeof x.$big === 'string' && Object.keys(x).length === 1 ? BigInt(x.$big) : x));
+
+/** Canonical account (account aliases share the first 29 bytes); undefined if not an address. */
+const canonical = (a: string) => { try { return Buffer.from(AccountAddress.fromBase58(a).decodedAddress.slice(0, 29)).toString('hex'); } catch { return undefined; } };
 
 export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; order?: { ref: string; amount: bigint }; proof?: unknown;
   /** The user's AP2 Intent Mandate, when the agent works under one: the Kuasa mandate must sit inside it. */
@@ -138,6 +142,7 @@ export class InsurerService {
       this.payouts = s.payouts ?? [];
       this.premiumsIn = s.premiumsIn ?? 0n;
       this.refunds = s.refunds ?? [];
+      this.objectionsBy = new Map(Object.entries(s.objectionsBy ?? {}));
     }
   }
 
@@ -146,7 +151,7 @@ export class InsurerService {
     this.deps.persist?.(toSnapshot({
       policies: this.policies, unissued: this.unissued, needsRefund: this.needsRefund, claims: [...this.claims.values()].map(({ busy, busyApprove, ...r }) => r),
       fraud: Object.fromEntries(this.fraud), pendingDisclosures: this.pendingDisclosures, disclosures: this.disclosures,
-      payouts: this.payouts, premiumsIn: this.premiumsIn, refunds: this.refunds,
+      payouts: this.payouts, premiumsIn: this.premiumsIn, refunds: this.refunds, objectionsBy: Object.fromEntries(this.objectionsBy),
     }));
   }
 
@@ -408,11 +413,17 @@ export class InsurerService {
   async object(claimId: bigint, o: { by: string; reason: string; proof: unknown }) {
     const rec = this.claims.get(claimId);
     if (!rec || rec.autoPayAt === undefined || rec.verdict) throw new Error('no automatic payout pending for this claim');
+    // Only parties to the claim: policy holder, claimant, recipient, or a recorder of the mandate (the merchant).
+    const by = canonical(o.by);
+    const policy = await this.deps.cover.policy(rec.policyId);
+    const recorders = policy ? (await this.deps.mandateEntry(policy.mandate.owner, policy.mandate.id))?.recorders ?? [] : [];
+    const parties = [rec.holder, rec.claimant, rec.recipient, ...recorders].map(canonical);
+    if (!by || !parties.includes(by)) throw new Error('only a party to this claim (holder, claimant, recipient or the merchant) can object');
     if (!(await this.deps.verifyPayer(o.by, o.proof).catch(() => false))) throw new Error('objector proof required: sign with the objecting account');
     const now = this.deps.now();
-    const recent = (this.objectionsBy.get(o.by) ?? []).filter((t) => now - t < 86_400_000);
+    const recent = (this.objectionsBy.get(by) ?? []).filter((t) => now - t < 86_400_000);
     if (recent.length >= 3) throw new Error('too many objections from this account today');
-    this.objectionsBy.set(o.by, [...recent, now]);
+    this.objectionsBy.set(by, [...recent, now]);
     rec.objections = [...(rec.objections ?? []), { by: o.by, reason: String(o.reason).slice(0, 280), at: now }];
     rec.autoPayAt = undefined;
     rec.held = true;

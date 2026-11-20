@@ -22,13 +22,18 @@ export const coverBindsToAgent = (p: { agentToken: string; holder: string }, a: 
   p.agentToken === tokenHex(a.token_id) && p.holder === a.owner_account;
 
 /** One retry for transient failures of the hosted registry service, and a short cache of answers. */
-export function withRetryAndCache<T>(fn: (key: string) => Promise<T>, ttlMs: number) {
+export function withRetryAndCache<T>(fn: (key: string) => Promise<T>, ttlMs: number, max = 500) {
   const cache = new Map<string, { at: number; v: T }>();
   return async (key: string): Promise<T> => {
+    const now = Date.now();
     const hit = cache.get(key);
-    if (hit && Date.now() - hit.at < ttlMs) return hit.v;
+    if (hit && now - hit.at < ttlMs) return hit.v;
+    if (hit) cache.delete(key);
     const v = await fn(key).catch(() => new Promise((r) => setTimeout(r, 400)).then(() => fn(key)));
-    cache.set(key, { at: Date.now(), v });
+    if (v === null || v === undefined) return v; // empty answers are not cached (keys can be attacker-chosen)
+    for (const [k, e] of cache) if (now - e.at >= ttlMs) cache.delete(k);
+    while (cache.size >= max) cache.delete(cache.keys().next().value as string); // bounded: oldest out
+    cache.set(key, { at: now, v });
     return v;
   };
 }
