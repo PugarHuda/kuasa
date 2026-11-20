@@ -11,6 +11,7 @@ import express from 'express';
 import { bigintJson, cis8004GetMetadata, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
 import { sha256Hex } from '@kuasa/core';
 import { isClaimId } from './validate.js';
+import { STEPS } from './demo.js';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4022);
@@ -79,17 +80,46 @@ app.post('/api/disclosures/:id/approve', async (req, res) => {
 });
 
 /** Owner publishes the agent's live Kuasa Cover in its CIS-8004 entry (metadata is owner-only). */
-app.post('/api/publish-cover/:name', async (req, res) => {
+async function publishCover(name: string) {
   const s = loadState();
-  const m = s.mandates[req.params.name];
-  if (!m || !s.cover) return json(res, { error: 'unknown agent or no cover contract' }, 404);
-  try {
-    const v = await new KuasaCover(grpc, BigInt(s.cover)).coverOf(m.payer);
-    if (v.policyId === null) return json(res, { error: 'no live cover for this agent' }, 400);
-    const value = `policy=${v.policyId};limit=${v.periodRemaining};cover=${s.cover}.0;at=${Math.floor(Date.now() / 1000)}`;
-    const r = await cis8004SetMetadata(grpc, s.agents[req.params.name], 'kuasa:cover', value, account(req.params.name, 0));
-    json(res, { tx: r.hash, value });
-  } catch (e) { json(res, { error: (e as Error).message }, 500); }
+  const m = s.mandates[name];
+  if (!m || !s.cover) throw new Error('unknown agent or no cover contract');
+  const v = await new KuasaCover(grpc, BigInt(s.cover)).coverOf(m.payer);
+  if (v.policyId === null) throw new Error('no live cover for this agent');
+  const value = `policy=${v.policyId};limit=${v.periodRemaining};cover=${s.cover}.0;at=${Math.floor(Date.now() / 1000)}`;
+  const r = await cis8004SetMetadata(grpc, s.agents[name], 'kuasa:cover', value, account(name, 0));
+  return { tx: r.hash, value };
+}
+
+app.post('/api/publish-cover/:name', async (req, res) => {
+  try { json(res, await publishCover(req.params.name)); } catch (e) { json(res, { error: (e as Error).message }, 500); }
+});
+
+/** Verified-by-Concordium badge status from Concordium's hosted Agent Registry MCP. */
+async function badge(name: string) {
+  const tokenHex = loadState().agents[name];
+  const token = Buffer.from(tokenHex, 'hex').readBigUInt64LE().toString();
+  const call = async (tool: string, args: object) => {
+    const r = await fetch('https://agent-registry-mcp.concordium.com/mcp', {
+      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: tool, arguments: args } }),
+    });
+    const raw = await r.text();
+    return JSON.parse(JSON.parse(raw.slice(raw.indexOf('{'))).result.content[0].text);
+  };
+  const { token_address } = await call('token_address', { contract_index: 12802, token_id: token });
+  const check = await call('check_badge', { id: token_address, network: 'testnet' });
+  const a = check.agents?.[0] ?? check;
+  return { tokenAddress: token_address, badgeValid: a.badge_valid, agentUri: a.agent_uri, issues: a.issues };
+}
+
+/** Demo runner (recording the submission video): steps of the storyline, run for real. */
+app.get('/demo', (_, res) => res.sendFile(fileURLToPath(new URL('demo.html', import.meta.url))));
+app.get('/api/demo/steps', (_req, res) => json(res, STEPS.map(({ id, title, caption, run }) => ({ id, title, caption, runnable: !!run }))));
+app.post('/api/demo/:id', async (req, res) => {
+  const step = STEPS.find((x) => x.id === req.params.id);
+  if (!step?.run) return json(res, { error: 'no such runnable step' }, 404);
+  try { json(res, { ok: true, result: await step.run({ publishCover, badge }) }); } catch (e) { json(res, { ok: false, error: (e as Error).message }, 500); }
 });
 
 /** Owner revokes: signed by the owner account (#0). Effective for every merchant on the next check. */
