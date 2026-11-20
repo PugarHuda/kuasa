@@ -6,10 +6,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleA2a } from '../../insurer/src/a2a.js';
 import { coverOf, riskOf, solvencyNow } from './chain.js';
+import { verifyEvmAgent } from './evm.js';
 
 const skills = {
   solvency: () => solvencyNow(),
   risk: async (d: Record<string, unknown>) => riskOf(String(d.payer ?? '')),
+  // Cross-chain: an agent on an EVM chain proves its Ethereum key; we answer with its Concordium badge and cover.
+  'verify-evm-agent': async (d: Record<string, unknown>) => verifyEvmAgent(d),
   'cover-status': async (d: Record<string, unknown>) => ({ onChain: await coverOf(String(d.payer ?? '')) }),
   quote: async () => { throw new Error('quotes need the insurer service (payer proof, then x402 checkout); see github.com/PugarHuda/kuasa/blob/main/docs/INTEGRATIONS.md'); },
 };

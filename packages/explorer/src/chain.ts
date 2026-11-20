@@ -7,7 +7,7 @@ export const COVER = ContractAddress.create(13066n, 0n);
 export const POOL = '3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut';
 const grpc = new ConcordiumGRPCWebClient('https://grpc.testnet.concordium.com', 20000);
 
-async function view(method: string, param: Uint8Array) {
+export async function viewCover(method: string, param: Uint8Array) {
   const r = await grpc.invokeContract({ contract: COVER, method: ReceiveName.fromString(`kuasa_cover.${method}`), parameter: Parameter.fromBuffer(param.slice().buffer as ArrayBuffer) });
   if (r.tag !== 'success' || !r.returnValue) throw new Error(`${method} failed`);
   return new Uint8Array(ReturnValue.toBuffer(r.returnValue));
@@ -21,8 +21,8 @@ async function all<T>(read: (id: bigint) => Promise<T | null>) {
 
 export async function scan() {
   const [policies, claims] = await Promise.all([
-    all((id) => view('policy', encodeU64(id)).then(decodePolicy)) as Promise<Policy[]>,
-    all((id) => view('claim', encodeU64(id)).then(decodeClaim)) as Promise<Claim[]>,
+    all((id) => viewCover('policy', encodeU64(id)).then(decodePolicy)) as Promise<Policy[]>,
+    all((id) => viewCover('claim', encodeU64(id)).then(decodeClaim)) as Promise<Claim[]>,
   ]);
   return { policies, claims };
 }
@@ -47,5 +47,5 @@ export async function riskOf(payer: string) {
 
 export async function coverOf(payer: string) {
   AccountAddress.fromBase58(payer);
-  return decodeCoverView(await view('coverOf', encodeCoverQuery(payer)));
+  return decodeCoverView(await viewCover('coverOf', encodeCoverQuery(payer)));
 }

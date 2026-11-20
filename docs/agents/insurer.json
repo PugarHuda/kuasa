@@ -72,6 +72,16 @@
       ]
     },
     {
+      "id": "verify-evm-agent",
+      "name": "Verify an EVM agent",
+      "description": "Cross-chain: an agent on an EVM chain signs \"kuasa-evm-agent:v1:<unix ms>\" with its Ethereum key; the answer is the Concordium agent bound to that key (CIS-8), its badge status and its Kuasa Cover. Data: { skill: \"verify-evm-agent\", message, signature }",
+      "tags": [
+        "kuasa",
+        "cross-chain",
+        "eip155"
+      ]
+    },
+    {
       "id": "cover-status",
       "name": "Cover status",
       "description": "Live cover and policies of an agent payer. Data: { skill: \"cover-status\", payer }",

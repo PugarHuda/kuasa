@@ -117,6 +117,9 @@ importers:
       buffer:
         specifier: 6.0.3
         version: 6.0.3
+      viem:
+        specifier: 2.58.0
+        version: 2.58.0(typescript@5.9.3)(zod@4.6.7)
     devDependencies:
       esbuild:
         specifier: 0.28.2
@@ -216,6 +219,9 @@ importers:
       '@kuasa/cover':
         specifier: workspace:*
         version: link:../packages/cover
+      viem:
+        specifier: 2.58.0
+        version: 2.58.0(typescript@5.9.3)(zod@4.6.7)
 
 packages:
 

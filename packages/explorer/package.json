@@ -4,13 +4,15 @@
   "type": "module",
   "scripts": {
     "build": "esbuild src/main.ts --bundle --format=esm --minify --target=es2022 --inject:src/shim.ts --outfile=../../docs/explorer/app.js && esbuild src/a2a-fn.ts --bundle --platform=node --external:@concordium/web-sdk --format=esm --target=node20 --outfile=../../docs/explorer/api/a2a.mjs",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@concordium/web-sdk": "12.0.2",
     "@kuasa/core": "workspace:*",
     "@kuasa/cover": "workspace:*",
-    "buffer": "6.0.3"
+    "buffer": "6.0.3",
+    "viem": "2.58.0"
   },
   "devDependencies": {
     "esbuild": "0.28.2"

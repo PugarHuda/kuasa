@@ -64,6 +64,16 @@ Send JSON-RPC `message/send` to `POST /a2a` with a data part:
 | `solvency` | none | Pool, live exposure, coverage, recomputed from the cover contract |
 | `risk` | `payer` | Paid claims and premium multiplier (experience rating) |
 | `cover-status` | `payer` | Live cover and policies |
+| `verify-evm-agent` | `message`, `signature` | **Cross-chain.** An agent on an EVM chain signs `kuasa-evm-agent:v1:<unix ms>` with its Ethereum key (5-minute window). The answer has its EVM address, the Concordium agent bound to that key through the CIS-8 External Key Registry, badge validity, live Kuasa Cover and risk. |
 | `quote` | `mandateUrl`, `limit`, `days`, `proof` | A priced quote. `proof` holds the `x-kuasa-payer`, `x-kuasa-payer-ts` and `x-kuasa-payer-sig` fields, signed by the agent payer key (see `makePayerProof`). Pay it over x402 at `/cover/buy`. |
 
 Before an agent deals with the insurer, it can check the insurer's badge through Concordium's hosted Agent Registry MCP (`check_badge`), as Kuasa agents already do for the shop.
+
+## Agents on other chains
+
+Alice's agent also has an Ethereum key. The owner bound it to the agent in two steps (`scripts/cross-chain.ts`):
+
+1. **CIS-8 `registerExternalKey`** `<12801,0>`. The proof is an `ethereum-personal-sign` signature by the ETH key itself.
+2. **CIS-8004 `setExternalReference`.**
+
+A merchant or agent on Base or Ethereum that only knows the agent's `0x` address asks it to sign a challenge, then calls `verify-evm-agent`. `scripts/evm-agent-check.ts` does exactly that against the public endpoint. The Verified-by-Concordium badge and the insurance status become readable from any EVM stack, without a Concordium wallet.
