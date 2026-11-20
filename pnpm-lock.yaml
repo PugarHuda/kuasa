@@ -90,6 +90,25 @@ importers:
 
   packages/cover: {}
 
+  packages/explorer:
+    dependencies:
+      '@concordium/web-sdk':
+        specifier: 12.0.2
+        version: 12.0.2(@protobuf-ts/runtime-rpc@2.11.1)(cbor2@1.12.0)
+      '@kuasa/core':
+        specifier: workspace:*
+        version: link:../core
+      '@kuasa/cover':
+        specifier: workspace:*
+        version: link:../cover
+      buffer:
+        specifier: 6.0.3
+        version: 6.0.3
+    devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+
   packages/insurer:
     dependencies:
       '@concordium/web-sdk':

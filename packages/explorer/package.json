@@ -1,0 +1,18 @@
+{
+  "name": "@kuasa/explorer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=esm --minify --target=es2022 --inject:src/shim.ts --outfile=../../docs/explorer/app.js",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@concordium/web-sdk": "12.0.2",
+    "@kuasa/core": "workspace:*",
+    "@kuasa/cover": "workspace:*",
+    "buffer": "6.0.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
