@@ -45,6 +45,12 @@ The insurer is a registered agent:
 - **Badge:** `JyP9UXdod6ZP39bFGudSW` (Verified by Concordium, valid).
 - **Agent Card:** [`pugarhuda.github.io/kuasa/agents/insurer.json`](https://pugarhuda.github.io/kuasa/agents/insurer.json). The insurer also serves it at `/.well-known/agent-card.json`.
 
+**Try it now, no setup:** the read-only skills are public at `https://kuasa-explorer.vercel.app/a2a`. This is a Vercel function with no keys; every answer is recomputed from testnet. It is also the `url` on the insurer's Agent Card. `quote` needs the insurer service itself (payer proof, then x402 checkout), which serves the same endpoint at `POST /a2a`.
+
+```bash
+curl -s -X POST https://kuasa-explorer.vercel.app/a2a -H 'content-type: application/json' \n  -d '{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"role":"user","messageId":"m1","parts":[{"kind":"data","data":{"skill":"solvency"}}]}}}'
+```
+
 Send JSON-RPC `message/send` to `POST /a2a` with a data part:
 
 ```json
