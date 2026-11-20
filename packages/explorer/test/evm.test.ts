@@ -21,3 +21,9 @@ test('cover counts only if the policy belongs to that agent and its owner', () =
   assert.equal(coverBindsToAgent({ agentToken: 'ef04000000000000', holder: 'OWNER' }, agent), false, 'another agent’s policy');
   assert.equal(coverBindsToAgent({ agentToken: 'ee04000000000000', holder: 'SOMEONE' }, agent), false, 'another owner’s policy');
 });
+
+test('EVM agent proof: a non-numeric timestamp (NaN, Infinity) never passes the freshness check', async () => {
+  for (const bad of ['NaN', 'Infinity', '1e15', '-1']) {
+    await assert.rejects(verifyEvmAgent({ message: `kuasa-evm-agent:v1:kuasa-explorer.vercel.app:${nonce}:${bad}`, nonce, signature: '0x00' }, now), /kuasa-evm-agent|window/, bad);
+  }
+});

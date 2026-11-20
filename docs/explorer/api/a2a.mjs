@@ -7876,7 +7876,8 @@ async function verifyEvmAgent(d, now = Date.now()) {
   const message = String(d.message ?? "");
   const nonce = String(d.nonce ?? "");
   if (!/^[0-9a-f]{32,64}$/i.test(nonce)) throw new Error("send the random nonce you issued (32-64 hex chars)");
-  const ts = Number(message.split(":").at(-1));
+  const ts = Number(/:(\d{13})$/.exec(message)?.[1] ?? NaN);
+  if (!Number.isSafeInteger(ts)) throw new Error(`sign "kuasa-evm-agent:v1:${AUDIENCE}:<your nonce>:<unix ms>" with the agent's Ethereum key`);
   if (message !== evmChallenge(nonce, ts)) throw new Error(`sign "kuasa-evm-agent:v1:${AUDIENCE}:<your nonce>:<unix ms>" with the agent's Ethereum key`);
   if (now - ts > WINDOW_MS || ts - now > SKEW_MS) throw new Error("challenge outside the 5-minute window");
   const publicKey = await recoverPublicKey({ hash: hashMessage(message), signature: String(d.signature ?? "") });
