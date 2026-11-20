@@ -2,7 +2,11 @@
   "name": "@kuasa/insurer",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node --import tsx src/server.ts", "test": "node --import tsx --test test/*.test.ts", "typecheck": "tsc -p ." },
+  "scripts": {
+    "start": "node --import tsx src/server.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc -p ."
+  },
   "dependencies": {
     "@concordium/web-sdk": "^12.0.2",
     "@kuasa/chain": "workspace:*",
@@ -12,7 +16,10 @@
     "@x402/concordium": "~2.31.0",
     "@x402/core": "~2.31.0",
     "@x402/express": "~2.31.0",
+    "@x402/extensions": "2.31.0",
     "express": "^5.3.0"
   },
-  "devDependencies": { "@types/express": "^5.0.6" }
+  "devDependencies": {
+    "@types/express": "^5.0.6"
+  }
 }

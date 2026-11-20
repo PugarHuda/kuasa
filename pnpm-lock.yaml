@@ -170,6 +170,9 @@ importers:
       '@x402/express':
         specifier: ~2.31.0
         version: 2.31.0(bufferutil@4.2.0)(ethers@6.17.0(bufferutil@4.2.0)(utf-8-validate@6.0.6))(express@5.3.0(supports-color@7.2.0))(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@x402/extensions':
+        specifier: 2.31.0
+        version: 2.31.0(bufferutil@4.2.0)(ethers@6.17.0(bufferutil@4.2.0)(utf-8-validate@6.0.6))(typescript@5.9.3)(utf-8-validate@6.0.6)
       express:
         specifier: ^5.3.0
         version: 5.3.0(supports-color@7.2.0)
@@ -213,6 +216,9 @@ importers:
       '@x402/express':
         specifier: ~2.31.0
         version: 2.31.0(bufferutil@4.2.0)(ethers@6.17.0(bufferutil@4.2.0)(utf-8-validate@6.0.6))(express@5.3.0(supports-color@7.2.0))(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@x402/extensions':
+        specifier: 2.31.0
+        version: 2.31.0(bufferutil@4.2.0)(ethers@6.17.0(bufferutil@4.2.0)(utf-8-validate@6.0.6))(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@x402/fetch':
         specifier: ~2.31.0
         version: 2.31.0
@@ -5970,12 +5976,12 @@ snapshots:
       '@noble/hashes': 1.8.0
       apg-js: 4.4.0
 
-  '@signinwithethereum/siwe@4.2.1(ethers@6.17.0(bufferutil@4.2.0)(utf-8-validate@6.0.6))(viem@2.58.0(bufferutil@4.2.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76))':
+  '@signinwithethereum/siwe@4.2.1(ethers@6.17.0(bufferutil@4.2.0)(utf-8-validate@6.0.6))(viem@2.58.0(bufferutil@4.2.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.6.7))':
     dependencies:
       '@signinwithethereum/siwe-parser': 4.2.1
     optionalDependencies:
       ethers: 6.17.0(bufferutil@4.2.0)(utf-8-validate@6.0.6)
-      viem: 2.58.0(bufferutil@4.2.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
+      viem: 2.58.0(bufferutil@4.2.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.6.7)
 
   '@simplewebauthn/browser@8.3.7':
     dependencies:
@@ -8253,7 +8259,7 @@ snapshots:
     dependencies:
       '@noble/curves': 1.9.7
       '@scure/base': 1.2.6
-      '@signinwithethereum/siwe': 4.2.1(ethers@6.17.0(bufferutil@4.2.0)(utf-8-validate@6.0.6))(viem@2.58.0(bufferutil@4.2.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76))
+      '@signinwithethereum/siwe': 4.2.1(ethers@6.17.0(bufferutil@4.2.0)(utf-8-validate@6.0.6))(viem@2.58.0(bufferutil@4.2.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@4.6.7))
       '@x402/core': 2.31.0
       ajv: 8.20.0
       jose: 5.10.0

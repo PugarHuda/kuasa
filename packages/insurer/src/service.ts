@@ -298,6 +298,11 @@ export class InsurerService {
     for (const [id, at] of this.paying) if (!this.settled.has(id) && this.deps.now() - at > RESERVATION_TTL_MS) this.paying.delete(id);
   }
 
+  /** A premium payment from this payer is reserved or settling (its transfer must never be booked as capital). */
+  isPaying(payer: string) {
+    return [...this.paying.keys()].some((id) => this.quotes.get(id)?.payer === payer);
+  }
+
   /** The reserved premium payment did not settle: the quote may be paid again. */
   releaseQuote(quoteId: string) {
     if (!this.settled.has(quoteId)) this.paying.delete(quoteId);

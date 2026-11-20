@@ -591,3 +591,12 @@ test('objections are limited per objector', async () => {
   for (let i = 0n; i < 3n; i++) await t.svc.object(i, { by: OPERATOR, reason: 'x', proof: {} });
   await assert.rejects(t.svc.object(3n, { by: OPERATOR, reason: 'x', proof: {} }), /too many objections/);
 });
+
+test('isPaying: a premium from this payer is settling', async () => {
+  const t = harness();
+  const q = await quoteOk(t.svc);
+  assert.equal(t.svc.isPaying(PAYER), false);
+  assert.equal(await t.svc.checkPurchase(q.quoteId, PAYER, q.premium), null);
+  assert.equal(t.svc.isPaying(PAYER), true);
+  assert.equal(t.svc.isPaying(SHOP), false);
+});

@@ -12,6 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import * as sdk from '@concordium/web-sdk';
 import express from 'express';
+import { bazaarResourceServerExtension, declareDiscoveryExtension } from '@x402/extensions/bazaar';
 import { x402Facilitator } from '@x402/core/facilitator';
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
@@ -162,7 +163,7 @@ const payerOf = (ctx: { paymentPayload: { payload: unknown } }) =>
 
 const facilitator = new x402Facilitator().register(CONCORDIUM_TESTNET_CAIP2,
   new FacilitatorScheme({ signer: toConcordiumFacilitatorSigner(operator.address.address, operatorAcc.key, { host: TESTNET.grpc.host, port: TESTNET.grpc.port, useTls: true }) }));
-const server = new x402ResourceServer(facilitator as never).register(CONCORDIUM_TESTNET_CAIP2, new ServerScheme());
+const server = new x402ResourceServer(facilitator as never).register(CONCORDIUM_TESTNET_CAIP2, new ServerScheme()).registerExtension(bazaarResourceServerExtension);
 const mandateHeaderOf = (ctx: unknown) =>
   (ctx as { transportContext?: { request?: { adapter?: { getHeader(n: string): string | undefined } } } })?.transportContext?.request?.adapter?.getHeader(MANDATE_HEADER);
 server.onBeforeVerify((async (ctx: Parameters<KuasaGuard['beforeVerify']>[0]) => {
@@ -182,8 +183,7 @@ server.onAfterSettle((async (ctx: Parameters<KuasaGuard['afterSettle']>[0]) => {
   await guard.afterSettle(ctx); // receipt: the premium draws down the mandate budget
   if (ctx.result.success !== false) {
     svc.markSettled(quoteIdOf(ctx)); // consumed before issuance: the quote can never back another payment
-    capital.reserve(ctx.result.transaction); // a premium payment can never be booked as capital
-    saveCapital();
+    await serialCapital(async () => { capital.reserve(ctx.result.transaction); saveCapital(); }); // a premium payment can never be booked as capital
     const policyId = await svc.issue(quoteIdOf(ctx), ctx.result.transaction);
     audit.append({ kind: 'premium', payer: payerOf(ctx), amount: ctx.requirements.amount, premiumTx: ctx.result.transaction, policyId });
   }
@@ -220,7 +220,9 @@ app.use(paymentMiddleware({
         return { amount: String(q?.premium ?? 0n), asset: ASSET };
       },
     },
-    description: 'Kuasa Cover premium', mimeType: 'application/json',
+    description: 'Kuasa Cover premium', mimeType: 'application/json', serviceName: 'Kuasa Cover', tags: ['kuasa', 'insurance', 'agents'],
+    // x402 Bazaar discovery: price a quote first (GET /cover/quote with a payer proof), then pay it here
+    extensions: declareDiscoveryExtension({ input: { quoteId: '<from /cover/quote>' }, inputSchema: { type: 'object', properties: { quoteId: { type: 'string' } }, required: ['quoteId'] }, output: { example: { ok: true, policyId: '7' } } }),
   },
 } as never, server));
 app.get('/cover/buy', (req, res) => json(res, { ok: true, quoteId: req.query.quoteId, note: 'policy is issued on settlement; see /cover/status' }));
@@ -271,6 +273,9 @@ app.post('/a2a', async (req, res) => json(res, await handleA2a(req.body, {
     return svc.quote({ mandateUrl: String(d.mandateUrl ?? ''), limit: big(d.limit), days: Number(d.days ?? 30), ap2: d.ap2 as never, proof: (n: string) => (typeof proof[n] === 'string' ? (proof[n] as string) : undefined) });
   },
 })));
+
+/** x402 discovery listing (Bazaar shape): the insurer sells cover over x402. */
+app.get('/discovery/resources', (_req, res) => json(res, { x402Version: 2, items: [{ resource: `${PUBLIC_URL}/cover/buy`, type: 'http', method: 'GET', accepts: [{ scheme: 'exact', network: CONCORDIUM_TESTNET_CAIP2, payTo: treasury.address.address, amount: 'quoted', asset: ASSET }], metadata: { description: 'Kuasa Cover premium for an AI agent', steps: ['GET /cover/quote (x-kuasa-mandate + payer proof headers)', 'GET /cover/buy?quoteId=… over x402'], agentCard: 'https://pugarhuda.github.io/kuasa/agents/insurer.json' } }] }));
 
 app.get('/info', (_req, res) => json(res, { cover: { index: state.cover, subindex: '0' }, operator: operator.address.address, treasury: treasury.address.address, asset: ASSET }));
 
@@ -397,6 +402,7 @@ void (async () => {
 /** Capital operations run one at a time (deposits, withdrawals and their reconciliation). */
 let capitalLock: Promise<unknown> = Promise.resolve();
 const serialCapital = <T>(fn: () => Promise<T>) => { const r = capitalLock.then(fn); capitalLock = r.catch(() => undefined); return r; };
+let pendingOut = 0n; // withdrawals submitted but not yet final
 const LOCKUP_MS = Number(process.env.KUASA_CAPITAL_LOCKUP_MS ?? 7 * 86_400_000);
 /** Premium payments also land in the pool; they are never capital. */
 const isPremiumTx = (tx: string) => { const st = svc.state(); return [...st.policies, ...st.unissued, ...st.needsRefund].some((p) => (p as { premiumTx?: string }).premiumTx === tx); };
@@ -422,6 +428,7 @@ app.post('/capital/deposit', async (req, res) => {
     if (isPremiumTx(tx)) return json(res, { error: 'this transfer is a premium payment, not capital' }, 400);
     const provider = String(transfers[0].from.address);
     await serialCapital(async () => {
+      if (svc.isPaying(provider)) throw new Error('a premium payment from this account is settling; register the deposit again in a minute');
       reconcileCapital(); // results so far belong to the providers who carried the risk
       capital.deposit(provider, BigInt(transfers[0].amount.value), tx, Date.now());
       saveCapital();
@@ -439,8 +446,8 @@ app.post('/capital/withdraw', async (req, res) => {
     const amount = big(req.body?.amount);
     const paid = await serialCapital(async () => {
       reconcileCapital();
-      const sv = await solvencyNow(); // the pool after every earlier withdrawal settled (they ran before this one)
-      capital.withdraw(provider, amount, { pool: sv.pool, exposure: sv.exposure }, Date.now(), LOCKUP_MS);
+      const sv = await solvencyNow();
+      capital.withdraw(provider, amount, { pool: sv.pool - pendingOut, exposure: sv.exposure }, Date.now(), LOCKUP_MS); // in-flight withdrawals already left
       saveCapital();
       let hash: string;
       try {
@@ -458,7 +465,20 @@ app.post('/capital/withdraw', async (req, res) => {
         saveCapital();
         throw new Error('the withdrawal transfer failed on-chain; nothing was paid');
       }
-      if (outcome === 'pending') audit.append({ kind: 'capital-withdrawal-pending', provider, amount: String(amount), tx: hash });
+      if (outcome === 'pending') {
+        audit.append({ kind: 'capital-withdrawal-pending', provider, amount: String(amount), tx: hash });
+        pendingOut += amount;
+        const settle = async () => {
+          const o = await txOutcomeOf(hash);
+          if (o === 'pending') { setTimeout(() => void settle(), 30_000); return; }
+          await serialCapital(async () => {
+            pendingOut -= amount;
+            if (o === 'failed') { capital.unwithdraw(provider, amount); saveCapital(); }
+          });
+          audit.append({ kind: 'capital-withdrawal-settled', provider, amount: String(amount), tx: hash, outcome: o });
+        };
+        setTimeout(() => void settle(), 30_000);
+      }
       return hash;
     });
     audit.append({ kind: 'capital-withdrawal', provider, amount: String(amount), tx: paid });

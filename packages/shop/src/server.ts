@@ -11,6 +11,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import { bazaarResourceServerExtension, declareDiscoveryExtension } from '@x402/extensions/bazaar';
 import { x402Facilitator } from '@x402/core/facilitator';
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
@@ -55,7 +56,7 @@ const guard = new KuasaGuard({
 const grpcCfg = { host: TESTNET.grpc.host, port: TESTNET.grpc.port, useTls: true };
 const facilitator = new x402Facilitator().register(CONCORDIUM_TESTNET_CAIP2,
   new FacilitatorScheme({ signer: toConcordiumFacilitatorSigner(sponsor.address, sponsor.key, grpcCfg) }));
-const server = new x402ResourceServer(facilitator as never).register(CONCORDIUM_TESTNET_CAIP2, new ServerScheme());
+const server = new x402ResourceServer(facilitator as never).register(CONCORDIUM_TESTNET_CAIP2, new ServerScheme()).registerExtension(bazaarResourceServerExtension);
 // Receipts survive restarts (buyers look them up to file claims).
 const RECEIPTS = new URL('shop-receipts.json', ROOT);
 if (existsSync(RECEIPTS)) guard.receipts.push(...JSON.parse(readFileSync(RECEIPTS, 'utf8')));
@@ -74,7 +75,9 @@ server.onBeforeVerify((async (ctx: Parameters<typeof guard.beforeVerify>[0]) => 
 
 const routes = Object.fromEntries(Object.entries(catalog).map(([path, p]) => [`GET ${path}`, {
   accepts: { scheme: 'exact', network: CONCORDIUM_TESTNET_CAIP2, payTo, price: { amount: String(p.price), asset: ASSET }, maxTimeoutSeconds: 120 },
-  description: p.name, mimeType: 'application/json',
+  description: p.name, mimeType: 'application/json', serviceName: 'Kuasa demo shop', tags: ['kuasa', p.category],
+  // x402 Bazaar discovery: agents can find this resource and how to call it
+  extensions: declareDiscoveryExtension({ input: {}, output: { example: { ok: true, item: p.name, shipped: 'order confirmed' } } }),
 }]));
 
 const app = express();
@@ -89,6 +92,9 @@ app.get('/.well-known/agent-card.json', (_, res) => json(res, {
   url: `http://localhost:${PORT}`, protocols: ['x402', 'kuasa/v1'],
   kuasa: { payTo, agentToken: state.shopAgent, agentRegistry: '<12802,0>', asset: ASSET, cover: state.cover ? `<${state.cover},0>` : undefined },
 }));
+
+/** x402 discovery listing (Bazaar shape) of every paid resource, with the Kuasa requirements an agent must meet. */
+app.get('/discovery/resources', (_req, res) => json(res, { x402Version: 2, items: Object.entries(catalog).map(([path, p]) => ({ resource: `http://localhost:${PORT}${path}`, type: 'http', method: 'GET', accepts: [{ scheme: 'exact', network: CONCORDIUM_TESTNET_CAIP2, payTo, amount: String(p.price), asset: ASSET }], metadata: { description: p.name, category: p.category, kuasa: { requirements: p.requirements, mandateHeader: MANDATE_HEADER } } })) }));
 
 app.get('/catalog', (_, res) => json(res, Object.entries(catalog).map(([path, p]) => ({ path, name: p.name, price: p.price, asset: ASSET, category: p.category, requirements: p.requirements }))));
 
