@@ -7,7 +7,7 @@
  *   3. agent_by_external_reference resolves the ETH key back to the agent.
  * The ETH key is generated once and kept in .kuasa/ (never committed). Idempotent.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as sdk from '@concordium/web-sdk';
 import { Transaction } from '@concordium/web-sdk/transactions';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
@@ -19,7 +19,9 @@ const NS = 'eip155:1';
 const KEY_TYPE = 'secp256k1-uncompressed';
 const CIS8 = { index: 12801, subindex: 0 };
 const KEY = new URL('../.kuasa/eth-alice-agent.json', import.meta.url);
-if (!existsSync(KEY)) writeFileSync(KEY, JSON.stringify({ privateKey: generatePrivateKey() }));
+// owner-only: this is a private key (testnet, but still never world-readable)
+if (!existsSync(KEY)) writeFileSync(KEY, JSON.stringify({ privateKey: generatePrivateKey() }), { mode: 0o600, flag: 'wx' });
+chmodSync(KEY, 0o600);
 const eth = privateKeyToAccount(JSON.parse(readFileSync(KEY, 'utf8')).privateKey);
 const pub = eth.publicKey.slice(2);
 const state = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { agents: Record<string, string> };
