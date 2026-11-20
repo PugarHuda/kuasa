@@ -17,7 +17,7 @@ import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/c
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
 import { AuditLog, bigintJson, connect, KuasaCover, KuasaRegistry, registerData, TESTNET, wallet } from '@kuasa/chain';
-import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer } from '@kuasa/merchant';
+import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer, verifyPayerProof } from '@kuasa/merchant';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4021);
@@ -100,8 +100,15 @@ app.get('/quote', async (req, res) => {
   const payer = String(req.query.payer ?? '');
   const d = await guard.decide({ mandateUrl: req.header(MANDATE_HEADER), route: path, payer, payTo, asset: ASSET, amount: p.price });
   // An order reference lets the agent buy per-order cover before paying (send it back in x-kuasa-order).
-  const orderRef = d.ok || d.reasons.every((r) => r.startsWith('cover required')) ? await guard.issueOrderRef({ payer, payTo, route: path, amount: p.price }).catch(() => undefined) : undefined;
-  json(res, { ...d, orderRef, amount: p.price, payTo });
+  // Only for a requester who proves control of the payer (mandate URLs are public).
+  let orderRef: string | undefined;
+  let orderRefNote: string | undefined;
+  if (d.ok || d.reasons.every((r) => r.startsWith('cover required'))) {
+    const proven = await verifyPayerProof({ header: (n) => req.header(n), payer, audience: `http://localhost:${PORT}`, accountInfo: (a) => grpc.getAccountInfo(a) });
+    if (!proven) orderRefNote = 'payer proof required for an order reference';
+    else orderRef = await guard.issueOrderRef({ payer, payTo, route: path, amount: p.price }).catch((e) => { orderRefNote = (e as Error).message; return undefined; });
+  }
+  json(res, { ...d, orderRef, orderRefNote, amount: p.price, payTo });
 });
 
 // Operator view for the console: loopback only.

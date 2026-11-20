@@ -8,8 +8,10 @@
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
+    "@kuasa/agent": "workspace:*",
     "@kuasa/chain": "workspace:*",
     "@kuasa/core": "workspace:*",
+    "@kuasa/cover": "workspace:*",
     "express": "^5.2.1"
   },
   "devDependencies": {

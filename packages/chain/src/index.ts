@@ -133,6 +133,7 @@ export class KuasaCover {
   decide = (claimId: bigint, approve: boolean, operator: Wallet) => this.update('decideClaim', encodeDecide(claimId, approve), operator);
   recordPayout = (claimId: bigint, payoutTx: string, amount: bigint, operator: Wallet) => this.update('recordPayout', encodePayout(claimId, payoutTx, amount), operator);
   markFraud = (claimId: bigint, disclosureHex: string, operator: Wallet) => this.update('markFraud', encodeFraud(claimId, disclosureHex), operator);
+  cancelPolicy = (policyId: bigint, holder: Wallet) => this.update('cancelPolicy', encodeU64(policyId), holder);
 
   /** issuePolicy / fileClaim ids: the first u64 of the PolicyIssued (tag 0) / ClaimFiled (tag 1) event. */
   static idFromEvents(summary: unknown, index: bigint): bigint | null {

@@ -36,6 +36,7 @@ function harness(over: Partial<InsurerDeps> = {}) {
     loadMandate: async () => ({ mandate, id: h(7) }),
     mandateEntry: async () => mEntry,
     identity: { claims: async () => ({ ok: true, claims: { ageOver: 30, residency: ['DK'] } }) },
+    verifyPayer: async () => true,
     cover: {
       issuePolicy: async (p) => { calls.push('issuePolicy'); const id = BigInt(policies.size); policies.set(id, { ...p, validFromMs: 1_000_000n, paidOut: 0n, status: 'Active' }); return { hash: 'tx', summary: {}, id }; },
       policy: async (id) => policies.get(id) ?? null,
@@ -344,4 +345,20 @@ test('a settled quote keeps its reservation past the TTL', async () => {
   t.svc.markSettled(q.quoteId);
   now += 5 * 60_000;
   assert.match((await t.svc.checkPurchase(q.quoteId, PAYER, q.premium)) ?? '', /already being paid|unknown/);
+});
+
+test('quotes need a valid payer proof', async () => {
+  const t = harness({ verifyPayer: async () => false });
+  const q = await t.svc.quote({ mandateUrl: 'https://k.example/m.json', limit: 100n * EUR, days: 30 });
+  assert.match('refused' in q ? q.refused : '', /payer proof/);
+});
+
+test('consumed quotes do not count toward the per-payer cap', async () => {
+  const t = harness({ maxQuotesPerPayer: 2 });
+  for (let i = 0; i < 4; i++) {
+    const q = await quoteOk(t.svc);
+    t.svc.markSettled(q.quoteId);
+    assert.notEqual(await t.svc.issue(q.quoteId, h(30 + i)), null);
+  }
+  assert.equal(t.svc.quoteCount(), 0, 'issued quotes are removed');
 });
