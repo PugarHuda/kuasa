@@ -17,7 +17,7 @@ import { mcp } from './lib/registry-mcp.js';
 
 const PAGES = process.env.KUASA_PAGES_URL ?? 'https://pugarhuda.github.io/kuasa';
 const OUT = new URL('../docs/agents/', import.meta.url);
-const state = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { registry: string; cover: string; agents: Record<string, string>; shopAgent: string };
+const state = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { registry: string; cover: string; agents: Record<string, string>; shopAgent: string; insurerAgent: string };
 const tokenDec = (hex: string) => Buffer.from(hex, 'hex').readBigUInt64LE().toString();
 
 const cast = [
@@ -27,14 +27,18 @@ const cast = [
     description: 'A 16-year-old owner’s agent: may buy groceries, is refused age-restricted goods because no 18+ proof exists. Demo of Kuasa refusing before payment.' },
   { name: 'shop', profile: 'merchant', token: state.shopAgent, title: 'Kuasa demo shop', role: 'merchant',
     description: 'Regulated-goods shop for AI agents: checks mandates, ZK proofs, CIS-8004 status and Kuasa Cover before accepting x402 payments in EUDemo.' },
+  { name: 'insurer', profile: 'insurer', token: state.insurerAgent, title: 'Kuasa Cover insurer', role: 'insurer',
+    description: 'Insures AI shopping agents against their own mistakes. Prices cover from on-chain facts, sells it over x402, assesses claims from on-chain receipts, pays small claims automatically and big ones after a human approves. Talk to it over A2A (message/send with a data part { skill, ... }).' },
 ];
 
+const only = process.env.ONLY?.split(',');
+const picked = () => cast.filter((a) => !only || only.includes(a.name));
 const uriOf = (name: string) => `${PAGES}/agents/${name}.json`;
 
 async function build() {
   mkdirSync(OUT, { recursive: true });
   writeFileSync(new URL('../docs/.nojekyll', import.meta.url), '');
-  for (const a of cast) {
+  for (const a of picked()) {
     const owner = loadProfile(a.profile).accounts.find((x) => x.credNumber === 0)!.address;
     const card = {
       name: a.title, description: a.description, url: uriOf(a.name), version: '1.0.0',
@@ -47,7 +51,14 @@ async function build() {
           params: { role: a.role, mandateRegistry: `<${state.registry},0>`, cover: `<${state.cover},0>`, asset: 'EUDemo', network: 'ccd:4221332d34e1694168c2a0c0b3fd0f27' },
         }],
       },
-      skills: a.role === 'merchant'
+      skills: a.role === 'insurer'
+        ? [
+          { id: 'solvency', name: 'Proof of solvency', description: 'Pool balance vs the cover owed by live policies, recomputed from the kuasa-cover contract. Data: { skill: "solvency" }', tags: ['kuasa', 'insurance'] },
+          { id: 'risk', name: 'Agent risk', description: 'Paid claims and premium multiplier for an agent payer (experience rating). Data: { skill: "risk", payer }', tags: ['kuasa', 'reputation'] },
+          { id: 'cover-status', name: 'Cover status', description: 'Live cover and policies of an agent payer. Data: { skill: "cover-status", payer }', tags: ['kuasa', 'insurance'] },
+          { id: 'quote', name: 'Quote cover', description: 'Premium with explained factors. Data: { skill: "quote", mandateUrl, limit, days, proof } where proof holds the x-kuasa-payer* fields signed by the agent payer key. Pay the quote over x402 at /cover/buy.', tags: ['kuasa', 'insurance', 'x402'] },
+        ]
+        : a.role === 'merchant'
         ? [{ id: 'sell-regulated-goods', name: 'Sell regulated goods', description: 'x402 checkout gated by Kuasa mandates, ZK proofs and Kuasa Cover', tags: ['x402', 'kuasa'] }]
         : [{ id: 'insured-shopping', name: 'Insured shopping', description: 'Shops within its Kuasa mandate and insures itself with Kuasa Cover', tags: ['x402', 'kuasa', 'insurance'] }],
     };
@@ -62,7 +73,7 @@ async function build() {
 
 async function pin() {
   const grpc = connect();
-  for (const a of cast) {
+  for (const a of picked()) {
     const uri = uriOf(a.name);
     const local = readFileSync(new URL(`${a.name}.json`, OUT), 'utf8');
     const served = await (await fetch(uri)).text();

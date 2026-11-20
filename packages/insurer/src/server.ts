@@ -18,6 +18,7 @@ import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/c
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
 import { solvency } from '@kuasa/cover';
+import { handleA2a } from './a2a.js';
 import { AuditLog, bigintJson, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyPayerProof } from '@kuasa/merchant';
@@ -202,6 +203,39 @@ app.get('/cover/status', async (req, res) => {
   json(res, { onChain: await cover.coverOf(payer), policies: svc.state().policies.filter((p) => p.payer === payer) });
 });
 
+/** Experience rating inputs, recomputed from the cover contract (public: it is all on-chain). */
+async function riskOf(payer: string) {
+  sdk.AccountAddress.fromBase58(payer); // throws on a bad address
+  const { policies, claims } = await scanCover();
+  const paidClaims = claims.filter((c) => c.status.tag === 'Paid' && policies[Number(c.policyId)]?.agentPayer === payer).length;
+  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: `kuasa-cover <${state.cover},0>` };
+}
+app.get('/risk/:payer', async (req, res) => { try { json(res, await riskOf(req.params.payer)); } catch (e) { json(res, { error: (e as Error).message }, 400); } });
+
+async function solvencyNow() {
+  const { policies, claims } = await scanCover();
+  const s = solvency({ pool: await eudemoBalance(treasury.address.address), now: Date.now(), policies, claims: claims.map((c) => ({ status: c.status.tag })) });
+  return { ...s, cover: `<${state.cover},0>`, treasury: treasury.address.address, asset: ASSET, autoPayLimit: String(BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000)) };
+}
+
+/** The insurer as an agent: its badged Agent Card, and A2A message/send for the skills on it. */
+const CARD = new URL('../../../docs/agents/insurer.json', import.meta.url);
+app.get('/.well-known/agent-card.json', (_req, res) => (existsSync(CARD) ? res.type('json').send(readFileSync(CARD, 'utf8')) : json(res, { error: 'card not built' }, 404)));
+app.post('/a2a', async (req, res) => json(res, await handleA2a(req.body, {
+  solvency: () => solvencyNow(),
+  risk: async (d) => riskOf(String(d.payer ?? '')),
+  'cover-status': async (d) => {
+    const payer = String(d.payer ?? '');
+    sdk.AccountAddress.fromBase58(payer);
+    return { onChain: await cover.coverOf(payer), policies: svc.state().policies.filter((p) => p.payer === payer) };
+  },
+  // Same rules as GET /cover/quote: the requester proves control of the payer (headers as fields of `proof`).
+  quote: async (d) => {
+    const proof = (d.proof ?? {}) as Record<string, unknown>;
+    return svc.quote({ mandateUrl: String(d.mandateUrl ?? ''), limit: big(d.limit), days: Number(d.days ?? 30), proof: (n: string) => (typeof proof[n] === 'string' ? (proof[n] as string) : undefined) });
+  },
+})));
+
 app.get('/info', (_req, res) => json(res, { cover: { index: state.cover, subindex: '0' }, operator: operator.address.address, treasury: treasury.address.address, asset: ASSET }));
 
 /** Co-signs (sponsors) a claim filing signed by the claimant, so agents never need CCD for fees. */
@@ -290,9 +324,7 @@ async function scanCover() {
 /** Public proof of solvency: pool vs the cover still owed by live policies, from on-chain data. */
 app.get('/solvency', async (_req, res) => {
   try {
-    const { policies, claims } = await scanCover();
-    const s = solvency({ pool: await eudemoBalance(treasury.address.address), now: Date.now(), policies, claims: claims.map((c) => ({ status: c.status.tag })) });
-    json(res, { ...s, cover: `<${state.cover},0>`, treasury: treasury.address.address, asset: ASSET, autoPayLimit: String(BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000)) });
+    json(res, await solvencyNow());
   } catch (e) { json(res, { error: (e as Error).message }, 502); }
 });
 

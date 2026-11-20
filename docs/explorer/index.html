@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kuasa Explorer</title>
+<meta name="description" content="Live, read-only view of Kuasa Cover on Concordium testnet: policies, claims, pool and proof of solvency, read straight from the chain.">
+<style>
+  :root { --bg: #f7f7f5; --panel: #ffffff; --ink: #16181d; --muted: #5d6570; --line: #e3e5e8; --accent: #2f5bd3; --ok: #11794a; --ok-bg: #e2f5ec; --bad: #b3261e; --bad-bg: #fbe7e5; --warn: #8a5a00; --warn-bg: #fdf1d6; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; } }
+  :root[data-theme="dark"] { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
+  header h1 { margin: 0; font-size: 28px; letter-spacing: -0.01em; }
+  header p { margin: 6px 0 0; color: var(--muted); max-width: 760px; }
+  .links { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 15px; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  section { margin-top: 32px; }
+  h2 { font-size: 18px; margin: 0 0 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
+  .stat .k { color: var(--muted); font-size: 13px; } .stat .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; font-size: 13px; padding: 2px 10px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.bad { background: var(--bad-bg); color: var(--bad); } .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 720px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); } td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .agent h3 { margin: 0 0 4px; font-size: 16px; } .agent p { margin: 4px 0; color: var(--muted); font-size: 14px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  ol { padding-left: 20px; margin: 0; } li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Kuasa Explorer</h1>
+    <p>Kuasa Cover is insurance for AI agent commerce on Concordium. This page reads the <span class="mono">kuasa-cover</span> contract and the pool account directly from Concordium testnet in your browser. There is no backend and no keys, and every number is recomputed here.</p>
+    <div class="links">
+      <a href="https://github.com/PugarHuda/kuasa">Code</a>
+      <a href="https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md">Every transaction</a>
+      <a href="https://github.com/PugarHuda/kuasa/blob/main/docs/PRICING.md">Pricing check</a>
+      <a href="https://ccdexplorer.io/testnet/instance/13066/0">kuasa-cover &lt;13066,0&gt;</a>
+      <a href="https://ccdexplorer.io/testnet/instance/13065/0">kuasa-registry &lt;13065,0&gt;</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>Proof of solvency</h2>
+    <div class="panel">
+      <div id="solvent"><span class="muted">Reading testnet…</span></div>
+      <div class="stats" id="stats"></div>
+      <p class="muted" style="margin:14px 0 0">The live exposure is the cover still owed by every active, unexpired policy (its limit minus what it already paid out). Small claims of 10 EUDemo or less are paid automatically after an objection window, and larger ones need a human claims handler.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Verified agents</h2>
+    <div class="agents">
+      <div class="panel agent"><h3>Alice's shopping agent</h3><p>Adult EU owner, ZK-proven 18+ and residency. Insures itself with Kuasa Cover.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/alice.json">Agent Card</a> · <span class="mono">JyP9YNuoGBRd7KGU5Zbf6</span></p></div>
+      <div class="panel agent"><h3>Teen's shopping agent</h3><p>16-year-old owner. It is refused age-restricted goods before payment.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/teen.json">Agent Card</a> · <span class="mono">JyP9YQ1HCCvYwSWJcmE8r</span></p></div>
+      <div class="panel agent"><h3>Kuasa demo shop</h3><p>Checks the mandate, ZK proof, CIS-8004 entry and cover before it accepts an x402 payment.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/shop.json">Agent Card</a> · <span class="mono">JyP9YUPCvJvGFwTQ1EiJ6</span></p></div>
+    </div>
+    <p class="muted">Badges are confirmed by Concordium's hosted Agent Registry MCP (<span class="mono">check_badge</span>). The card hashes are pinned on CIS-8004 &lt;12802,0&gt;.</p>
+  </section>
+
+  <section>
+    <h2>Claims</h2>
+    <div class="panel scroll"><table><thead><tr><th>Claim</th><th>Policy</th><th>Kind</th><th>Filed by</th><th>Amount</th><th>Payout</th><th>Payout tx</th><th>Status</th></tr></thead><tbody id="claims"></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>Policies</h2>
+    <div class="panel scroll"><table><thead><tr><th>Policy</th><th>Insured agent</th><th>Cover</th><th>Limit</th><th>Paid out</th><th>Premium</th><th>Premium tx</th><th>Until</th><th>Status</th></tr></thead><tbody id="policies"></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>How a claim gets here</h2>
+    <div class="panel"><ol>
+      <li>The owner verifies once with Concordium ID and gives the agent a mandate with a zero-knowledge proof.</li>
+      <li>The AI agent buys cover over x402 in EUDemo. The policy appears above.</li>
+      <li>A mistake happens, for example a double charge. The agent files a claim itself (fee sponsored), and the assessor matches the receipts on-chain.</li>
+      <li>The claim is paid automatically if it is small, or after a human approves it if it is large. The payout tx and the Paid status appear above.</li>
+    </ol></div>
+  </section>
+
+  <p class="muted" id="updated" style="margin-top:24px"></p>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

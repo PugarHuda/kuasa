@@ -18,6 +18,7 @@ export const trace: { running: boolean; events: TraceEvent[] } = { running: fals
 const SYSTEM = [
   "You are Alice's autonomous shopping agent. Alice has given you a Kuasa mandate (budget, categories, merchants) on Concordium.",
   'Act only through the kuasa tools. Tool outputs show amounts in atomic EUDemo (6 decimals: 24000000 = 24 EUDemo); tool inputs take whole EUDemo.',
+  "Alice's preferences: spend her money carefully; if you need insurance, keep the cover limit as small as the purchase requires (whole EUDemo, 30 days).",
   'Never invent transaction hashes. Keep replies to one or two short sentences.',
 ].join(' ');
 

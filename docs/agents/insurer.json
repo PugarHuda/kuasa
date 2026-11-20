@@ -1,0 +1,99 @@
+{
+  "name": "Kuasa Cover insurer",
+  "description": "Insures AI shopping agents against their own mistakes. Prices cover from on-chain facts, sells it over x402, assesses claims from on-chain receipts, pays small claims automatically and big ones after a human approves. Talk to it over A2A (message/send with a data part { skill, ... }).",
+  "url": "https://pugarhuda.github.io/kuasa/agents/insurer.json",
+  "version": "1.0.0",
+  "provider": {
+    "organization": "Kuasa",
+    "url": "https://github.com/PugarHuda/kuasa"
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "capabilities": {
+    "extensions": [
+      {
+        "uri": "https://github.com/PugarHuda/kuasa/blob/main/docs/agents/kuasa-extension-v1.md",
+        "description": "Kuasa: mandated, insured agent commerce on Concordium",
+        "params": {
+          "role": "insurer",
+          "mandateRegistry": "<13065,0>",
+          "cover": "<13066,0>",
+          "asset": "EUDemo",
+          "network": "ccd:4221332d34e1694168c2a0c0b3fd0f27"
+        }
+      },
+      {
+        "uri": "https://docs.concordium.com/a2a-extensions/concordium-badge/v1",
+        "description": "Verified by Concordium badge — on-chain agent identity in a CIS-8004 registry",
+        "required": false,
+        "params": {
+          "tokenAddress": "ccd:4221332d34e1694168c2a0c0b3fd0f27/cis-2:JyP9UXdod6ZP39bFGudSW",
+          "owner": {
+            "account": "ccd:4221332d34e1694168c2a0c0b3fd0f27:3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut"
+          },
+          "agentWallet": "ccd:4221332d34e1694168c2a0c0b3fd0f27:3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut",
+          "contracts": {
+            "cis8004": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12802.0",
+            "cis8": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12801.0"
+          },
+          "verify": "Resolve tokenAddress via CIS-8004 agent_of; confirm owner + status=Active + card SHA-256 == metadata_hash.",
+          "verification": {
+            "service": "Concordium Agent Registry",
+            "verifyUrl": "https://agent-registry-mcp.concordium.com/v1/badge-check/JyP9UXdod6ZP39bFGudSW",
+            "mcp": "https://agent-registry-mcp.concordium.com/mcp",
+            "docs": "https://docs.concordium.com/en/mainnet/technical-reference/agent-registry/concordium-badge.html"
+          }
+        }
+      }
+    ]
+  },
+  "skills": [
+    {
+      "id": "solvency",
+      "name": "Proof of solvency",
+      "description": "Pool balance vs the cover owed by live policies, recomputed from the kuasa-cover contract. Data: { skill: \"solvency\" }",
+      "tags": [
+        "kuasa",
+        "insurance"
+      ]
+    },
+    {
+      "id": "risk",
+      "name": "Agent risk",
+      "description": "Paid claims and premium multiplier for an agent payer (experience rating). Data: { skill: \"risk\", payer }",
+      "tags": [
+        "kuasa",
+        "reputation"
+      ]
+    },
+    {
+      "id": "cover-status",
+      "name": "Cover status",
+      "description": "Live cover and policies of an agent payer. Data: { skill: \"cover-status\", payer }",
+      "tags": [
+        "kuasa",
+        "insurance"
+      ]
+    },
+    {
+      "id": "quote",
+      "name": "Quote cover",
+      "description": "Premium with explained factors. Data: { skill: \"quote\", mandateUrl, limit, days, proof } where proof holds the x-kuasa-payer* fields signed by the agent payer key. Pay the quote over x402 at /cover/buy.",
+      "tags": [
+        "kuasa",
+        "insurance",
+        "x402"
+      ]
+    }
+  ],
+  "registrations": [
+    {
+      "agentId": 1314,
+      "agentRegistry": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12802.0"
+    }
+  ]
+}

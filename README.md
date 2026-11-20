@@ -34,6 +34,8 @@ Escrow protects you from bad sellers (Concordium's Protocol-Enforced Escrow cove
 
 ## Where it is on testnet
 
+**Live explorer: [kuasa-explorer.vercel.app](https://kuasa-explorer.vercel.app).** It is a read-only page that reads policies, claims, the pool and proof of solvency straight from testnet in your browser over gRPC-web (no backend, no keys). Source: `packages/explorer`, built into `docs/explorer`.
+
 See **[docs/TESTNET.md](docs/TESTNET.md)**: contracts, accounts and every step of the flow with CCDExplorer links. In short: `kuasa-registry <13065,0>`, `kuasa-cover <13066,0>`, CIS-8004 `<12802,0>`.
 
 ## Packages
