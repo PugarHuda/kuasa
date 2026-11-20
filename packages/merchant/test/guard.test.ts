@@ -175,3 +175,12 @@ test('order references are bounded (oldest evicted)', async () => {
   assert.match((await payWith(g, 1, h(refs[0])))?.message ?? '', /unknown or expired order reference/, 'evicted');
   assert.equal(await payWith(g, 2, h(refs[2])), undefined);
 });
+
+test('order references are capped per payer', async () => {
+  const g = makeGuard({}, undefined, { maxOrdersPerPayer: 2 });
+  const other = await g.issueOrderRef({ payer: SHOP, payTo: SHOP, route: 'GET /wine/:sku', amount: 1n });
+  for (let i = 0; i < 5; i++) await g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n });
+  assert.equal(g.orderRefCount(PAYER), 2);
+  assert.equal(g.orderRefCount(SHOP), 1, 'spamming refs for one payer never evicts another payer');
+  void other;
+});

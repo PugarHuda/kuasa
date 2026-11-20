@@ -5,6 +5,8 @@ import type { IdentitySource } from '@kuasa/merchant';
 
 const EU = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK'];
 const QUOTE_TTL_MS = 10 * 60_000;
+/** Longer than an x402 payment can take (maxTimeoutSeconds 120 + finalization). */
+const RESERVATION_TTL_MS = 150_000;
 const DAY_MS = 86_400_000;
 const DEDUCTIBLE = 1_000_000n; // 1.00 in a 6-decimal asset
 const FRAUD_THRESHOLD = 2;
@@ -44,6 +46,8 @@ export type InsurerDeps = {
   persist?: (snapshot: string) => void;
   /** Upper bound on live quotes held in memory (oldest evicted first). */
   maxQuotes?: number;
+  /** Upper bound on live quotes per agent payer (its oldest evicted first). */
+  maxQuotesPerPayer?: number;
 };
 
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
@@ -77,7 +81,7 @@ type Disclosure = { claimId: string; account: string; doc: object };
 export class InsurerService {
   private quotes = new Map<string, StoredQuote>();
   /** Quotes whose premium payment is in flight: one quote backs one payment. */
-  private paying = new Set<string>();
+  private paying = new Map<string, number>(); // quoteId -> reserved at (ms)
   private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string }[] = [];
   /** Premiums that settled but whose policy is not on-chain yet; the quote travels with them. */
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
@@ -129,11 +133,16 @@ export class InsurerService {
     if ('refused' in fresh) return fresh;
     const quoteId = await sha256Hex(canonicalJson({ ...req, limit: String(req.limit), order: req.order && { ...req.order, amount: String(req.order.amount) }, at: this.deps.now(), n: Math.random() }));
     const stored: StoredQuote = { ...fresh, quoteId, request: req, expires: this.deps.now() + QUOTE_TTL_MS };
+    this.dropStaleReservations();
     for (const [id, q] of this.quotes) if (q.expires < this.deps.now() && !this.paying.has(id)) this.quotes.delete(id);
-    const cap = this.deps.maxQuotes ?? 10_000;
+    // Per payer first, so one payer flooding quotes only ever evicts its own (Map order = oldest first).
+    const perPayer = this.deps.maxQuotesPerPayer ?? 20;
+    const mine = [...this.quotes.values()].filter((q) => q.payer === stored.payer && !this.paying.has(q.quoteId));
+    for (const q of mine.slice(0, Math.max(0, mine.length - perPayer + 1))) this.quotes.delete(q.quoteId);
+    const cap = this.deps.maxQuotes ?? 10_000; // global backstop
     for (const id of this.quotes.keys()) {
       if (this.quotes.size < cap) break;
-      if (!this.paying.has(id)) this.quotes.delete(id); // Map keeps insertion order: oldest first
+      if (!this.paying.has(id)) this.quotes.delete(id);
     }
     this.quotes.set(quoteId, stored);
     return stored;
@@ -168,8 +177,9 @@ export class InsurerService {
     const q = this.quotes.get(quoteId);
     if (!q || q.expires < this.deps.now()) return 'unknown or expired quote';
     if (payer !== q.payer) return 'payer is not the agent this quote is for';
+    this.dropStaleReservations();
     if (this.paying.has(quoteId)) return 'this quote is already being paid';
-    this.paying.add(quoteId); // reserve before any await: one quote, one payment
+    this.paying.set(quoteId, this.deps.now()); // reserve before any await: one quote, one payment
     const fresh = await this.price(q.request);
     const reason = 'refused' in fresh ? fresh.refused : fresh.premium !== q.premium || amount !== q.premium ? 'premium changed; request a new quote' : null;
     if (reason) this.paying.delete(quoteId);
@@ -227,6 +237,11 @@ export class InsurerService {
     this.unissued.push({ quoteId, premiumTx, error, quote: q });
     this.save();
     return null;
+  }
+
+  /** A reservation whose payment never settled nor failed visibly (e.g. rejected at verification) lapses. */
+  private dropStaleReservations() {
+    for (const [id, at] of this.paying) if (this.deps.now() - at > RESERVATION_TTL_MS) this.paying.delete(id);
   }
 
   /** The reserved premium payment did not settle: the quote may be paid again. */
