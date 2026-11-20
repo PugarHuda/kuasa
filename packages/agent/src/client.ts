@@ -188,7 +188,8 @@ export class KuasaAgent {
 
   // ---- Kuasa Cover ---------------------------------------------------------------------------
 
-  async coverQuote(limit: bigint, days = 30, order?: { ref: string; amount: bigint }) {
+  /** ap2: the user's AP2 Intent Mandate, if this agent works under one (the insurer checks the mandate sits inside it). */
+  async coverQuote(limit: bigint, days = 30, order?: { ref: string; amount: bigint }, ap2?: object) {
     const u = new URL('/cover/quote', this.insurerUrl);
     if (order) {
       u.searchParams.set('order', order.ref);
@@ -197,7 +198,8 @@ export class KuasaAgent {
       u.searchParams.set('limit', String(limit));
       u.searchParams.set('days', String(days));
     }
-    return (await fetch(u, { headers: { ...this.headers(), ...(await this.proof(this.insurerUrl)) } })).json() as Promise<{ quoteId?: string; premium?: string; factors?: unknown[]; refused?: string }>;
+    const ap2Header: Record<string, string> = ap2 ? { 'x-ap2-intent-mandate': Buffer.from(JSON.stringify(ap2)).toString('base64url') } : {};
+    return (await fetch(u, { headers: { ...this.headers(), ...(await this.proof(this.insurerUrl)), ...ap2Header } })).json() as Promise<{ quoteId?: string; premium?: string; factors?: { name: string }[]; refused?: string }>;
   }
 
   async coverStatus() {

@@ -97,10 +97,11 @@ test('premium settled, issuance failed -> unissued + retry', async () => {
   assert.equal(t.svc.state().policies.length, 1);
 });
 
-async function filedClaim(t: ReturnType<typeof harness>, withEvidence: boolean, id: bigint) {
+async function filedClaim(t: ReturnType<typeof harness>, withEvidence: boolean, id: bigint, kind: 'WrongItem' | 'MerchantLoss' = 'WrongItem') {
+  if (kind === 'MerchantLoss') t.setEntry(entry({ incidents: 1n }));
   const q = await quoteOk(t.svc);
   const pid = await t.svc.issue(q.quoteId, h(9));
-  t.claims.set(id, { policyId: pid!, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: h(12), orders: [h(10 + Number(id))], status: { tag: 'Filed' }, payout: 0n });
+  t.claims.set(id, { policyId: pid!, claimant: PAYER, kind, amount: 24n * EUR, evidence: h(12), orders: [h(10 + Number(id))], status: { tag: 'Filed' }, payout: 0n });
   if (withEvidence) t.events.set(`r${id}`, { at: 1_000_500, events: [{ type: 'Receipt', owner: OWNER, id: h(7), order: h(10 + Number(id)), paymentTx: h(9), amount: 24n * EUR, spent: 24n * EUR }] });
   return t.svc.assessClaim(id, [`r${id}`]);
 }
@@ -366,7 +367,7 @@ test('consumed quotes do not count toward the per-payer cap', async () => {
 test('tiered autonomy: a small positive claim is paid automatically after the objection window', async () => {
   let now = 1_000_000;
   const t = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
-  await filedClaim(t, true, 0n);
+  await filedClaim(t, true, 0n, 'MerchantLoss');
   assert.equal(t.svc.state().claims[0].autoPayAt, now + 120_000);
   await t.svc.runAutoPay();
   assert.ok(!t.calls.some((c) => c.startsWith('pay:')), 'nothing before the window closes');
@@ -379,7 +380,7 @@ test('tiered autonomy: a small positive claim is paid automatically after the ob
 test('tiered autonomy: claims above the limit wait for a human', async () => {
   let now = 1_000_000;
   const t = harness({ now: () => now, autoPayLimit: 10n * EUR, autoPayDelayMs: 120_000 });
-  await filedClaim(t, true, 0n);
+  await filedClaim(t, true, 0n, 'MerchantLoss');
   assert.equal(t.svc.state().claims[0].autoPayAt, undefined);
   now += 1_000_000;
   await t.svc.runAutoPay();
@@ -389,7 +390,7 @@ test('tiered autonomy: claims above the limit wait for a human', async () => {
 test('tiered autonomy: a held claim goes to a human; claimants with rejected claims are never auto-paid', async () => {
   let now = 1_000_000;
   const t = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
-  await filedClaim(t, true, 0n);
+  await filedClaim(t, true, 0n, 'MerchantLoss');
   t.svc.hold(0n);
   now += 200_000;
   await t.svc.runAutoPay();
@@ -397,17 +398,17 @@ test('tiered autonomy: a held claim goes to a human; claimants with rejected cla
   assert.equal((await t.svc.decide(0n, true)).paid, 'payout-tx', 'the human can still approve');
 
   const u = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
-  await filedClaim(u, false, 0n);
-  await filedClaim(u, true, 1n);
+  await filedClaim(u, false, 0n, 'MerchantLoss');
+  await filedClaim(u, true, 1n, 'MerchantLoss');
   assert.equal(u.svc.state().claims.find((c) => c.claimId === 1n)?.autoPayAt, undefined);
 });
 
 test('tiered autonomy: a fraud flag raised during the objection window cancels the automatic payout', async () => {
   let now = 1_000_000;
   const t = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
-  await filedClaim(t, true, 0n);
+  await filedClaim(t, true, 0n, 'MerchantLoss');
   assert.ok(t.svc.state().claims[0].autoPayAt);
-  await filedClaim(t, false, 1n); // same agent files a claim with no evidence meanwhile
+  await filedClaim(t, false, 1n, 'MerchantLoss'); // same agent files a claim with no evidence meanwhile
   now += 200_000;
   await t.svc.runAutoPay();
   assert.ok(!t.calls.some((c) => c.startsWith('pay:')), 'flagged parties are never auto-paid');
@@ -492,4 +493,40 @@ test('a claim on a refunded policy is never paid', async () => {
   assert.equal(d.paid, undefined);
   assert.match(d.reason ?? '', /refunded/);
   assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 1, 'only the refund');
+});
+
+test('appeal: re-filing the orders of a rejected claim is an appeal, always decided by a human', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, autoPayLimit: 50n * EUR, autoPayDelayMs: 120_000 });
+  await filedClaim(t, true, 0n); // WrongItem on order h(10)
+  await t.svc.decide(0n, false); // a human rejected it
+  // the agent re-files the same order with more evidence
+  t.claims.set(1n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: h(13), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(1n, ['r0']);
+  const rec = t.svc.state().claims.find((c) => c.claimId === 1n)!;
+  assert.equal(rec.appealOf, 0n);
+  assert.equal(rec.autoPayAt, undefined, 'appeals are never paid automatically');
+  now += 1_000_000;
+  await t.svc.runAutoPay();
+  assert.ok(!t.calls.some((c) => c.startsWith('pay:')));
+  assert.equal((await t.svc.decide(1n, true)).paid, 'payout-tx', 'a human can uphold the appeal');
+});
+
+test('wrong-item claims are never paid automatically (a receipt cannot prove the item was wrong)', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, autoPayLimit: 50n * EUR, autoPayDelayMs: 120_000 });
+  await filedClaim(t, true, 0n); // WrongItem
+  assert.equal(t.svc.state().claims[0].autoPayAt, undefined);
+});
+
+test('AP2: a quote with the user\'s AP2 Intent Mandate is refused if the Kuasa mandate is broader', async () => {
+  const t = harness({ ap2Merchant: (name: string) => ({ 'Kuasa demo shop': SHOP, 'Kuasa Cover': TREASURY } as Record<string, string>)[name] });
+  const intent = { user_cart_confirmation_required: false, natural_language_description: 'wine for dinner', merchants: ['Kuasa demo shop', 'Kuasa Cover'], intent_expiry: '2099-01-01T00:00:00Z' };
+  const ok = await t.svc.quote({ mandateUrl: 'https://k.example/m.json', limit: 100n * EUR, days: 30, ap2: intent });
+  assert.ok(!('refused' in ok), 'refused' in ok ? ok.refused : '');
+  assert.ok(!('refused' in ok) && ok.factors.some((f) => f.name === 'AP2 intent'));
+  const narrow = await t.svc.quote({ mandateUrl: 'https://k.example/m.json', limit: 100n * EUR, days: 30, ap2: { ...intent, merchants: ['Kuasa demo shop'] } });
+  assert.match('refused' in narrow ? narrow.refused : '', /broader than the AP2 intent/);
+  const early = await t.svc.quote({ mandateUrl: 'https://k.example/m.json', limit: 100n * EUR, days: 30, ap2: { ...intent, intent_expiry: '2001-01-01T00:00:00Z' } });
+  assert.match('refused' in early ? early.refused : '', /AP2 intent/);
 });

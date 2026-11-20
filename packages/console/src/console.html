@@ -127,7 +127,7 @@ function renderClaims(cv) {
     return `<div class="card">
       <div class="row"><span class="name">Claim #${esc(c.claimId)}</span><span class="pill ${st[0]}">${st[1]}</span></div>
       <dl>
-        <dt>Assessment</dt><dd>${esc(c.assessment.reason)}</dd>
+        <dt>Assessment</dt><dd>${esc(c.assessment.reason)}</dd>${c.appealOf !== undefined && c.appealOf !== null ? `<dt>Appeal</dt><dd>appeal of claim #${esc(c.appealOf)}: a human decides</dd>` : ''}
         <dt>Payout</dt><dd>${ccd(c.assessment.payout)} to ${acct(c.recipient)}</dd>
         <dt>Evidence</dt><dd>${c.receiptTxs.map((t) => tx(t)).join(' · ') || '–'}</dd>
         ${c.paid ? `<dt>Paid</dt><dd>${tx(c.paid)}</dd>` : ''}

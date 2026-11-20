@@ -1,6 +1,6 @@
 import type { Wallet } from '@kuasa/chain';
 import { canonicalJson, type Claim, type IssuePolicyParams, type Mandate, type MandateEntry, type Policy, type RegistryEvent, sha256Hex } from '@kuasa/core';
-import { assess, type Assessment, quote, type Quote, type RiskInput } from '@kuasa/cover';
+import { assess, type Assessment, quote, type Quote, type RiskInput, scopeFromAp2Intent, type Ap2IntentMandate } from '@kuasa/cover';
 import type { IdentitySource } from '@kuasa/merchant';
 
 const EU = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK'];
@@ -23,6 +23,8 @@ export type InsurerDeps = {
   identity: IdentitySource;
   /** Checks the requester controls the agent payer (signed payer proof); quotes count toward that payer's quota. */
   verifyPayer(payer: string, proof: unknown): Promise<boolean>;
+  /** Concordium account of a merchant named in an AP2 intent (AP2 names merchants; Kuasa needs accounts). */
+  ap2Merchant?(name: string): string | undefined;
   cover: {
     issuePolicy(p: IssuePolicyParams, operator?: Wallet): Promise<TxResult & { id: bigint | null }>;
     policy(id: bigint): Promise<Policy | null>;
@@ -62,7 +64,9 @@ export type InsurerDeps = {
 const toSnapshot = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? { $big: x.toString() } : x));
 const fromSnapshot = (s: string) => JSON.parse(s, (_k, x) => (x && typeof x === 'object' && typeof x.$big === 'string' && Object.keys(x).length === 1 ? BigInt(x.$big) : x));
 
-export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; order?: { ref: string; amount: bigint }; proof?: unknown };
+export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; order?: { ref: string; amount: bigint }; proof?: unknown;
+  /** The user's AP2 Intent Mandate, when the agent works under one: the Kuasa mandate must sit inside it. */
+  ap2?: Ap2IntentMandate };
 export type StoredQuote = Quote & {
   quoteId: string; request: QuoteRequest; mandateId: string; owner: string; payer: string; token: string; expires: number;
 };
@@ -76,6 +80,8 @@ type ClaimRecord = {
   paid?: string; amountPaid?: bigint; recordPending?: boolean;
   /** Tiered autonomy: paid automatically at this time unless a human holds it first. */
   autoPayAt?: number; held?: boolean; decidedBy?: 'auto';
+  /** Re-filed orders of an earlier rejected claim: an appeal, always decided by a human. */
+  appealOf?: bigint;
   /** Why an approved claim is not paid (e.g. insufficient pool); `final` when it never will be. */
   payoutBlocked?: string; final?: boolean;
   busy?: Promise<{ decided: true; paid?: string; reason?: string }>;
@@ -174,6 +180,13 @@ export class InsurerService {
     if (!e || e.revoked || e.owner !== m.principal.account || e.payer !== m.agent.payer) return { refused: 'mandate not active on-chain' };
     if (Number(e.validUntilMs) < this.deps.now()) return { refused: 'mandate expired' };
     if (req.limit > e.maxTotal) return { refused: 'cover limit exceeds the mandate budget' };
+    if (req.ap2) {
+      const scope = scopeFromAp2Intent(req.ap2, (n) => this.deps.ap2Merchant?.(n));
+      if ('refused' in scope) return { refused: `AP2 intent: ${scope.refused}` };
+      const outside = (m.scope.merchants ?? []).filter((x) => !scope.merchants.includes(x));
+      if (!m.scope.merchants?.length || outside.length) return { refused: 'the Kuasa mandate is broader than the AP2 intent (it allows merchants the user did not name)' };
+      if (Number(e.validUntilMs) > scope.validUntil * 1000) return { refused: 'the Kuasa mandate outlives the AP2 intent (expiry)' };
+    }
     const proof = await this.deps.identity.claims(m, id);
     const proven = proof.ok && (proof.claims.ageOver ?? 0) >= 18 && !!proof.claims.residency?.length && proof.claims.residency.every((c) => EU.includes(c));
     const input: RiskInput = {
@@ -185,6 +198,7 @@ export class InsurerService {
     };
     const q = quote(input);
     if ('refused' in q) return q;
+    if (req.ap2) q.factors.push({ name: 'AP2 intent', multiplier: 1, reason: 'Kuasa mandate sits inside the user’s AP2 Intent Mandate (merchants and expiry)' });
     return { ...q, mandateId: id, owner: m.principal.account, payer: m.agent.payer, token: m.agent.registry.tokenId };
   }
 
@@ -347,9 +361,11 @@ export class InsurerService {
     const rec: ClaimRecord = {
       claimId, policyId: c.policyId, holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
       assessment: a, receiptTxs, orders: c.orders, mandateId: p.mandate.id,
+      appealOf: [...this.claims.values()].find((x) => x.verdict === 'rejected' && x.mandateId === p.mandate.id && x.orders.some((o) => c.orders.includes(o)))?.claimId,
     };
     const limit = this.deps.autoPayLimit;
-    if (a.ok && limit !== undefined && a.payout <= limit && !this.flagged(rec)) rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
+    // Automatic only where the chain proves the loss: not for appeals, not for wrong items (a receipt cannot show the item was wrong).
+    if (a.ok && limit !== undefined && a.payout <= limit && !this.flagged(rec) && rec.appealOf === undefined && c.kind !== 'WrongItem') rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
     this.claims.set(claimId, rec);
     this.save();
 

@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { bigintJson, cis8004GetMetadata, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
+import { bigintJson, cis8004GetMetadata, cis8004SetMetadata, cis8004SetMetadataTx, connect, prepareTx, KuasaCover, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
 import { sha256Hex } from '@kuasa/core';
 import { isClaimId } from './validate.js';
 import { STEPS } from './demo.js';
@@ -126,6 +126,30 @@ app.post('/api/demo/:id', async (req, res) => {
   const step = STEPS.find((x) => x.id === req.params.id);
   if (!step?.run) return json(res, { error: 'no such runnable step' }, 404);
   try { json(res, { ok: true, result: await step.run({ publishCover, badge, solvency }) }); } catch (e) { json(res, { ok: false, error: (e as Error).message }, 500); }
+});
+
+/**
+ * Owner-signed variants: the console only prepares the transaction; the owner signs it in their own
+ * wallet (scripts/owner-sign.ts stands in for one) and the console never touches the key.
+ */
+app.post('/api/prepare/publish-cover/:name', async (req, res) => {
+  try {
+    const s = loadState();
+    const m = s.mandates[req.params.name];
+    if (!m || !s.cover) return json(res, { error: 'unknown agent or no cover contract' }, 404);
+    const v = await new KuasaCover(grpc, BigInt(s.cover)).coverOf(m.payer);
+    if (v.policyId === null) return json(res, { error: 'no live cover for this agent' }, 400);
+    const value = `policy=${v.policyId};limit=${v.periodRemaining};cover=${s.cover}.0;at=${Math.floor(Date.now() / 1000)}`;
+    json(res, { signer: m.owner, action: `publish kuasa:cover on agent ${s.agents[req.params.name]}`, value, transaction: await prepareTx(grpc, cis8004SetMetadataTx(s.agents[req.params.name], 'kuasa:cover', value), m.owner) });
+  } catch (e) { json(res, { error: (e as Error).message }, 500); }
+});
+app.post('/api/prepare/revoke/:name', async (req, res) => {
+  try {
+    const m = loadState().mandates[req.params.name];
+    if (!m) return json(res, { error: 'unknown mandate' }, 404);
+    const reason = await sha256Hex(`revoked by the owner at ${new Date().toISOString()}`);
+    json(res, { signer: m.owner, action: `revoke mandate ${m.id}`, transaction: await prepareTx(grpc, registry.revokeTx(m.id, reason), m.owner) });
+  } catch (e) { json(res, { error: (e as Error).message }, 500); }
 });
 
 /** Owner revokes: signed by the owner account (#0). Effective for every merchant on the next check. */

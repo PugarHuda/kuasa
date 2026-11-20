@@ -49,6 +49,29 @@ export async function submit(grpc: ConcordiumGRPCClient, tx: Transaction.Builder
   return { hash: TransactionHash.toHexString(hash), summary };
 }
 
+const jsonSafe = (_k: string, v: unknown) =>
+  typeof v === 'bigint' ? (v <= BigInt(Number.MAX_SAFE_INTEGER) && v >= BigInt(Number.MIN_SAFE_INTEGER) ? Number(v) : v.toString()) : v;
+
+/**
+ * An unsigned transaction for `sender` to sign in their own wallet: the service that prepares it
+ * never holds the key. Returns the SDK's signable JSON (nonce and a 30-minute expiry filled in).
+ */
+export async function prepareTx(grpc: ConcordiumGRPCClient, tx: Transaction.Builder, sender: string) {
+  const from = AccountAddress.fromBase58(sender);
+  const { nonce } = await grpc.getNextAccountNonce(from);
+  const signable = tx.addMetadata({ sender: from, nonce, expiry: TransactionExpiry.futureMinutes(30) }).build();
+  return JSON.parse(JSON.stringify(Transaction.toJSON(signable as never), jsonSafe)) as Record<string, unknown>;
+}
+
+/** The wallet side: sign a prepared transaction with the sender's own key and submit it. */
+export async function signAndSend(grpc: ConcordiumGRPCClient, json: unknown, from: Wallet) {
+  const signable = Transaction.signableFromJSON(json);
+  const signed = await Transaction.sign(signable, from.signer);
+  const hash = await grpc.sendTransaction(Transaction.finalize(signed as never));
+  const summary = await grpc.waitForTransactionFinalization(hash);
+  return { hash: TransactionHash.toHexString(hash), summary };
+}
+
 /** Anchors bytes on-chain (Verify & Access requests and audit records use this). */
 export const registerData = (grpc: ConcordiumGRPCClient, data: Uint8Array, from: Wallet, sponsor?: Wallet) =>
   submit(grpc, Transaction.registerData({ data: new DataBlob(ab(data)) }) as Transaction.Builder, from, sponsor);
@@ -85,6 +108,11 @@ export class KuasaRegistry {
 
   issue = (p: IssueParams, owner: Wallet, sponsor?: Wallet) => this.update('issue', encodeIssue(p), owner, sponsor);
   revoke = (id: string, reasonHex: string, owner: Wallet, sponsor?: Wallet) => this.update('revoke', encodeRevoke(id, reasonHex), owner, sponsor);
+  /** Unsigned revoke, for the owner to sign in their own wallet. */
+  revokeTx = (id: string, reasonHex: string) => Transaction.updateContract(
+    { amount: CcdAmount.zero(), address: this.address, receiveName: ReceiveName.fromString('kuasa.revoke'), message: Parameter.fromBuffer(ab(encodeRevoke(id, reasonHex))) },
+    Energy.create(30_000),
+  ) as Transaction.Builder;
   recordReceipt = (owner: string, id: string, orderHex: string, paymentTxHex: string, amount: bigint, recorder: Wallet) =>
     this.update('recordReceipt', encodeReceipt(owner, id, orderHex, paymentTxHex, amount), recorder);
   reportIncident = (owner: string, id: string, evidenceHex: string, reporter: Wallet, sponsor?: Wallet) =>
@@ -176,11 +204,14 @@ export function encodeSetMetadata(tokenHex: string, key: string, value: string):
   return Uint8Array.from([...tokenParam(tokenHex), ...lenPrefixed(enc.encode(key)), ...lenPrefixed(enc.encode(value))]);
 }
 
+/** Unsigned CIS-8004 setMetadata, for the token owner to sign in their own wallet. */
+export const cis8004SetMetadataTx = (tokenHex: string, key: string, value: string) => Transaction.updateContract(
+  { amount: CcdAmount.zero(), address: AGENT_REGISTRY, receiveName: ReceiveName.fromString('CIS-8004.setMetadata'), message: Parameter.fromBuffer(ab(encodeSetMetadata(tokenHex, key, value))) },
+  Energy.create(30_000),
+) as Transaction.Builder;
+
 export async function cis8004SetMetadata(grpc: ConcordiumGRPCClient, tokenHex: string, key: string, value: string, owner: Wallet, sponsor?: Wallet) {
-  const tx = Transaction.updateContract(
-    { amount: CcdAmount.zero(), address: AGENT_REGISTRY, receiveName: ReceiveName.fromString('CIS-8004.setMetadata'), message: Parameter.fromBuffer(ab(encodeSetMetadata(tokenHex, key, value))) },
-    Energy.create(30_000),
-  ) as Transaction.Builder;
+  const tx = cis8004SetMetadataTx(tokenHex, key, value);
   const r = await submit(grpc, tx, owner, sponsor);
   const s = r.summary.summary as { transactionType?: string };
   if (s.transactionType === 'failed') throw new Error(`CIS-8004.setMetadata rejected (tx ${r.hash})`);

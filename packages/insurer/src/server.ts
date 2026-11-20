@@ -37,6 +37,12 @@ const treasuryAcc = accounts.find((a) => a.credNumber === 0)!;
 const operatorAcc = accounts.find((a) => a.credNumber === 1)!;
 const treasury = wallet(treasuryAcc.address, treasuryAcc.key);
 const operator = wallet(operatorAcc.address, operatorAcc.key);
+const AP2_MERCHANTS: Record<string, string> = {
+  'Kuasa Cover': treasuryAcc.address,
+  ...(existsSync(new URL('accounts/merchant.json', ROOT)) ? { 'Kuasa demo shop': JSON.parse(readFileSync(new URL('accounts/merchant.json', ROOT), 'utf8')).accounts.find((a: { credNumber: number }) => a.credNumber === 0).address } : {}),
+};
+/** The user's AP2 Intent Mandate, if the agent sends one (base64url JSON in x-ap2-intent-mandate). */
+const ap2Of = (v: unknown) => { try { return v ? JSON.parse(Buffer.from(String(v), 'base64url').toString()) : undefined; } catch { return undefined; } };
 
 /**
  * Every claim decision is published on the insurer's own CIS-8004 entry (key kuasa:decision:<id>),
@@ -75,6 +81,8 @@ const svc = new InsurerService({
   mandateEntry: (owner, id) => registry.view(owner, id),
   identity: new MandateProofIdentity({ grpc, network: 'Testnet', fetchText: fetchDoc }),
   // the requester must sign with the agent payer key (audience: this service's public origin)
+  // AP2 names merchants; their Concordium accounts (demo: the shop's payTo and the insurer's pool)
+  ap2Merchant: (name) => AP2_MERCHANTS[name],
   verifyPayer: (payer, proof) => verifyPayerProof({ header: proof as (n: string) => string | undefined, payer, audience: PUBLIC_URL, accountInfo: (a) => grpc.getAccountInfo(a) }),
   cover: {
     issuePolicy: async (p) => { const r = await cover.issuePolicy(p, operator); return { hash: r.hash, id: KuasaCover.idFromEvents(r.summary, coverIndex) }; },
@@ -189,7 +197,7 @@ app.get('/cover/quote', async (req, res) => {
   if (!mandateUrl) return json(res, { refused: 'no mandate presented (x-kuasa-mandate header)' }, 400);
   const order = req.query.order ? { ref: String(req.query.order), amount: big(req.query.amount) } : undefined;
   if (order && !/^[0-9a-f]{64}$/.test(order.ref)) return json(res, { refused: 'bad order reference' }, 400);
-  json(res, await svc.quote({ mandateUrl, limit: order ? order.amount : big(req.query.limit), days: Number(req.query.days ?? 30), order, proof: (n: string) => req.header(n) }));
+  json(res, await svc.quote({ mandateUrl, limit: order ? order.amount : big(req.query.limit), days: Number(req.query.days ?? 30), order, proof: (n: string) => req.header(n), ap2: ap2Of(req.header('x-ap2-intent-mandate')) }));
 });
 
 // Unknown quotes never reach the paywall.
@@ -243,7 +251,7 @@ app.post('/a2a', async (req, res) => json(res, await handleA2a(req.body, {
   // Same rules as GET /cover/quote: the requester proves control of the payer (headers as fields of `proof`).
   quote: async (d) => {
     const proof = (d.proof ?? {}) as Record<string, unknown>;
-    return svc.quote({ mandateUrl: String(d.mandateUrl ?? ''), limit: big(d.limit), days: Number(d.days ?? 30), proof: (n: string) => (typeof proof[n] === 'string' ? (proof[n] as string) : undefined) });
+    return svc.quote({ mandateUrl: String(d.mandateUrl ?? ''), limit: big(d.limit), days: Number(d.days ?? 30), ap2: d.ap2 as never, proof: (n: string) => (typeof proof[n] === 'string' ? (proof[n] as string) : undefined) });
   },
 })));
 

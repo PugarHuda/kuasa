@@ -22,8 +22,11 @@ server.tool('cover_quote', 'Price Kuasa Cover (insurance) for this agent: limit 
 server.tool('cover_buy', 'Buy Kuasa Cover for this agent (premium paid over x402 under the mandate). Returns the policy.', { limit: z.number().positive(), days: z.number().int().min(1).max(365).default(30) }, async ({ limit, days }) => text(await agent.coverBuy(eur(limit), days)));
 server.tool('kuasa_my_payments', "List this agent's recent purchases at the shop (item, amount in atomic EUDemo with 6 decimals, payment tx, time). Use it to spot mistakes such as being charged twice.", async () => text(await agent.myPayments()));
 server.tool('cover_status', "Show this agent's live cover and policies.", async () => text(await agent.coverStatus()));
-server.tool('file_claim', 'File an insurance claim for a mistake this agent made (AgentMistake: two duplicate payments; WrongItem: one payment). A human claims handler approves before payout.',
+server.tool('file_claim', 'File an insurance claim for a mistake this agent made (AgentMistake: two duplicate payments; WrongItem: one payment). Small duplicate-order claims are paid automatically after an objection window; others wait for a human claims handler.',
   { kind: z.enum(['AgentMistake', 'WrongItem']), amount: z.number().positive(), paymentTxs: z.array(z.string().regex(/^[0-9a-f]{64}$/)).min(1).max(2) },
   async ({ kind, amount, paymentTxs }) => text(await agent.fileClaim(kind, paymentTxs, eur(amount))));
+server.tool('appeal_claim', 'Appeal a rejected claim: re-file the same payments, ideally with a better explanation. The insurer recognises the re-filed orders as an appeal of the earlier claim; appeals are always decided by a human.',
+  { rejectedClaimId: z.string().regex(/^d+$/), kind: z.enum(['AgentMistake', 'WrongItem']), amount: z.number().positive(), paymentTxs: z.array(z.string().regex(/^[0-9a-f]{64}$/)).min(1).max(2), reason: z.string().max(280) },
+  async ({ rejectedClaimId, kind, amount, paymentTxs, reason }) => text(await agent.fileClaim(kind, paymentTxs, eur(amount), `appeal of #${rejectedClaimId}: ${reason}`)));
 
 await server.connect(new StdioServerTransport());
