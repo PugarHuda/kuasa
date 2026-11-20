@@ -100,7 +100,7 @@ app.get('/quote', async (req, res) => {
   const payer = String(req.query.payer ?? '');
   const d = await guard.decide({ mandateUrl: req.header(MANDATE_HEADER), route: path, payer, payTo, asset: ASSET, amount: p.price });
   // An order reference lets the agent buy per-order cover before paying (send it back in x-kuasa-order).
-  const orderRef = d.ok || d.reasons.every((r) => r.startsWith('cover required')) ? await guard.issueOrderRef({ payer, payTo, route: path, amount: p.price }) : undefined;
+  const orderRef = d.ok || d.reasons.every((r) => r.startsWith('cover required')) ? await guard.issueOrderRef({ payer, payTo, route: path, amount: p.price }).catch(() => undefined) : undefined;
   json(res, { ...d, orderRef, amount: p.price, payTo });
 });
 

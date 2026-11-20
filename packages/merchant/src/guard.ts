@@ -102,11 +102,12 @@ export class KuasaGuard {
   /** Issues a single-use order reference (10 min) that a payment can be bound to via ORDER_HEADER. */
   async issueOrderRef(o: { payer: string; payTo: string; route: string; amount: bigint }): Promise<string> {
     for (const [k, v] of this.orders) if (v.expires < this.now()) this.orders.delete(k);
-    const perPayer = this.opts.maxOrdersPerPayer ?? 20;
-    const mine = [...this.orders].filter(([, v]) => v.payer === o.payer);
-    for (const [k] of mine.slice(0, Math.max(0, mine.length - perPayer + 1))) this.orders.delete(k);
-    const cap = this.opts.maxOrders ?? 10_000; // global backstop
-    for (const k of this.orders.keys()) { if (this.orders.size < cap) break; this.orders.delete(k); }
+    // Anyone can quote "as" a public payer, so at a cap new references are refused and existing
+    // ones are never evicted (they expire after 10 minutes).
+    const mine = [...this.orders.values()].filter((v) => v.payer === o.payer).length;
+    if (mine >= (this.opts.maxOrdersPerPayer ?? 20) || this.orders.size >= (this.opts.maxOrders ?? 10_000)) {
+      throw new Error('too many open order references; try again in a few minutes');
+    }
     const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('hex');
     const ref = await sha256Hex(canonicalJson({ ...o, amount: String(o.amount), nonce }));
     this.orders.set(ref, { ...o, expires: this.now() + ORDER_TTL_MS });

@@ -82,6 +82,8 @@ export class InsurerService {
   private quotes = new Map<string, StoredQuote>();
   /** Quotes whose premium payment is in flight: one quote backs one payment. */
   private paying = new Map<string, number>(); // quoteId -> reserved at (ms)
+  /** Quotes whose premium settled: their reservation never lapses. */
+  private settled = new Set<string>();
   private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string }[] = [];
   /** Premiums that settled but whose policy is not on-chain yet; the quote travels with them. */
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
@@ -135,15 +137,11 @@ export class InsurerService {
     const stored: StoredQuote = { ...fresh, quoteId, request: req, expires: this.deps.now() + QUOTE_TTL_MS };
     this.dropStaleReservations();
     for (const [id, q] of this.quotes) if (q.expires < this.deps.now() && !this.paying.has(id)) this.quotes.delete(id);
-    // Per payer first, so one payer flooding quotes only ever evicts its own (Map order = oldest first).
-    const perPayer = this.deps.maxQuotesPerPayer ?? 20;
-    const mine = [...this.quotes.values()].filter((q) => q.payer === stored.payer && !this.paying.has(q.quoteId));
-    for (const q of mine.slice(0, Math.max(0, mine.length - perPayer + 1))) this.quotes.delete(q.quoteId);
-    const cap = this.deps.maxQuotes ?? 10_000; // global backstop
-    for (const id of this.quotes.keys()) {
-      if (this.quotes.size < cap) break;
-      if (!this.paying.has(id)) this.quotes.delete(id);
-    }
+    // Mandate URLs are public, so anyone can ask for quotes "as" an agent: at a cap new quotes are
+    // refused and nothing existing is ever evicted (quotes expire after 10 minutes).
+    const mine = [...this.quotes.values()].filter((q) => q.payer === stored.payer).length;
+    if (mine >= (this.deps.maxQuotesPerPayer ?? 20)) return { refused: 'too many open quotes for this agent; try again in a few minutes' };
+    if (this.quotes.size >= (this.deps.maxQuotes ?? 10_000)) return { refused: 'too many open quotes; try again in a few minutes' };
     this.quotes.set(quoteId, stored);
     return stored;
   }
@@ -188,6 +186,14 @@ export class InsurerService {
 
   /** After the premium settled: write the policy on-chain (3 attempts; kept as unissued otherwise). */
   async issue(quoteId: string, premiumTx: string, stored?: StoredQuote): Promise<bigint | null> {
+    const done = this.policies.find((p) => p.quoteId === quoteId);
+    if (done && done.premiumTx !== premiumTx) {
+      // A second premium paid against an already issued quote: one quote, one policy.
+      this.needsRefund.push({ quoteId, premiumTx, reason: 'second payment for a quote whose policy was already issued' });
+      this.save();
+      return null;
+    }
+    if (done) return done.policyId;
     const q = stored ?? this.quotes.get(quoteId);
     if (!q) {
       // Paid but the quote is gone: never drop it silently; keep it visible for a manual refund.
@@ -205,8 +211,6 @@ export class InsurerService {
     const record = (id: bigint) => {
       this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period' });
       this.premiumsIn += q.premium;
-      this.quotes.delete(quoteId);
-      this.paying.delete(quoteId);
       this.save();
       return id;
     };
@@ -241,12 +245,18 @@ export class InsurerService {
 
   /** A reservation whose payment never settled nor failed visibly (e.g. rejected at verification) lapses. */
   private dropStaleReservations() {
-    for (const [id, at] of this.paying) if (this.deps.now() - at > RESERVATION_TTL_MS) this.paying.delete(id);
+    for (const [id, at] of this.paying) if (!this.settled.has(id) && this.deps.now() - at > RESERVATION_TTL_MS) this.paying.delete(id);
   }
 
   /** The reserved premium payment did not settle: the quote may be paid again. */
   releaseQuote(quoteId: string) {
-    this.paying.delete(quoteId);
+    if (!this.settled.has(quoteId)) this.paying.delete(quoteId);
+  }
+
+  /** The premium settled: the quote is consumed, whatever happens to issuance. */
+  markSettled(quoteId: string) {
+    this.settled.add(quoteId);
+    this.paying.set(quoteId, this.paying.get(quoteId) ?? this.deps.now());
   }
 
   quoteCount = () => this.quotes.size;

@@ -144,6 +144,7 @@ server.onBeforeVerify((async (ctx: Parameters<KuasaGuard['beforeVerify']>[0]) =>
 server.onAfterSettle((async (ctx: Parameters<KuasaGuard['afterSettle']>[0]) => {
   await guard.afterSettle(ctx); // receipt: the premium draws down the mandate budget
   if (ctx.result.success !== false) {
+    svc.markSettled(quoteIdOf(ctx)); // consumed before issuance: the quote can never back another payment
     const policyId = await svc.issue(quoteIdOf(ctx), ctx.result.transaction);
     audit.append({ kind: 'premium', payer: payerOf(ctx), amount: ctx.requirements.amount, premiumTx: ctx.result.transaction, policyId });
   }
