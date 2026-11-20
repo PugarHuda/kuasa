@@ -24,3 +24,21 @@ test('capital providers share premiums and losses pro rata, and cannot withdraw 
   const snap = new CapitalLedger(l.snapshot());
   assert.deepEqual(snap.balances(), l.balances(), 'round-trips');
 });
+
+test('new capital is locked up before it can leave, and a failed payment rolls a withdrawal back', () => {
+  const l = new CapitalLedger();
+  const day = 86_400_000;
+  l.deposit('lp', 30n * EUR, 'tx-1', 0);
+  const pool = { pool: 100n * EUR, exposure: 0n };
+  assert.throws(() => l.withdraw('lp', 1n * EUR, pool, day, 7 * day), /locked/);
+  l.withdraw('lp', 10n * EUR, pool, 8 * day, 7 * day);
+  l.unwithdraw('lp', 10n * EUR);
+  assert.equal(l.balances()[0].balance, 30n * EUR, 'rolled back');
+});
+
+test('capital memo: only transfers marked "kuasa capital" are deposits', async () => {
+  const { isCapitalMemo } = await import('../src/capital.js');
+  assert.equal(isCapitalMemo('6d6b75617361206361706974616c'), true);
+  assert.equal(isCapitalMemo('78186b7561736120636f76657220706f6f6c206361706974616c'), false, 'a different text');
+  assert.equal(isCapitalMemo(undefined), false);
+});

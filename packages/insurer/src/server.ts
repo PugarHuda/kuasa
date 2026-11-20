@@ -19,7 +19,7 @@ import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exa
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
 import { solvency } from '@kuasa/cover';
 import { handleA2a } from './a2a.js';
-import { CapitalLedger } from './capital.js';
+import { CapitalLedger, isCapitalMemo } from './capital.js';
 import { AuditLog, bigintJson, cis8004SetMetadata, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyPayerProof } from '@kuasa/merchant';
@@ -390,6 +390,13 @@ void (async () => {
   setInterval(reconcileCapital, 15_000);
 })();
 
+/** Capital operations run one at a time (deposits, withdrawals and their reconciliation). */
+let capitalLock: Promise<unknown> = Promise.resolve();
+const serialCapital = <T>(fn: () => Promise<T>) => { const r = capitalLock.then(fn); capitalLock = r.catch(() => undefined); return r; };
+const LOCKUP_MS = Number(process.env.KUASA_CAPITAL_LOCKUP_MS ?? 7 * 86_400_000);
+/** Premium payments also land in the pool; they are never capital. */
+const isPremiumTx = (tx: string) => { const st = svc.state(); return [...st.policies, ...st.unissued, ...st.needsRefund].some((p) => (p as { premiumTx?: string }).premiumTx === tx); };
+
 const capitalView = async () => {
   const s = await solvencyNow();
   return { pool: s.pool, exposure: s.exposure, providers: capital.balances().map((b) => ({ ...b, share: s.pool > 0n ? Number((b.balance * 10_000n) / s.pool) / 100 : 0 })) };
@@ -403,12 +410,17 @@ app.post('/capital/deposit', async (req, res) => {
   try {
     const st = await grpc.getBlockItemStatus(sdk.TransactionHash.fromHexString(tx));
     if (st.status !== 'finalized' || !st.outcome) return json(res, { error: 'transaction not finalized' }, 400);
-    const sum = st.outcome.summary as unknown as { transactionType?: string; events?: { tag: string; tokenId: string; from: { address: string }; to: { address: string }; amount: { value: string } }[] };
+    const sum = st.outcome.summary as unknown as { transactionType?: string; events?: { tag: string; tokenId: string; from: { address: string }; to: { address: string }; amount: { value: string }; memo?: string }[] };
     const transfers = (sum.events ?? []).filter((e) => e.tag === 'TokenTransfer' && String(e.tokenId) === ASSET && String(e.to?.address) === treasury.address.address);
     if (sum.transactionType !== 'tokenUpdate' || transfers.length !== 1) return json(res, { error: 'not a single EUDemo transfer into the pool' }, 400);
+    if (!isCapitalMemo(transfers[0].memo)) return json(res, { error: 'a capital deposit carries the memo "kuasa capital"' }, 400);
+    if (isPremiumTx(tx)) return json(res, { error: 'this transfer is a premium payment, not capital' }, 400);
     const provider = String(transfers[0].from.address);
-    capital.deposit(provider, BigInt(transfers[0].amount.value), tx);
-    saveCapital();
+    await serialCapital(async () => {
+      reconcileCapital(); // results so far belong to the providers who carried the risk
+      capital.deposit(provider, BigInt(transfers[0].amount.value), tx, Date.now());
+      saveCapital();
+    });
     audit.append({ kind: 'capital-deposit', provider, amount: transfers[0].amount.value, tx });
     json(res, await capitalView());
   } catch (e) { json(res, { error: (e as Error).message }, 400); }
@@ -420,11 +432,22 @@ app.post('/capital/withdraw', async (req, res) => {
   try {
     if (!(await verifyPayerProof({ header: (n) => req.header(n), payer: provider, audience: PUBLIC_URL, accountInfo: (a) => grpc.getAccountInfo(a) }))) return json(res, { error: 'provider proof required' }, 401);
     const amount = big(req.body?.amount);
-    const s = await solvencyNow();
-    reconcileCapital();
-    capital.withdraw(provider, amount, { pool: s.pool, exposure: s.exposure });
-    saveCapital();
-    const paid = await treasuryPay(provider, amount, 'kuasa cover capital withdrawal');
+    const paid = await serialCapital(async () => {
+      reconcileCapital();
+      const sv = await solvencyNow(); // the pool after every earlier withdrawal settled (they ran before this one)
+      capital.withdraw(provider, amount, { pool: sv.pool, exposure: sv.exposure }, Date.now(), LOCKUP_MS);
+      saveCapital();
+      try {
+        const hash = await treasuryPay(provider, amount, 'kuasa cover capital withdrawal');
+        const done = await grpc.waitForTransactionFinalization(sdk.TransactionHash.fromHexString(hash));
+        if ((done.summary as { transactionType?: string }).transactionType === 'failed') throw new Error('transfer failed');
+        return hash;
+      } catch (e) {
+        capital.unwithdraw(provider, amount); // nothing left the pool
+        saveCapital();
+        throw e;
+      }
+    });
     audit.append({ kind: 'capital-withdrawal', provider, amount: String(amount), tx: paid });
     json(res, { tx: paid, ...(await capitalView()) });
   } catch (e) { json(res, { error: (e as Error).message }, 400); }

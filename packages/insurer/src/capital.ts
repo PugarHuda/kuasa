@@ -4,7 +4,15 @@
  * Capital backs live cover, so a withdrawal is refused if the pool would no longer cover every live
  * limit (pool - amount < exposure). Integer arithmetic; rounding remainders go to the largest balance.
  */
-type Account = { provider: string; deposited: bigint; premiums: bigint; losses: bigint; withdrawn: bigint };
+type Account = { provider: string; deposited: bigint; premiums: bigint; losses: bigint; withdrawn: bigint; lots?: { amount: bigint; at: number }[] };
+
+/** A capital deposit is an EUDemo transfer into the pool whose memo is the CBOR text "kuasa capital". */
+export function isCapitalMemo(hex: string | undefined) {
+  if (!hex || !/^[0-9a-f]*$/i.test(hex)) return false;
+  const b = Buffer.from(hex, 'hex');
+  const [len, start] = b[0] >= 0x60 && b[0] <= 0x77 ? [b[0] - 0x60, 1] : b[0] === 0x78 ? [b[1], 2] : [-1, 0];
+  return len >= 0 && b.length === start + len && b.subarray(start).toString('utf8') === 'kuasa capital';
+}
 const balanceOf = (a: Account) => a.deposited + a.premiums - a.losses - a.withdrawn;
 
 export class CapitalLedger {
@@ -21,12 +29,13 @@ export class CapitalLedger {
   }
 
   /** A verified transfer into the pool (each transaction counts once). */
-  deposit(provider: string, amount: bigint, tx: string) {
+  deposit(provider: string, amount: bigint, tx: string, at = 0) {
     if (this.txs.has(tx)) throw new Error('deposit already recorded');
     if (amount <= 0n) throw new Error('deposit must be positive');
     this.txs.add(tx);
     const a = this.accounts.get(provider) ?? { provider, deposited: 0n, premiums: 0n, losses: 0n, withdrawn: 0n };
     a.deposited += amount;
+    a.lots = [...(a.lots ?? []), { amount, at }];
     this.accounts.set(provider, a);
   }
 
@@ -44,11 +53,20 @@ export class CapitalLedger {
   onPremium(amount: bigint) { this.split(amount, 'premiums'); }
   onPayout(amount: bigint) { this.split(amount, 'losses'); }
 
-  withdraw(provider: string, amount: bigint, pool: { pool: bigint; exposure: bigint }) {
+  /** lockupMs: capital deposited more recently than this cannot leave (no just-in-time premium capture). */
+  withdraw(provider: string, amount: bigint, pool: { pool: bigint; exposure: bigint }, now = Date.now(), lockupMs = 0) {
     const a = this.accounts.get(provider);
-    if (!a || amount <= 0n || amount > balanceOf(a)) throw new Error('amount exceeds this provider\'s balance');
+    if (!a || amount <= 0n || amount > balanceOf(a)) throw new Error("amount exceeds this provider's balance");
+    const locked = (a.lots ?? []).filter((l) => l.at > now - lockupMs).reduce((sum, l) => sum + l.amount, 0n);
+    if (amount > balanceOf(a) - locked) throw new Error(`capital deposited in the last ${Math.round(lockupMs / 86_400_000)} days is locked`);
     if (pool.pool - amount < pool.exposure) throw new Error('withdrawal would leave live exposure uncovered');
     a.withdrawn += amount;
+  }
+
+  /** The payment for a withdrawal failed: put it back. */
+  unwithdraw(provider: string, amount: bigint) {
+    const a = this.accounts.get(provider);
+    if (a) a.withdrawn -= amount;
   }
 
   balances() {
