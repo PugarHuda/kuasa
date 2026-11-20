@@ -362,3 +362,42 @@ test('consumed quotes do not count toward the per-payer cap', async () => {
   }
   assert.equal(t.svc.quoteCount(), 0, 'issued quotes are removed');
 });
+
+test('tiered autonomy: a small positive claim is paid automatically after the objection window', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
+  await filedClaim(t, true, 0n);
+  assert.equal(t.svc.state().claims[0].autoPayAt, now + 120_000);
+  await t.svc.runAutoPay();
+  assert.ok(!t.calls.some((c) => c.startsWith('pay:')), 'nothing before the window closes');
+  now += 121_000;
+  await t.svc.runAutoPay();
+  assert.ok(t.calls.includes(`pay:${PAYER}:${23n * EUR}`));
+  assert.equal(t.svc.state().claims[0].decidedBy, 'auto');
+});
+
+test('tiered autonomy: claims above the limit wait for a human', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, autoPayLimit: 10n * EUR, autoPayDelayMs: 120_000 });
+  await filedClaim(t, true, 0n);
+  assert.equal(t.svc.state().claims[0].autoPayAt, undefined);
+  now += 1_000_000;
+  await t.svc.runAutoPay();
+  assert.ok(!t.calls.some((c) => c.startsWith('pay:')));
+});
+
+test('tiered autonomy: a held claim goes to a human; claimants with rejected claims are never auto-paid', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
+  await filedClaim(t, true, 0n);
+  t.svc.hold(0n);
+  now += 200_000;
+  await t.svc.runAutoPay();
+  assert.ok(!t.calls.some((c) => c.startsWith('pay:')), 'held');
+  assert.equal((await t.svc.decide(0n, true)).paid, 'payout-tx', 'the human can still approve');
+
+  const u = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
+  await filedClaim(u, false, 0n);
+  await filedClaim(u, true, 1n);
+  assert.equal(u.svc.state().claims.find((c) => c.claimId === 1n)?.autoPayAt, undefined);
+});

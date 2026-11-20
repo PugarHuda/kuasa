@@ -17,6 +17,8 @@ export type RiskInput = {
   incidents: number;
   /** Receipts recorded under the mandate (on-chain counter). */
   receipts: number;
+  /** Claims already paid to this agent across its policies (on-chain, cover contract). */
+  paidClaims?: number;
   /** Per-order top-up cover instead of period cover. */
   order?: { amount: bigint };
 };
@@ -58,8 +60,13 @@ export function quote(input: RiskInput): Quote | { refused: string } {
   if (input.provenAgeAndResidency) applied.push({ name: 'proven attributes', bps: 9_000n, reason: 'owner proved age and residency with a ZK proof bound to the agent' });
   if (input.ownerKind === 'business') applied.push({ name: 'business owner', bps: 8_500n, reason: 'LEI-verified business principal' });
   if (input.incidents > 0) applied.push({ name: 'incidents', bps: BPS + 2_500n * BigInt(input.incidents), reason: `${input.incidents} incident(s) on the mandate` });
+  const paid = input.paidClaims ?? 0;
+  if (paid > 0) {
+    const c = BPS + 2_000n * BigInt(paid);
+    applied.push({ name: 'claims history', bps: c > 20_000n ? 20_000n : c, reason: `${paid} paid claim(s) on this agent (experience rating)` });
+  }
   const steps = BigInt(Math.floor(input.receipts / 5));
-  if (steps > 0n) {
+  if (steps > 0n && paid === 0) {
     const h = BPS - 500n * steps;
     applied.push({ name: 'claim-free history', bps: h < 7_000n ? 7_000n : h, reason: `${input.receipts} receipts without claims` });
   }

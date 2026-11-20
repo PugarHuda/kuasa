@@ -228,6 +228,12 @@ export class KuasaAgent {
       : { ok: false as const, reasons: ['premium paid but the policy is not issued yet; the insurer retries, check cover-status'], paymentTx: paid.paymentTx };
   }
 
+  /** This agent's recent purchases at the shop (signed request). */
+  async myPayments() {
+    const u = new URL(`/payments/${this.opts.payer}`, this.opts.shopUrl);
+    return (await fetch(u, { headers: await this.proof(this.opts.shopUrl) })).json() as Promise<{ item: string; amount: string; paymentTx: string; at?: string }[]>;
+  }
+
   /** Period cover (option A): insure this agent for `days` up to `limit`. */
   async coverBuy(limit: bigint, days = 30) {
     return this.buyQuote(await this.coverQuote(limit, days));

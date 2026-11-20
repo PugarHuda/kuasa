@@ -17,6 +17,7 @@ import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
+import { solvency } from '@kuasa/cover';
 import { AuditLog, bigintJson, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyPayerProof } from '@kuasa/merchant';
@@ -83,6 +84,12 @@ const svc = new InsurerService({
   },
   registryEvents: (tx) => registryEventsOfTx(grpc, tx, registryIndex),
   treasuryBalance: () => eudemoBalance(treasury.address.address),
+  paidClaims: async (payer) => {
+    const { policies, claims } = await scanCover();
+    return claims.filter((c) => c.status.tag === 'Paid' && policies[Number(c.policyId)]?.agentPayer === payer).length;
+  },
+  autoPayLimit: BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000), // 10 EUDemo: smaller claims pay after the objection window
+  autoPayDelayMs: Number(process.env.KUASA_AUTOPAY_DELAY_MS ?? 120_000),
   pay: async (to, amount, memo) => {
     const token = await sdk.Token.fromId(grpc, sdk.TokenId.fromString(ASSET));
     const hash = await sdk.Token.transfer(token, treasury.address,
@@ -268,5 +275,41 @@ app.post('/disclosures/:id/approve', consoleOnly, async (req, res) => {
   try { json(res, { hash: await svc.approveDisclosure(big(req.params.id)) }); } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
 
+/** Every policy and claim on the cover contract (ids are sequential), cached for 30 s. */
+let scanned: { at: number; policies: NonNullable<Awaited<ReturnType<KuasaCover['policy']>>>[]; claims: NonNullable<Awaited<ReturnType<KuasaCover['claim']>>>[] } | undefined;
+async function scanCover() {
+  if (scanned && Date.now() - scanned.at < 30_000) return scanned;
+  const policies = [];
+  for (let i = 0n; ; i++) { const p = await cover.policy(i); if (!p) break; policies.push(p); }
+  const claims = [];
+  for (let i = 0n; ; i++) { const c = await cover.claim(i); if (!c) break; claims.push(c); }
+  scanned = { at: Date.now(), policies, claims };
+  return scanned;
+}
+
+/** Public proof of solvency: pool vs the cover still owed by live policies, from on-chain data. */
+app.get('/solvency', async (_req, res) => {
+  try {
+    const { policies, claims } = await scanCover();
+    const s = solvency({ pool: await eudemoBalance(treasury.address.address), now: Date.now(), policies, claims: claims.map((c) => ({ status: c.status.tag })) });
+    json(res, { ...s, cover: `<${state.cover},0>`, treasury: treasury.address.address, asset: ASSET, autoPayLimit: String(BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000)) });
+  } catch (e) { json(res, { error: (e as Error).message }, 502); }
+});
+
+/** A human takes a claim over (no automatic payout). */
+app.post('/claims/:id/hold', consoleOnly, (req, res) => {
+  try { svc.hold(big(req.params.id)); json(res, { held: true }); } catch (e) { json(res, { error: (e as Error).message }, 400); }
+});
+
 setInterval(() => { void svc.retryUnissued(); }, 60_000);
+const autoAudited = new Set<string>();
+setInterval(() => {
+  void svc.runAutoPay().then(() => {
+    for (const c of svc.state().claims) {
+      if (c.decidedBy !== 'auto' || !c.paid || autoAudited.has(String(c.claimId))) continue;
+      autoAudited.add(String(c.claimId));
+      audit.append({ kind: 'claim-decided', claimId: String(c.claimId), approve: true, by: 'automatic (below the auto-pay limit, objection window passed)', paid: c.paid });
+    }
+  });
+}, 15_000);
 app.listen(PORT, process.env.HOST ?? '127.0.0.1', () => console.log(`[insurer] http://localhost:${PORT}  cover <${state.cover},0>  treasury ${treasury.address.address}`));

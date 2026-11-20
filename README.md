@@ -9,7 +9,10 @@ Kuasa Cover makes agent commerce insurable:
 - **The owner verifies once** with Concordium ID and gives the agent a *kuasa* (mandate): budget, per-order limit, categories, merchants, expiry, plus a zero-knowledge proof (18+, EU resident) bound to that one agent.
 - **The agent insures itself over x402.** The premium is priced from on-chain facts (how tight the mandate is, what the owner proved, the agent's receipt and incident history). It is paid in EUDemo, an allow-listed euro stablecoin, and recorded as spending under the mandate.
 - **Merchants check before taking payment:** the mandate, the owner's proof, the agent's CIS-8004 registry entry, and that the order is insured. The agent's "insured" status is published in the Agent Registry.
-- **Claims are paid from on-chain evidence.** The agent files a claim (fee sponsored by the insurer); the assessor matches the receipts on-chain; **a human claims handler approves**; the payout goes out in EUDemo and is recorded on the cover contract.
+- **A real AI agent does it.** In the demo, Claude acts as the agent through the Kuasa MCP tools only. It is refused for lacking cover, buys cover itself and retries. Later it reviews its own payments, finds a double charge and files the claim.
+- **Claims are paid from on-chain evidence, with tiered autonomy.** The agent files a claim (fee sponsored by the insurer) and the assessor matches the receipts on-chain. **Small claims (≤ 10 EUDemo) are paid automatically** after an objection window, unless a human holds them. Larger claims wait for **a human claims handler**. Payouts go out in EUDemo and are recorded on the cover contract.
+- **Solvency anyone can check.** `GET /solvency` recomputes the pool against the cover still owed by live policies, from the contract. Premiums use **experience rating**: each paid claim raises the agent's next premium. The pricing is checked by a Monte Carlo simulation ([docs/PRICING.md](docs/PRICING.md)).
+- **AP2 interop.** A Google AP2 IntentMandate maps onto an enforceable Kuasa mandate scope (`scopeFromAp2Intent`). Intents Kuasa cannot enforce, such as any-merchant intents, are refused rather than widened.
 - **Fraud has consequences, privacy has limits.** Claims with no on-chain evidence are rejected without a payout decision. Repeat offenders get a lawful-disclosure request, drafted automatically but anchored only after a human reviews it, for the Concordium identity provider / Privacy Guardians process. Nobody, insurer included, ever holds the person's identity data.
 
 Escrow protects you from bad sellers (Concordium's Protocol-Enforced Escrow covers non-delivery). **Kuasa Cover protects you from your agent, and merchants from agents.**
@@ -27,7 +30,7 @@ Escrow protects you from bad sellers (Concordium's Protocol-Enforced Escrow cove
 | Smart contracts (Rust) | `kuasa-registry` (mandates, budgets, receipts, incidents) and `kuasa-cover` (policies, claims, payouts, `claimsAuthorized`; checks mandates cross-contract) |
 | `registerData` | Anchored audit batches of every guard and claim decision (EU AI Act Art. 12 record keeping) |
 | Privacy Guardians (process) | Lawful disclosure route for repeated fraudulent claims |
-| MCP | Claude (or any MCP client) can shop, insure itself and file claims |
+| MCP | Claude (or any MCP client) can shop, insure itself, list its own payments (`kuasa_my_payments`, signed request) and file claims. The demo runs Claude Code headless with only this server |
 
 ## Where it is on testnet
 
@@ -78,7 +81,7 @@ pnpm --filter @kuasa/scripts exec tsx fraud-demo.ts teen          # run twice: n
 
 Claude can do the same through MCP: `KUASA_AGENT=alice node --import tsx packages/agent/src/mcp.ts` (tools `kuasa_*`, `cover_quote`, `cover_buy`, `cover_status`, `file_claim`).
 
-Demo runner (the submission video): reset with `tsx scripts/demo-reset.ts` + `tsx scripts/setup.ts --reissue alice`, start shop, insurer and console, open http://localhost:4022/demo and press Run on each step; every step runs for real on testnet.
+Demo runner (the submission video): the AI steps need the `claude` CLI logged in. Reset with `tsx scripts/demo-reset.ts` + `tsx scripts/setup.ts --reissue alice`, start shop, insurer and console, open http://localhost:4022/demo and press Run on each step; every step runs for real on testnet.
 
 Badges: `pnpm --filter @kuasa/scripts exec tsx badges.ts build`, publish `docs/` (GitHub Pages), then `badges.ts pin`.
 

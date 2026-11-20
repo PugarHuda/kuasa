@@ -181,6 +181,9 @@ importers:
       '@kuasa/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@kuasa/cover':
+        specifier: workspace:*
+        version: link:../packages/cover
 
 packages:
 

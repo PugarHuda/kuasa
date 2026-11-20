@@ -12,6 +12,9 @@ Kuasa Cover was built against interfaces, so each testnet stand-in has a named r
 | Owner's Verify & Access proof referenced by the mandate | **Agent IDP** credential presented by the agent | AI Agent IDP, Nov 2026 | `IdentitySource` (`packages/merchant/src/foundations.ts`) |
 | Budget in the `kuasa-registry` contract | Agent funds in a **Simple Lock** with recipients, token, expiry and amount | PLL Simple, Jan 2027 | `SpendControl` |
 | Premium factors: mandate, proofs, history | Add **KYCaaS**, **AML on demand** and **liveness** results as factors | Feb–Mar 2027 | `RiskInput` in `packages/cover/src/risk.ts` |
+| The console holds the owners' testnet keys (revoke, publish cover status) | Owner signs in their own wallet (Concordium Browser Wallet / ID App); the console only builds the unsigned transaction | Live | `cis8004SetMetadata`, `KuasaRegistry.revoke` |
+| Auto-pay limit 10 EUDemo, 2-minute objection window, set by the insurer | Limit and window per policy, written to the cover contract so the holder can see them | Live | `autoPayLimit` / `autoPayDelayMs` in `InsurerDeps` |
+| AP2 IntentMandate mapped to a Kuasa scope (library) | Insurer quotes directly from an AP2 Intent Mandate + Kuasa budget | AP2 adoption | `scopeFromAp2Intent` (`packages/cover/src/ap2.ts`) |
 | EUDemo (test euro) | **EURQ** (MiCA, Quantoz) or another regulated euro PLT | Live | one env var (`KUASA_ASSET`) |
 | Keys in local files | Owner: Concordium wallet / **WDK** inside the app. Agent and insurer: **Dfns** wallets-as-a-service (MPC) or **Concordium Signer** | WDK v2/v3, Concordium Signer Feb 2027 | `Wallet` signer abstraction in `packages/chain` |
 | Agent Cards on GitHub Pages with valid badges | Cards on the operator's own domain (same pinning flow) | Live | `scripts/badges.ts` |

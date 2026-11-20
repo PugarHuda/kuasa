@@ -30,12 +30,14 @@ for (let id = 0n; ; id++) {
 const TOP_UP = BigInt(process.env.TOP_UP ?? 75_000_000);
 const shop = acct('merchant', 0);
 const payer = acct('alice', 1);
+if (TOP_UP > 0n) {
 const token = await sdk.Token.fromId(grpc, sdk.TokenId.fromString('EUDemo'));
 const hash = await sdk.Token.transfer(token, sdk.AccountAddress.fromBase58(shop.address),
   { recipient: sdk.AccountAddress.fromBase58(payer.address), amount: sdk.TokenAmount.create(TOP_UP, 6) },
   sdk.buildBasicAccountSigner(shop.key), undefined, { autoScale: false, validate: true });
 await grpc.waitForTransactionFinalization(hash);
 console.log('topped up alice agent with', Number(TOP_UP) / 1e6, 'EUDemo', sdk.TransactionHash.toHexString(hash));
+}
 
 const archive = new URL(`archive/${new Date().toISOString().replace(/[:.]/g, '-')}/`, root);
 mkdirSync(archive, { recursive: true });

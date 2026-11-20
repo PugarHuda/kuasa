@@ -60,3 +60,11 @@ test('prototype keys are not categories', () => {
     assert.deepEqual(quote({ ...base, mandate: { ...base.mandate, categories: [c] } }), { refused: `unknown category: ${c}` });
   }
 });
+
+test('experience rating: paid claims raise the premium 20% each (max x2) and cancel the claim-free discount', () => {
+  assert.equal(premium({ paidClaims: 1 }), 2_099_520n);
+  assert.equal(premium({ paidClaims: 9 }), 3_499_200n);
+  assert.equal(premium({ paidClaims: 1, receipts: 10 }), 2_099_520n, 'no claim-free discount after a paid claim');
+  const q = quote({ ...base, paidClaims: 1 });
+  assert.ok(!('refused' in q) && q.factors.some((f) => f.name === 'claims history' && f.multiplier === 1.2));
+});

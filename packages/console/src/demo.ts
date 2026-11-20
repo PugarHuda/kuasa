@@ -1,61 +1,44 @@
 /**
- * Demo runner: the Kuasa Cover storyline, step by step, run for real on testnet by the demo
- * agents (alice: adult EU owner; teen: 16-year-old owner). Used to record the submission video.
- * Localhost only; the agents' testnet keys come from .kuasa like the CLI.
+ * Demo runner: the Kuasa Cover storyline, step by step, run for real on testnet. The shopping and
+ * claim steps are done by a real AI agent (Claude via the Kuasa MCP server); the retry bug and the
+ * teen's refused purchase are scripted. Used to record the submission video. Localhost only.
  */
 import { KuasaAgent } from '@kuasa/agent';
+import { runAiAgent } from './ai-agent.js';
 
-const EUR = 1_000_000n;
 const WINE = '/shop/wine/rioja';
 let alice: KuasaAgent | undefined;
 let teen: KuasaAgent | undefined;
-const mem: { payments: string[]; claimId?: string } = { payments: [] };
-
 const agents = () => {
   alice ??= KuasaAgent.fromDemo('alice');
   teen ??= KuasaAgent.fromDemo('teen');
   return { alice, teen };
 };
 
-export type DemoStep = { id: string; title: string; caption: string; run?: (ctx: { publishCover: (name: string) => Promise<unknown>; badge: (name: string) => Promise<unknown> }) => Promise<unknown> };
+type Ctx = { publishCover: (name: string) => Promise<unknown>; badge: (name: string) => Promise<unknown>; solvency: () => Promise<unknown> };
+export type DemoStep = { id: string; title: string; caption: string; ai?: boolean; run?: (ctx: Ctx) => Promise<unknown> };
 
 export const STEPS: DemoStep[] = [
   { id: 'intro', title: 'AI agents can pay. Who carries the loss when they get it wrong?',
     caption: 'Kuasa Cover makes agent commerce insurable on Concordium: verified owners, scoped mandates, ZK proofs, x402 payments in a regulated euro, and claims paid from on-chain evidence.' },
-  { id: 'uninsured', title: "Alice's agent tries to buy wine, uninsured",
-    caption: 'The shop sells age-restricted goods only to insured agents. Before any money moves, the guard checks the mandate, the owner’s ZK proof (18+, EU), the agent’s CIS-8004 entry, and cover.',
-    run: async () => agents().alice.buy(WINE) },
+  { id: 'ai-shop', ai: true, title: 'A real AI agent is asked to buy wine',
+    caption: 'Claude acts as Alice’s agent through the Kuasa MCP tools only. The shop sells age-restricted goods to insured agents only, so the agent has to work out that it needs cover, buy it, and retry.',
+    run: () => runAiAgent(`Buy one bottle of Rioja (${WINE}) for Alice's dinner tonight. If the shop refuses because insurance is required, buy Kuasa Cover (50 EUDemo for 30 days) and then complete the purchase.`) },
   { id: 'teen', title: "A 16-year-old's agent tries the same wine",
     caption: 'Same shop, same checks: no 18+ proof exists for this owner, so the purchase is refused before payment. The merchant never sees a birth date.',
     run: async () => agents().teen.buy(WINE) },
-  { id: 'quote', title: 'Alice’s agent asks for insurance',
-    caption: 'The premium is priced from on-chain facts: how tight the mandate is, what the owner proved with ZK, the category risk and the agent’s history. Every factor is explained.',
-    run: async () => agents().alice.coverQuote(100n * EUR, 30) },
-  { id: 'cover', title: 'The agent insures itself over x402',
-    caption: 'It pays the premium in EUDemo (an allow-listed euro) under its own mandate; the insurer sponsors the fee and writes the policy to the Kuasa Cover contract.',
-    run: async () => agents().alice.coverBuy(100n * EUR, 30) },
-  { id: 'publish', title: 'The owner publishes "insured" in the Agent Registry',
-    caption: 'The policy is now visible on the agent’s CIS-8004 entry, next to its Verified-by-Concordium badge. Any merchant can read it.',
+  { id: 'publish', title: 'Alice publishes "insured" in the Agent Registry',
+    caption: 'The policy now shows on the agent’s CIS-8004 entry, next to its Verified-by-Concordium badge, so any merchant can see the agent is insured.',
     run: async (c) => c.publishCover('alice') },
-  { id: 'mistake', title: 'The agent makes a mistake: it buys the same wine twice',
-    caption: 'Both purchases are insured and allowed. Each settles over x402 and leaves a receipt on-chain that draws down the mandate budget.',
-    run: async () => {
-      const r = await agents().alice.buyTwice(WINE);
-      mem.payments = [r.first, r.second].map((x) => (x.ok ? x.paymentTx : undefined)).filter((x): x is string => !!x);
-      return r;
-    } },
-  { id: 'claim', title: 'The agent files a claim',
-    caption: 'Signed by the agent, fee sponsored by the insurer. The assessor matches the two duplicate receipts on-chain and recommends a payout. No money moves yet.',
-    run: async () => {
-      const r = await agents().alice.fileClaim('AgentMistake', mem.payments, 24n * EUR, 'duplicate order');
-      mem.claimId = (r as { claimId?: string }).claimId ?? undefined;
-      return r;
-    } },
-  { id: 'approve', title: 'A human claims handler decides',
-    caption: 'Approve sends the payout in EUDemo from the pool and records it on the cover contract. Escrow protects you from bad sellers; Kuasa Cover protects you from your agent.' },
+  { id: 'bug', title: 'A retry bug repeats the checkout',
+    caption: 'Simulated failure: the agent’s HTTP client retries a checkout that already went through. Alice is charged twice for one bottle. Both payments settle and leave receipts on-chain.',
+    run: async () => agents().alice.buy(WINE) },
+  { id: 'ai-claim', ai: true, title: 'The agent notices and files a claim itself',
+    caption: 'The same AI agent reviews its purchases, finds the duplicate, and files a claim (fee sponsored by the insurer). The assessor matches both receipts on-chain and recommends a payout.',
+    run: () => runAiAgent('Review your recent purchases at the shop. If Alice was charged twice for the same item by mistake, file an AgentMistake claim for one bottle with the two payment transactions. Then say what you did.') },
+  { id: 'approve', title: 'Tiered autonomy: a human decides the bigger claims',
+    caption: 'Claims up to the auto-pay limit are paid automatically after an objection window. This one is above it, so a human claims handler approves. Escrow protects you from bad sellers; Kuasa Cover protects you from your agent.' },
   { id: 'proof', title: 'Everything is verifiable',
-    caption: 'Verified-by-Concordium badge, mandate and cover contracts, receipts, payouts and anchored audit batches (EU AI Act Art. 12) are all on testnet. Path to production: the pool moves into a Protocol-Level Lock released by the cover contract.',
-    run: async (c) => ({ badge: await c.badge('alice'), claimId: mem.claimId }) },
+    caption: 'A valid Verified-by-Concordium badge, a public proof of solvency computed from the cover contract, receipts, payouts and anchored audit batches (EU AI Act Art. 12). Live on testnet.',
+    run: async (c) => ({ badge: await c.badge('alice'), solvency: await c.solvency() }) },
 ];
-
-export const demoClaimId = () => mem.claimId;

@@ -22,6 +22,10 @@
   .steps li.done::before { content: '✓ '; color: var(--ok); }
   .result { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px 28px; overflow: auto; }
   .pill { display: inline-block; font-size: 15px; padding: 3px 12px; border-radius: 999px; font-weight: 700; }
+  .pill.ai { background: #1d2547; color: var(--accent); }
+  .trace { margin-top: 14px; display: grid; gap: 8px; font-size: 16px; max-height: 470px; overflow: auto; }
+  .t-tool { color: var(--accent); } .t-res { padding-left: 18px; color: #c9ced4; } .t-say { color: var(--ink); font-style: italic; border-left: 3px solid var(--accent); padding-left: 10px; }
+  .yes { color: var(--ok); font-weight: 700; } .no { color: var(--bad); font-weight: 700; }
   .pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.bad { background: var(--bad-bg); color: var(--bad); } .pill.warn { background: var(--warn-bg); color: var(--warn); }
   .big { font-size: 30px; font-weight: 700; margin: 12px 0 4px; }
   .muted { color: var(--muted); }
@@ -59,27 +63,37 @@ const tx = (h) => hex(h) ? `<a class="mono" target="_blank" rel="noopener" href=
 let steps = [], i = 0;
 const done = new Set();
 
-function reasonsOf(r) { return (r && r.reasons) || []; }
+function summarize(text) {
+  let j; try { j = JSON.parse(text); } catch { return esc(text.slice(0, 140)); }
+  if (Array.isArray(j)) return j.length + ' purchase(s): ' + j.map((p) => esc(p.item) + ' ' + eur(p.amount) + ' ' + tx(p.paymentTx)).join(' · ');
+  if (j.ok === false || j.refused) return '<span class="no">✗ ' + esc(j.refused || (j.reasons || []).join('; ').replace(/^answered 402: /, '')) + '</span>';
+  if (j.policy) return '<span class="yes">✓ insured: policy #' + esc(j.policy.policyId) + ', premium ' + eur(j.premium) + '</span> ' + tx(j.paymentTx);
+  if (j.claimId !== undefined && j.assessment) return '<span class="yes">✓ claim #' + esc(j.claimId) + ' filed</span> ' + tx(j.tx) + (j.assessment.ok !== undefined ? ' · assessor: ' + esc(j.assessment.reason) + (j.assessment.ok ? ', recommend ' + eur(j.assessment.payout) : '') : '');
+  if (j.quoteId) return 'quote: ' + eur(j.premium) + ' (' + (j.factors || []).map((f) => esc(f.name) + ' ×' + f.multiplier).join(', ') + ')';
+  if (j.ok && j.paymentTx) return '<span class="yes">✓ paid</span> ' + tx(j.paymentTx);
+  if (j.reasons) return '<span class="no">' + esc(j.reasons.join('; ')) + '</span>';
+  return esc(text.slice(0, 140));
+}
+function traceHtml(t) {
+  const rows = t.events.map((e) => e.kind === 'tool' ? '<div class="t-tool">→ <b>' + esc(e.name) + '</b> <span class="mono">' + esc(JSON.stringify(e.input).slice(0, 90)) + '</span></div>'
+    : e.kind === 'result' ? '<div class="t-res">' + summarize(e.text) + '</div>'
+    : e.kind === 'say' ? '<div class="t-say">“' + esc(e.text) + '”</div>' : '').join('');
+  return '<span class="pill ai">Claude · Kuasa MCP tools only</span><div class="trace">' + (rows || '<span class="muted">starting the agent…</span>') + '</div>';
+}
 const refused = (r, note) => `<span class="pill bad">Refused before payment</span><div class="big">No money moved</div>
-  <ul class="reasons">${reasonsOf(r).map((x) => `<li>${esc(x.replace(/^answered 402: /, ''))}</li>`).join('')}</ul>${note ? `<p class="muted">${esc(note)}</p>` : ''}`;
+  <ul class="reasons">${(r.reasons || []).map((x) => `<li>${esc(x.replace(/^answered 402: /, ''))}</li>`).join('')}</ul>${note ? `<p class="muted">${esc(note)}</p>` : ''}`;
 
 const render = {
-  uninsured: (r) => r.ok ? `<span class="pill warn">Unexpectedly allowed</span>` : refused(r, 'Kuasa guard: mandate ✓ · owner proof 18+/EU ✓ · CIS-8004 agent ✓ · cover ✗'),
-  teen: (r) => r.ok ? `<span class="pill warn">Unexpectedly allowed</span>` : refused(r, 'Zero-knowledge: the shop learns only that the 18+ proof is missing.'),
-  quote: (r) => r.refused ? `<span class="pill bad">${esc(r.refused)}</span>` : `<span class="pill ok">Quote</span><div class="big">${eur(r.premium)} for 100 EUDemo · 30 days</div>
-    <table>${(r.factors || []).map((f) => `<tr><td>${esc(f.name)}<br><span class="muted">${esc(f.reason)}</span></td><td class="m">×${esc(f.multiplier)}</td></tr>`).join('')}</table>`,
-  cover: (r) => r.ok ? `<span class="pill ok">Insured</span><div class="big">Policy #${esc(r.policy.policyId)}</div>
-    <dl><dt>Premium</dt><dd>${eur(r.premium)} paid over x402</dd><dt>Premium tx</dt><dd>${tx(r.paymentTx)}</dd><dt>Cover</dt><dd>${eur(r.policy.limit)} until ${new Date(Number(r.policy.until)).toLocaleDateString()}</dd><dt>Contract</dt><dd class="mono">kuasa-cover &lt;13066,0&gt;</dd></dl>` : refused(r),
+  'ai-shop': (r) => traceHtml(r),
+  'ai-claim': (r) => traceHtml(r),
+  teen: (r) => r.ok ? '<span class="pill warn">Unexpectedly allowed</span>' : refused(r, 'Zero-knowledge: the shop learns only that the 18+ proof is missing.'),
   publish: (r) => r.tx ? `<span class="pill ok">Published</span><div class="big">kuasa:cover on CIS-8004</div><dl><dt>Value</dt><dd class="mono">${esc(r.value)}</dd><dt>Transaction</dt><dd>${tx(r.tx)}</dd></dl>` : `<span class="pill bad">${esc(r.error)}</span>`,
-  mistake: (r) => `<span class="pill warn">Agent mistake</span><div class="big">Same wine, bought twice</div>
-    <dl><dt>Payment 1</dt><dd>${r.first.ok ? tx(r.first.paymentTx) : esc(reasonsOf(r.first).join('; '))}</dd><dt>Payment 2</dt><dd>${r.second.ok ? tx(r.second.paymentTx) : esc(reasonsOf(r.second).join('; '))}</dd><dt>Asset</dt><dd>24 EUDemo each, fees sponsored by the shop</dd></dl>`,
-  claim: (r) => r.assessment && r.assessment.ok !== undefined ? `<span class="pill ${r.assessment.ok ? 'ok' : 'bad'}">Assessed</span><div class="big">Claim #${esc(r.claimId)}: ${r.assessment.ok ? 'recommend ' + eur(r.assessment.payout) : 'not covered'}</div>
-    <dl><dt>Assessor</dt><dd>${esc(r.assessment.reason)}</dd><dt>Filed (sponsored)</dt><dd>${tx(r.tx)}</dd><dt>Payout</dt><dd>waits for a human decision</dd></dl>` : `<span class="pill bad">${esc(r.error || JSON.stringify(r))}</span>`,
-  approve: (r) => r.paid ? `<span class="pill ok">Paid</span><div class="big">${eur(r.amount ?? 23000000)} to the agent</div><dl><dt>Payout tx</dt><dd>${tx(r.paid)}</dd><dt>On-chain</dt><dd>claim Paid · policy paidOut updated · claimsAuthorized = false</dd></dl>` : `<span class="pill warn">${esc(r.reason || r.error || 'pending')}</span>`,
-  proof: (r) => `<span class="pill ${r.badge.badgeValid ? 'ok' : 'bad'}">Verified by Concordium: ${r.badge.badgeValid ? 'valid' : 'invalid'}</span>
-    <dl><dt>Badge</dt><dd class="mono">${esc(r.badge.tokenAddress)}</dd><dt>Agent Card</dt><dd><a href="${esc(r.badge.agentUri)}" target="_blank" rel="noopener">${esc(r.badge.agentUri)}</a></dd>
-    <dt>Contracts</dt><dd class="mono">kuasa-registry &lt;13065,0&gt; · kuasa-cover &lt;13066,0&gt; · CIS-8004 &lt;12802,0&gt;</dd>
-    <dt>Evidence</dt><dd><a href="https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md" target="_blank" rel="noopener">docs/TESTNET.md</a> · <a href="https://github.com/PugarHuda/kuasa" target="_blank" rel="noopener">github.com/PugarHuda/kuasa</a></dd></dl>`,
+  bug: (r) => r.ok ? `<span class="pill warn">Simulated retry bug</span><div class="big">Charged twice for one bottle</div><dl><dt>Duplicate payment</dt><dd>${tx(r.paymentTx)}</dd><dt>Amount</dt><dd>24 EUDemo, fee sponsored by the shop</dd></dl>` : refused(r),
+  approve: (r) => r.paid ? `<span class="pill ok">Paid</span><div class="big">${eur(r.amount)} back to the agent</div><dl><dt>Decided by</dt><dd>human claims handler</dd><dt>Payout tx</dt><dd>${tx(r.paid)}</dd><dt>On-chain</dt><dd>claim Paid · policy paidOut updated</dd></dl>` : `<span class="pill warn">${esc(r.reason || r.error || 'pending')}</span>`,
+  proof: (r) => { const s = r.solvency || {}; return `<span class="pill ${r.badge.badgeValid ? 'ok' : 'bad'}">Verified by Concordium: ${r.badge.badgeValid ? 'valid' : 'invalid'}</span> <span class="pill ${s.solvent ? 'ok' : 'bad'}">${s.solvent ? 'Solvent' : 'Under-reserved'}</span>
+    <dl><dt>Pool</dt><dd>${eur(s.pool)}</dd><dt>Live exposure</dt><dd>${eur(s.exposure)} across ${esc(s.livePolicies)} policies · coverage ×${esc(s.coverage)}</dd><dt>Premiums / paid out</dt><dd>${eur(s.premiums)} / ${eur(s.paidOut)}</dd>
+    <dt>Badge</dt><dd class="mono">${esc(r.badge.tokenAddress)}</dd><dt>Agent Card</dt><dd><a href="${esc(r.badge.agentUri)}" target="_blank" rel="noopener">${esc(r.badge.agentUri)}</a></dd>
+    <dt>Evidence</dt><dd><a href="https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md" target="_blank" rel="noopener">docs/TESTNET.md</a> · github.com/PugarHuda/kuasa</dd></dl>`; },
 };
 
 function show() {
@@ -90,7 +104,7 @@ function show() {
   $('steps').innerHTML = steps.map((x, k) => `<li class="${k === i ? 'on' : ''} ${done.has(x.id) ? 'done' : ''}">${esc(x.title)}</li>`).join('');
   $('run').disabled = !(s.runnable || s.id === 'approve');
   $('run').textContent = s.id === 'approve' ? 'Show claim' : 'Run';
-  if (!done.has(s.id)) $('result').innerHTML = s.id === 'intro' ? `<div class="big">Owner verifies once → agent shops under a mandate → agent insures itself → mistakes are paid from on-chain evidence, after a human approves.</div>` : '<span class="muted">Ready.</span>';
+  if (!done.has(s.id)) $('result').innerHTML = s.id === 'intro' ? `<div class="big">Owner verifies once → an AI agent shops under a mandate → it insures itself → its mistakes are paid from on-chain evidence: small ones automatically, big ones after a human approves.</div>` : '<span class="muted">Ready.</span>';
 }
 
 async function run() {
@@ -99,7 +113,9 @@ async function run() {
   $('status').innerHTML = '<span class="spin"></span>running on Concordium testnet…';
   try {
     if (s.id === 'approve') {
-      $('result').innerHTML = `<span class="pill warn">Awaiting your decision</span><div class="big">Claim: duplicate order, recommend 23 EUDemo</div><p class="muted">The assessor only recommends. Nothing is paid without a human.</p><button class="approve" id="approveBtn">Approve &amp; pay</button>`;
+      const c0 = ((await (await fetch('/api/cover')).json()).claims || []).filter((x) => x.assessment.ok && !x.verdict).pop();
+      const lim = (await (await fetch('/api/solvency')).json()).autoPayLimit;
+      $('result').innerHTML = `<span class="pill warn">Awaiting your decision</span><div class="big">Claim #${esc(c0 ? c0.claimId : '?')}: duplicate order, recommend ${c0 ? eur(c0.assessment.payout) : '?'}</div><p class="muted">Auto-pay limit is ${eur(lim)}: smaller claims pay automatically after an objection window. This one is above it, so nothing is paid without a human.</p><button class="approve" id="approveBtn">Approve &amp; pay</button>`;
       $('approveBtn').onclick = async () => {
         $('approveBtn').disabled = true;
         $('status').innerHTML = '<span class="spin"></span>paying out from the pool…';
@@ -112,7 +128,9 @@ async function run() {
       $('status').textContent = '';
       return;
     }
-    const r = await (await fetch(`/api/demo/${s.id}`, { method: 'POST', headers: { 'x-kuasa-console': '1' } })).json();
+    let poll;
+    if (s.ai) poll = setInterval(async () => { $('result').innerHTML = traceHtml(await (await fetch('/api/demo/trace')).json()); const el = document.querySelector('.trace'); if (el) el.scrollTop = el.scrollHeight; }, 1000);
+    const r = await (await fetch(`/api/demo/${s.id}`, { method: 'POST', headers: { 'x-kuasa-console': '1' } })).json().finally(() => clearInterval(poll));
     done.add(s.id);
     $('result').innerHTML = r.ok ? render[s.id](r.result) : `<span class="pill bad">${esc(r.error)}</span>`;
   } catch (e) {
