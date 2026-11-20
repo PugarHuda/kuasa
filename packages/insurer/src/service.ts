@@ -344,7 +344,7 @@ export class InsurerService {
       assessment: a, receiptTxs, orders: c.orders, mandateId: p.mandate.id,
     };
     const limit = this.deps.autoPayLimit;
-    if (a.ok && limit !== undefined && a.payout <= limit && !this.fraud.get(c.claimant)) rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
+    if (a.ok && limit !== undefined && a.payout <= limit && !this.flagged(rec)) rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
     this.claims.set(claimId, rec);
     this.save();
 
@@ -369,6 +369,11 @@ export class InsurerService {
     return a;
   }
 
+  /** Any party to the claim (filer, policy holder, paid account) with a rejected no-evidence claim. */
+  private flagged(rec: ClaimRecord) {
+    return [rec.claimant, rec.holder, rec.recipient].some((a) => (this.fraud.get(a) ?? 0) > 0);
+  }
+
   /** A human takes the claim over: no automatic payout. */
   hold(claimId: bigint) {
     const rec = this.claims.get(claimId);
@@ -382,6 +387,7 @@ export class InsurerService {
   async runAutoPay() {
     for (const rec of this.claims.values()) {
       if (rec.autoPayAt === undefined || rec.held || rec.verdict || this.deps.now() < rec.autoPayAt) continue;
+      if (this.flagged(rec)) { this.hold(rec.claimId); continue; } // flagged during the window: a human decides
       rec.decidedBy = 'auto';
       await this.decide(rec.claimId, true).catch(() => { rec.decidedBy = undefined; });
     }

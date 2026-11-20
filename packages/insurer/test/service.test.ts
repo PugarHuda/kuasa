@@ -401,3 +401,15 @@ test('tiered autonomy: a held claim goes to a human; claimants with rejected cla
   await filedClaim(u, true, 1n);
   assert.equal(u.svc.state().claims.find((c) => c.claimId === 1n)?.autoPayAt, undefined);
 });
+
+test('tiered autonomy: a fraud flag raised during the objection window cancels the automatic payout', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, autoPayLimit: 25n * EUR, autoPayDelayMs: 120_000 });
+  await filedClaim(t, true, 0n);
+  assert.ok(t.svc.state().claims[0].autoPayAt);
+  await filedClaim(t, false, 1n); // same agent files a claim with no evidence meanwhile
+  now += 200_000;
+  await t.svc.runAutoPay();
+  assert.ok(!t.calls.some((c) => c.startsWith('pay:')), 'flagged parties are never auto-paid');
+  assert.equal(t.svc.state().claims.find((c) => c.claimId === 0n)?.autoPayAt, undefined, 'handed to a human');
+});
