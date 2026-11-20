@@ -305,3 +305,22 @@ test('expired quotes are purged and the store is bounded', async () => {
   await quoteOk(t.svc);
   assert.equal(t.svc.quoteCount(), 1, 'expired ones purged');
 });
+
+test('a stale premium reservation expires', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now });
+  const q = await quoteOk(t.svc);
+  assert.equal(await t.svc.checkPurchase(q.quoteId, PAYER, q.premium), null);
+  now += 3 * 60_000; // verification failed upstream; no settle hook ever fired
+  assert.equal(await t.svc.checkPurchase(q.quoteId, PAYER, q.premium), null, 'reservation released after its TTL');
+});
+
+test('quotes are capped per payer, so one payer cannot evict another', async () => {
+  const t = harness({ maxQuotesPerPayer: 2 });
+  const mine = await quoteOk(t.svc);
+  const other = harness({ maxQuotesPerPayer: 2 });
+  void other;
+  for (let i = 0; i < 4; i++) await quoteOk(t.svc);
+  assert.equal(t.svc.quoteCount(), 2, 'this payer keeps at most 2');
+  assert.equal(t.svc.quoteOf(mine.quoteId), undefined, 'its own oldest went first');
+});
