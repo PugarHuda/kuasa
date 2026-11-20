@@ -2,6 +2,8 @@
 
 **Insurance for AI agent commerce, on Concordium.**
 
+**[Demo video (3 min)](https://youtu.be/SZ-K-HClFHo)** · **[Live explorer](https://kuasa-explorer.vercel.app)** · [Every testnet transaction](docs/TESTNET.md) · [Integrations (MCP, A2A, OpenAI Agents SDK)](docs/INTEGRATIONS.md)
+
 AI agents can pay on their own now. When one makes a mistake, nobody carries the loss: an agent buys the same thing twice, gets something wrong or counterfeit, or harms a merchant. So owners hesitate to let agents spend, and merchants hesitate to sell to them. Conventional insurers are moving to explicit AI exclusions.
 
 Kuasa Cover makes agent commerce insurable:
