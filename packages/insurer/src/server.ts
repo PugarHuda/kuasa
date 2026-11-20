@@ -245,7 +245,7 @@ app.get('/cover/status', async (req, res) => {
 async function riskOf(payer: string) {
   sdk.AccountAddress.fromBase58(payer); // throws on a bad address
   const paidClaims = await paidClaimsOf(payer);
-  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: `kuasa-cover <${state.cover},0>` };
+  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: books.map((b) => `kuasa-cover <${b.address.index},0>`).join(" + ") };
 }
 app.get('/risk/:payer', async (req, res) => { try { json(res, await riskOf(req.params.payer)); } catch (e) { json(res, { error: (e as Error).message }, 400); } });
 

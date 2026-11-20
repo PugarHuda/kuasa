@@ -5,7 +5,7 @@
  */
 import { type Claim, type Policy } from '@kuasa/core';
 import { solvency } from '@kuasa/cover';
-import { attestationOf, decisionOf, POOL, poolBalance, scan } from './chain.js';
+import { attestationOf, COVER_V1, decisionOf, POOL, poolBalance, scan } from './chain.js';
 
 const LABELS: Record<string, string> = {
   '4WmdhhLRPTk92STxiaXQFFNyJFLaM6k5kRq1ryFN8xjho1aq3s': 'Alice (owner)',
@@ -40,6 +40,10 @@ function statusPill(tag: string) {
   return `<span class="pill ${cls}">${esc(tag)}</span>`;
 }
 
+type Ref = { cover: bigint; id: number };
+/** Row label: v1 ids are shown as before, later books carry their contract index. */
+const ref = (r: Ref | undefined, i: number) => (!r ? `#${i}` : r.cover === COVER_V1 ? `v1 #${r.id}` : `#${r.id}`);
+let policyRefs: Ref[] = [], claimRefs: Ref[] = [];
 function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (Awaited<ReturnType<typeof decisionOf>>)[] = [], attests: (string | null)[] = []) {
   const now = Date.now();
   const s = solvency({ pool, now, policies, claims: claims.map((c) => ({ status: c.status.tag })) });
@@ -56,12 +60,12 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
 
   $('policies').innerHTML = policies.map((p, i) => {
     const live = p.status === 'Active' && Number(p.validUntilMs) > now;
-    return `<tr><td>#${i}</td><td>${acct(p.agentPayer)}</td><td>${typeof p.kind === 'object' ? 'one order' : 'period'}</td><td class="n">${eur(p.limit)}</td><td class="n">${eur(p.paidOut)}</td><td class="n">${eur(p.premium)}</td><td>${tx(p.premiumTx)}</td><td>${day(p.validUntilMs)}</td><td>${statusPill(live ? 'Active' : p.status === 'Active' ? 'Expired' : p.status)}</td></tr>`;
+    return `<tr><td>${ref(policyRefs[i], i)}</td><td>${acct(p.agentPayer)}</td><td>${typeof p.kind === 'object' ? 'one order' : 'period'}</td><td class="n">${eur(p.limit)}</td><td class="n">${eur(p.paidOut)}</td><td class="n">${eur(p.premium)}</td><td>${tx(p.premiumTx)}</td><td>${day(p.validUntilMs)}</td><td>${statusPill(live ? 'Active' : p.status === 'Active' ? 'Expired' : p.status)}</td></tr>`;
   }).reverse().join('');
 
   $('claims').innerHTML = claims.map((c, i) => {
     const payout = c.status.tag === 'Paid' ? tx((c.status as { payoutTx: string }).payoutTx) : '–';
-    return `<tr><td>#${i}</td><td>#${c.policyId}</td><td>${esc(c.kind)}</td><td>${acct(c.claimant)}</td><td class="n">${eur(c.amount)}</td><td class="n">${c.payout ? eur(c.payout) : '–'}</td><td>${payout}</td><td>${decidedBy(decisions[i])}</td><td>${attested(attests[i])}</td><td>${statusPill(c.status.tag)}</td></tr>`;
+    return `<tr><td>${ref(claimRefs[i], i)}</td><td>${ref(claimRefs[i] && { cover: claimRefs[i].cover, id: Number(c.policyId) }, Number(c.policyId))}</td><td>${esc(c.kind)}</td><td>${acct(c.claimant)}</td><td class="n">${eur(c.amount)}</td><td class="n">${c.payout ? eur(c.payout) : '–'}</td><td>${payout}</td><td>${decidedBy(decisions[i])}</td><td>${attested(attests[i])}</td><td>${statusPill(c.status.tag)}</td></tr>`;
   }).reverse().join('');
   // Claims by outcome: fixed category order and colours, legend always present, counts labelled.
   const cats = [
@@ -79,14 +83,16 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
 
 async function load() {
   try {
-    const [{ policies, claims }, pool] = await Promise.all([scan(), poolBalance()]);
+    const [{ policies, claims, policyRefs: pr, claimRefs: cr }, pool] = await Promise.all([scan(), poolBalance()]);
+    policyRefs = pr; claimRefs = cr;
     render(policies, claims, pool);
     // decisions are read after the first paint (one registry read per claim)
     const decisions: Awaited<ReturnType<typeof decisionOf>>[] = [];
     const attests: (string | null)[] = [];
     for (let i = 0; i < claims.length; i++) { // one at a time: gentle on the public node
-      decisions.push(await decisionOf(i).catch(() => decisionOf(i)).catch(() => null));
-      attests.push(await attestationOf(i).catch(() => attestationOf(i)).catch(() => null));
+      const { cover, id } = cr[i];
+      decisions.push(await decisionOf(id, cover).catch(() => decisionOf(id, cover)).catch(() => null));
+      attests.push(await attestationOf(id, cover).catch(() => attestationOf(id, cover)).catch(() => null));
     }
     render(policies, claims, pool, decisions, attests);
   } catch (e) {

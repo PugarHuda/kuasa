@@ -3,12 +3,18 @@ import { AccountAddress, ConcordiumGRPCWebClient, ContractAddress, Parameter, Re
 import { decodeClaim, decodeCoverView, decodePolicy, encodeCoverQuery, encodeU64, type Claim, type Policy } from '@kuasa/core';
 import { solvency } from '@kuasa/cover';
 
-export const COVER = ContractAddress.create(13066n, 0n);
+/** kuasa-cover instances, oldest first: v1 (history) and v2 (current, automation rules on-chain). */
+export const COVER_V1 = 13066n;
+export const COVERS = [COVER_V1, 13100n];
+export const CURRENT = COVERS[COVERS.length - 1];
+/** v1 claim records keep un-namespaced CIS-8004 keys; later contracts namespace them (same rule as @kuasa/chain claimKey). */
+export const claimKey = (kind: 'decision' | 'attest', cover: bigint, id: number | bigint) =>
+  cover === COVER_V1 ? `kuasa:${kind}:${id}` : `kuasa:${kind}:${cover}:${id}`;
 export const POOL = '3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut';
 const grpc = new ConcordiumGRPCWebClient('https://grpc.testnet.concordium.com', 20000);
 
-export async function viewCover(method: string, param: Uint8Array) {
-  const r = await grpc.invokeContract({ contract: COVER, method: ReceiveName.fromString(`kuasa_cover.${method}`), parameter: Parameter.fromBuffer(param.slice().buffer as ArrayBuffer) });
+export async function viewCover(method: string, param: Uint8Array, cover = CURRENT) {
+  const r = await grpc.invokeContract({ contract: ContractAddress.create(cover, 0n), method: ReceiveName.fromString(`kuasa_cover.${method}`), parameter: Parameter.fromBuffer(param.slice().buffer as ArrayBuffer) });
   if (r.tag !== 'success' || !r.returnValue) throw new Error(`${method} failed`);
   return new Uint8Array(ReturnValue.toBuffer(r.returnValue));
 }
@@ -19,12 +25,24 @@ async function all<T>(read: (id: bigint) => Promise<T | null>) {
   return out;
 }
 
-export async function scan() {
+async function scanBook(cover: bigint) {
   const [policies, claims] = await Promise.all([
-    all((id) => viewCover('policy', encodeU64(id)).then(decodePolicy)) as Promise<Policy[]>,
-    all((id) => viewCover('claim', encodeU64(id)).then(decodeClaim)) as Promise<Claim[]>,
+    all((id) => viewCover('policy', encodeU64(id), cover).then(decodePolicy)) as Promise<Policy[]>,
+    all((id) => viewCover('claim', encodeU64(id), cover).then(decodeClaim)) as Promise<Claim[]>,
   ]);
-  return { policies, claims };
+  return { cover, policies, claims };
+}
+
+/** Every book (ids are per contract), plus flat lists with a {cover, id} ref per row. The pool is shared. */
+export async function scan() {
+  const books = await Promise.all(COVERS.map(scanBook));
+  return {
+    books,
+    policies: books.flatMap((b) => b.policies),
+    claims: books.flatMap((b) => b.claims),
+    policyRefs: books.flatMap((b) => b.policies.map((_, id) => ({ cover: b.cover, id }))),
+    claimRefs: books.flatMap((b) => b.claims.map((_, id) => ({ cover: b.cover, id }))),
+  };
 }
 
 export async function poolBalance() {
@@ -40,14 +58,14 @@ export async function solvencyNow(s?: Awaited<ReturnType<typeof scan>>) {
 
 export async function riskOf(payer: string) {
   AccountAddress.fromBase58(payer); // throws on a bad address
-  const { policies, claims } = await scan();
-  const paidClaims = claims.filter((c) => c.status.tag === 'Paid' && policies[Number(c.policyId)]?.agentPayer === payer).length;
-  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: 'kuasa-cover <13066,0>' };
+  const { books } = await scan();
+  const paidClaims = books.reduce((n, b) => n + b.claims.filter((c) => c.status.tag === 'Paid' && b.policies[Number(c.policyId)]?.agentPayer === payer).length, 0);
+  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: COVERS.map((c) => `kuasa-cover <${c},0>`).join(' + ') };
 }
 
-export async function coverOf(payer: string) {
+export async function coverOf(payer: string, cover = CURRENT) {
   AccountAddress.fromBase58(payer);
-  return decodeCoverView(await viewCover('coverOf', encodeCoverQuery(payer)));
+  return decodeCoverView(await viewCover('coverOf', encodeCoverQuery(payer), cover));
 }
 
 const REGISTRY = ContractAddress.create(12802n, 0n);
@@ -66,14 +84,14 @@ async function metadata(token: number[], key: string) {
 const fields = (v: string | null) => (v ? Object.fromEntries(v.split(';').map((kv) => kv.split('=') as [string, string])) : null);
 
 /** The insurer publishes each claim decision on its CIS-8004 entry: by=auto|human;verdict=...;paid=... */
-export async function decisionOf(claimId: number) {
-  const f = fields(await metadata(INSURER_TOKEN, `kuasa:decision:${claimId}`));
+export async function decisionOf(claimId: number, cover = CURRENT) {
+  const f = fields(await metadata(INSURER_TOKEN, claimKey('decision', cover, claimId)));
   return f ? { by: f.by as 'auto' | 'human' | undefined, verdict: f.verdict } : null;
 }
 
 const SHOP_TOKEN = [0xf3, 0x04, 0, 0, 0, 0, 0, 0]; // the demo shop's CIS-8004 agent token
 /** The shop (the other party to every purchase) attests whether a claim's orders are in its records. */
-export async function attestationOf(claimId: number) {
-  const v = await metadata(SHOP_TOKEN, `kuasa:attest:${claimId}`);
+export async function attestationOf(claimId: number, cover = CURRENT) {
+  const v = await metadata(SHOP_TOKEN, claimKey('attest', cover, claimId));
   return v ? v.split(';')[0] : null;
 }

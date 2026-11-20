@@ -10,7 +10,8 @@ Everything below is on testnet and can be opened in CCDExplorer. Base URL: `http
 | Module deploy | `7a7c03f0…1031a` | [tx](https://ccdexplorer.io/testnet/transaction/221a2e727643c5b94e11c327b89ffca9a5ad263ed5cc645ecb1180cf590fe694) |
 | Registry init | | [tx](https://ccdexplorer.io/testnet/transaction/24550535f602ee998d0f0ebd8886485adfbb4432d7bcc9df8be15c205f9ca53e) |
 | CIS-8004 Agent Registry (Concordium) | `<12802,0>` | [instance](https://ccdexplorer.io/testnet/instance/12802/0) |
-| **Kuasa Cover** (our contract) | `<13066,0>` | [instance](https://ccdexplorer.io/testnet/instance/13066/0) |
+| **Kuasa Cover** v2 (our contract, automation rules enforced on-chain) | `<13100,0>` | [instance](https://ccdexplorer.io/testnet/instance/13100/0) |
+| Kuasa Cover v1 (history; claims #0-#9 and the runs below) | `<13066,0>` | [instance](https://ccdexplorer.io/testnet/instance/13066/0) |
 | Cover module deploy | `b634ea58…009d` | [tx](https://ccdexplorer.io/testnet/transaction/e8e1f98817cd2e55792d672b7964af721f4e9a384da4cde5381831cd8de447df) |
 | Cover init (operator = insurer #1, registry = `<13065,0>`) | | [tx](https://ccdexplorer.io/testnet/transaction/b75fecb7c4e64b01fbc91c4f6b12a2ee90e4e49d756805b493a3817cf720eae6) |
 

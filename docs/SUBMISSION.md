@@ -36,7 +36,7 @@ https://github.com/PugarHuda/kuasa
 https://youtu.be/Tqe_CLniIl0
 
 ## Testnet link
-https://ccdexplorer.io/testnet/instance/13066/0 (kuasa-cover contract).
+https://ccdexplorer.io/testnet/instance/13100/0 (kuasa-cover v2, automation rules on-chain; v1: https://ccdexplorer.io/testnet/instance/13066/0).
 
 Every transaction is listed in https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md.
 
