@@ -63,10 +63,6 @@ const tx = (h) => hex(h) ? `<a class="mono" target="_blank" rel="noopener" href=
 let steps = [], i = 0;
 const done = new Set();
 
-function reasonsOf(r) { return (r && r.reasons) || []; }
-const refused = (r, note) => `<span class="pill bad">Refused before payment</span><div class="big">No money moved</div>
-  <ul class="reasons">${reasonsOf(r).map((x) => `<li>${esc(x.replace(/^answered 402: /, ''))}</li>`).join('')}</ul>${note ? `<p class="muted">${esc(note)}</p>` : ''}`;
-
 function summarize(text) {
   let j; try { j = JSON.parse(text); } catch { return esc(text.slice(0, 140)); }
   if (Array.isArray(j)) return j.length + ' purchase(s): ' + j.map((p) => esc(p.item) + ' ' + eur(p.amount) + ' ' + tx(p.paymentTx)).join(' · ');
@@ -79,7 +75,7 @@ function summarize(text) {
   return esc(text.slice(0, 140));
 }
 function traceHtml(t) {
-  const rows = t.events.map((e) => e.kind === 'tool' ? '<div class="t-tool">→ <b>' + esc(e.name) + '</b> <span class="mono">' + esc(JSON.stringify(e.input)).slice(0, 90) + '</span></div>'
+  const rows = t.events.map((e) => e.kind === 'tool' ? '<div class="t-tool">→ <b>' + esc(e.name) + '</b> <span class="mono">' + esc(JSON.stringify(e.input).slice(0, 90)) + '</span></div>'
     : e.kind === 'result' ? '<div class="t-res">' + summarize(e.text) + '</div>'
     : e.kind === 'say' ? '<div class="t-say">“' + esc(e.text) + '”</div>' : '').join('');
   return '<span class="pill ai">Claude · Kuasa MCP tools only</span><div class="trace">' + (rows || '<span class="muted">starting the agent…</span>') + '</div>';

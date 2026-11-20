@@ -1,0 +1,8 @@
+AI agents can now pay for things. But when an agent gets it wrong, who carries the loss? Kuasa Cover makes agent commerce insurable, on Concordium.
+Here a real AI agent, Claude, shops for Alice, using only the Kuasa tools. The shop sells wine only to insured agents, so the first purchase is refused before any money moves. The agent works it out by itself: it buys Kuasa Cover over x402, priced from on-chain facts, and the insurer writes the policy to the cover contract. Then it retries, and the purchase goes through.
+A sixteen-year-old's agent tries the same wine. No over-eighteen proof exists, so it is refused. The shop never sees a birth date.
+Alice publishes the policy on her agent's entry in Concordium's Agent Registry, so any merchant can see it is insured.
+Now a simulated retry bug repeats the checkout. Alice is charged twice for one bottle, and both payments leave receipts on-chain.
+The agent reviews its own payments, spots the double charge, and files a claim by itself, with a sponsored transaction. The assessor matches both receipts on-chain and recommends twenty-three euros.
+This is tiered autonomy. Small claims, up to ten euros, are paid automatically after an objection window. This one is bigger, so a human approves it. Escrow protects you from bad sellers. Kuasa Cover protects you from your own agent.
+And everything is verifiable: a valid Verified by Concordium badge, and a public proof of solvency, computed from the cover contract. Kuasa Cover. Insurance for the agent economy.

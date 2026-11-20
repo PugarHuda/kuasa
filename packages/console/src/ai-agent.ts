@@ -5,7 +5,7 @@
  * `claude` CLI on PATH and a logged-in account.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,10 +25,10 @@ export function runAiAgent(task: string, agent = 'alice'): Promise<{ ok: boolean
   if (trace.running) return Promise.reject(new Error('the agent is already running'));
   trace.running = true;
   trace.events = [];
-  const dir = join(tmpdir(), 'kuasa-ai');
-  mkdirSync(dir, { recursive: true });
-  const config = join(dir, `mcp-${agent}.json`);
-  writeFileSync(config, JSON.stringify({ mcpServers: { kuasa: { command: 'node', args: ['--import', 'tsx', 'src/mcp.ts'], env: { KUASA_AGENT: agent } } } }));
+  // a fresh private directory per run (mkdtemp is 0700): no other local user can swap the MCP command
+  const dir = mkdtempSync(join(tmpdir(), 'kuasa-ai-'));
+  const config = join(dir, 'mcp.json');
+  writeFileSync(config, JSON.stringify({ mcpServers: { kuasa: { command: 'node', args: ['--import', 'tsx', 'src/mcp.ts'], env: { KUASA_AGENT: agent } } } }), { flag: 'wx', mode: 0o600 });
   const args = ['-p', task, '--append-system-prompt', SYSTEM, '--mcp-config', config, '--strict-mcp-config', '--allowedTools', 'mcp__kuasa', '--output-format', 'stream-json', '--verbose', '--model', process.env.KUASA_AI_MODEL ?? 'sonnet'];
   return new Promise((resolve) => {
     const p = spawn('claude', args, { cwd: agentDir, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -46,6 +46,7 @@ export function runAiAgent(task: string, agent = 'alice'): Promise<{ ok: boolean
       if (!trace.running) return;
       if (!trace.events.some((e) => e.kind === 'done')) trace.events.push({ kind: 'done', ok });
       trace.running = false;
+      rmSync(dir, { recursive: true, force: true });
       resolve({ ok, events: trace.events });
     };
     p.on('error', (e) => { trace.events.push({ kind: 'result', text: `could not start claude: ${e.message}`, error: true }); finish(false); });
