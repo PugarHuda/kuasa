@@ -87,7 +87,9 @@ async function publishCover(name: string) {
   if (!m || !s.cover) throw new Error('unknown agent or no cover contract');
   const v = await new KuasaCover(grpc, BigInt(s.cover)).coverOf(m.payer);
   if (v.policyId === null) throw new Error('no live cover for this agent');
-  const value = `policy=${v.policyId};limit=${v.periodRemaining};cover=${s.cover}.0;at=${Math.floor(Date.now() / 1000)}`;
+  // Experience rating published next to the cover: paid claims are checkable on the cover contract.
+  const risk = await fetch(`${INSURER}/risk/${m.payer}`).then((r) => r.json() as Promise<{ paidClaims?: number; premiumMultiplier?: number }>).catch(() => ({} as { paidClaims?: number; premiumMultiplier?: number }));
+  const value = `policy=${v.policyId};limit=${v.periodRemaining};cover=${s.cover}.0;claims=${risk.paidClaims ?? '?'};risk=${risk.premiumMultiplier ?? '?'};at=${Math.floor(Date.now() / 1000)}`;
   const r = await cis8004SetMetadata(grpc, s.agents[name], 'kuasa:cover', value, account(name, 0));
   return { tx: r.hash, value };
 }

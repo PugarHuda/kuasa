@@ -12,6 +12,7 @@ Kuasa Cover makes agent commerce insurable:
 - **A real AI agent does it.** In the demo, Claude acts as the agent through the Kuasa MCP tools only. It is refused for lacking cover, buys cover itself and retries. Later it reviews its own payments, finds a double charge and files the claim.
 - **Claims are paid from on-chain evidence, with tiered autonomy.** The agent files a claim (fee sponsored by the insurer) and the assessor matches the receipts on-chain. **Small claims (≤ 10 EUDemo) are paid automatically** after an objection window, unless a human holds them. Larger claims wait for **a human claims handler**. Payouts go out in EUDemo and are recorded on the cover contract.
 - **Solvency anyone can check.** `GET /solvency` recomputes the pool against the cover still owed by live policies, from the contract. Premiums use **experience rating**: each paid claim raises the agent's next premium. The pricing is checked by a Monte Carlo simulation ([docs/PRICING.md](docs/PRICING.md)).
+- **Plugs into existing agent stacks.** Claude Code (used in the demo) and the OpenAI Agents SDK ([`examples/openai-agents`](examples/openai-agents/index.ts)) use the Kuasa MCP server as is. The insurer speaks A2A. Owners publish `claims` and `risk` next to `kuasa:cover` in CIS-8004, as reputation any merchant can check against the contract.
 - **AP2 interop.** A Google AP2 IntentMandate maps onto an enforceable Kuasa mandate scope (`scopeFromAp2Intent`). Intents Kuasa cannot enforce, such as any-merchant intents, are refused rather than widened.
 - **Fraud has consequences, privacy has limits.** Claims with no on-chain evidence are rejected without a payout decision. Repeat offenders get a lawful-disclosure request, drafted automatically but anchored only after a human reviews it, for the Concordium identity provider / Privacy Guardians process. Nobody, insurer included, ever holds the person's identity data.
 
@@ -30,6 +31,7 @@ Escrow protects you from bad sellers (Concordium's Protocol-Enforced Escrow cove
 | Smart contracts (Rust) | `kuasa-registry` (mandates, budgets, receipts, incidents) and `kuasa-cover` (policies, claims, payouts, `claimsAuthorized`; checks mandates cross-contract) |
 | `registerData` | Anchored audit batches of every guard and claim decision (EU AI Act Art. 12 record keeping) |
 | Privacy Guardians (process) | Lawful disclosure route for repeated fraudulent claims |
+| A2A + Agent Card | The insurer is itself a badged agent (CIS-8004, Verified by Concordium). Other agents call its skills (solvency, risk, cover-status, quote) over A2A `message/send`. See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) |
 | MCP | Claude (or any MCP client) can shop, insure itself, list its own payments (`kuasa_my_payments`, signed request) and file claims. The demo runs Claude Code headless with only this server |
 
 ## Where it is on testnet
