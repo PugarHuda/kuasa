@@ -19,13 +19,14 @@ import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exa
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
 import { AuditLog, bigintJson, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
-import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText } from '@kuasa/merchant';
+import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyPayerProof } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
 import { checkSponsorable, jsonSafe, SponsorBudget } from './sponsor.js';
 import { Transaction } from '@concordium/web-sdk/transactions';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4023);
+const PUBLIC_URL = process.env.KUASA_INSURER_URL ?? `http://localhost:${PORT}`;
 const SHOP_ORIGIN = process.env.KUASA_SHOP_URL ?? 'http://localhost:4021';
 const ASSET = process.env.KUASA_ASSET ?? 'EUDemo';
 const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover: string };
@@ -60,6 +61,8 @@ const svc = new InsurerService({
   },
   mandateEntry: (owner, id) => registry.view(owner, id),
   identity: new MandateProofIdentity({ grpc, network: 'Testnet', fetchText: fetchDoc }),
+  // the requester must sign with the agent payer key (audience: this service's public origin)
+  verifyPayer: (payer, proof) => verifyPayerProof({ header: proof as (n: string) => string | undefined, payer, audience: PUBLIC_URL, accountInfo: (a) => grpc.getAccountInfo(a) }),
   cover: {
     issuePolicy: async (p) => { const r = await cover.issuePolicy(p, operator); return { hash: r.hash, id: KuasaCover.idFromEvents(r.summary, coverIndex) }; },
     policy: (id) => cover.policy(id),
@@ -167,7 +170,7 @@ app.get('/cover/quote', async (req, res) => {
   if (!mandateUrl) return json(res, { refused: 'no mandate presented (x-kuasa-mandate header)' }, 400);
   const order = req.query.order ? { ref: String(req.query.order), amount: big(req.query.amount) } : undefined;
   if (order && !/^[0-9a-f]{64}$/.test(order.ref)) return json(res, { refused: 'bad order reference' }, 400);
-  json(res, await svc.quote({ mandateUrl, limit: order ? order.amount : big(req.query.limit), days: Number(req.query.days ?? 30), order }));
+  json(res, await svc.quote({ mandateUrl, limit: order ? order.amount : big(req.query.limit), days: Number(req.query.days ?? 30), order, proof: (n: string) => req.header(n) }));
 });
 
 // Unknown quotes never reach the paywall.

@@ -14,7 +14,7 @@ import { ExactConcordiumScheme } from '@x402/concordium/exact/client';
 import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from '@x402/fetch';
 import { connect } from '@kuasa/chain';
 import { canonicalJson, type ClaimKind, encodeFileClaim, sha256Hex } from '@kuasa/core';
-import { type AgentRegistry, Cis8004Registry } from '@kuasa/merchant';
+import { type AgentRegistry, Cis8004Registry, makePayerProof } from '@kuasa/merchant';
 
 export const MANDATE_HEADER = 'x-kuasa-mandate';
 export const ORDER_HEADER = 'x-kuasa-order';
@@ -92,6 +92,9 @@ export class KuasaAgent {
 
   private headers = () => ({ [MANDATE_HEADER]: this.opts.mandateUrl });
 
+  /** Signed proof that this agent controls its payer, for quote requests to `audience`. */
+  private proof = (audience: string) => makePayerProof(this.opts.payer, buildBasicAccountSigner(this.opts.payerKey), audience);
+
   private fetchJson = (url: string) => (this.opts.fetchJson ? this.opts.fetchJson(url) : fetch(url).then((r) => r.json()));
 
   /**
@@ -166,7 +169,7 @@ export class KuasaAgent {
     const u = new URL('/quote', this.opts.shopUrl);
     u.searchParams.set('path', path);
     u.searchParams.set('payer', this.opts.payer);
-    return (await fetch(u, { headers: this.headers() })).json();
+    return (await fetch(u, { headers: { ...this.headers(), ...(await this.proof(this.opts.shopUrl)) } })).json();
   }
 
   /** skipQuote: behave like a rogue agent that pays anyway; the shop must still refuse. */
@@ -194,7 +197,7 @@ export class KuasaAgent {
       u.searchParams.set('limit', String(limit));
       u.searchParams.set('days', String(days));
     }
-    return (await fetch(u, { headers: this.headers() })).json() as Promise<{ quoteId?: string; premium?: string; factors?: unknown[]; refused?: string }>;
+    return (await fetch(u, { headers: { ...this.headers(), ...(await this.proof(this.insurerUrl)) } })).json() as Promise<{ quoteId?: string; premium?: string; factors?: unknown[]; refused?: string }>;
   }
 
   async coverStatus() {

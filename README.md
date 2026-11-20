@@ -78,6 +78,8 @@ pnpm --filter @kuasa/scripts exec tsx fraud-demo.ts teen          # run twice: n
 
 Claude can do the same through MCP: `KUASA_AGENT=alice node --import tsx packages/agent/src/mcp.ts` (tools `kuasa_*`, `cover_quote`, `cover_buy`, `cover_status`, `file_claim`).
 
+Demo runner (the submission video): reset with `tsx scripts/demo-reset.ts` + `tsx scripts/setup.ts --reissue alice`, start shop, insurer and console, open http://localhost:4022/demo and press Run on each step; every step runs for real on testnet.
+
 Badges: `pnpm --filter @kuasa/scripts exec tsx badges.ts build`, publish `docs/` (GitHub Pages), then `badges.ts pin`.
 
 Tests: `pnpm test && pnpm typecheck`, and `cargo concordium test` in each contract folder (build the registry module first; the cover tests deploy both).

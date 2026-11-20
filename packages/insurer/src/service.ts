@@ -21,6 +21,8 @@ export type InsurerDeps = {
   loadMandate(url: string): Promise<{ mandate: Mandate; id: string }>;
   mandateEntry(owner: string, id: string): Promise<MandateEntry | null>;
   identity: IdentitySource;
+  /** Checks the requester controls the agent payer (signed payer proof); quotes count toward that payer's quota. */
+  verifyPayer(payer: string, proof: unknown): Promise<boolean>;
   cover: {
     issuePolicy(p: IssuePolicyParams, operator?: Wallet): Promise<TxResult & { id: bigint | null }>;
     policy(id: bigint): Promise<Policy | null>;
@@ -54,7 +56,7 @@ export type InsurerDeps = {
 const toSnapshot = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? { $big: x.toString() } : x));
 const fromSnapshot = (s: string) => JSON.parse(s, (_k, x) => (x && typeof x === 'object' && typeof x.$big === 'string' && Object.keys(x).length === 1 ? BigInt(x.$big) : x));
 
-export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; order?: { ref: string; amount: bigint } };
+export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; order?: { ref: string; amount: bigint }; proof?: unknown };
 export type StoredQuote = Quote & {
   quoteId: string; request: QuoteRequest; mandateId: string; owner: string; payer: string; token: string; expires: number;
 };
@@ -133,6 +135,8 @@ export class InsurerService {
   async quote(req: QuoteRequest): Promise<StoredQuote | { refused: string }> {
     const fresh = await this.price(req);
     if ('refused' in fresh) return fresh;
+    if (!(await this.deps.verifyPayer(fresh.payer, req.proof).catch(() => false))) return { refused: 'payer proof required: sign the request with the agent payer key' };
+    req = { ...req, proof: undefined }; // not kept
     const quoteId = await sha256Hex(canonicalJson({ ...req, limit: String(req.limit), order: req.order && { ...req.order, amount: String(req.order.amount) }, at: this.deps.now(), n: Math.random() }));
     const stored: StoredQuote = { ...fresh, quoteId, request: req, expires: this.deps.now() + QUOTE_TTL_MS };
     this.dropStaleReservations();
@@ -190,6 +194,7 @@ export class InsurerService {
     if (done && done.premiumTx !== premiumTx) {
       // A second premium paid against an already issued quote: one quote, one policy.
       this.needsRefund.push({ quoteId, premiumTx, reason: 'second payment for a quote whose policy was already issued' });
+      this.consume(quoteId);
       this.save();
       return null;
     }
@@ -211,6 +216,7 @@ export class InsurerService {
     const record = (id: bigint) => {
       this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period' });
       this.premiumsIn += q.premium;
+      this.consume(quoteId);
       this.save();
       return id;
     };
@@ -224,6 +230,7 @@ export class InsurerService {
       const m = await this.deps.mandateEntry(q.owner, q.mandateId).catch(() => undefined);
       if (m === null || (m && (m.revoked || Number(m.validUntilMs) <= this.deps.now()))) {
         this.needsRefund.push({ quoteId, premiumTx, reason: m ? (m.revoked ? 'mandate revoked after the premium was paid' : 'mandate expired') : 'mandate not found' });
+        this.consume(quoteId);
         this.save();
         return null;
       }
@@ -239,8 +246,16 @@ export class InsurerService {
     const late = await issued();
     if (late !== null) return record(late);
     this.unissued.push({ quoteId, premiumTx, error, quote: q });
+    this.consume(quoteId); // the quote travels with the unissued entry
     this.save();
     return null;
+  }
+
+  /** A paid quote leaves the live store: it no longer counts toward caps and cannot be paid again. */
+  private consume(quoteId: string) {
+    this.quotes.delete(quoteId);
+    this.paying.delete(quoteId);
+    this.settled.delete(quoteId);
   }
 
   /** A reservation whose payment never settled nor failed visibly (e.g. rejected at verification) lapses. */
