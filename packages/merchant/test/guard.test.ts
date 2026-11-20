@@ -185,3 +185,22 @@ test('order references are capped per payer: new ones refused, existing never ev
   const h = { 'x-kuasa-mandate': 'https://k.example/m.json', [ORDER_HEADER]: first };
   assert.equal(await payWith(g, 7, h), undefined, 'the first reference still works');
 });
+
+test('a payment that fails verification or is canceled releases its reservation', async () => {
+  const g = makeGuard({ maxTotal: 50000000n });
+  const payload = (nonce: number) => ({ signedTransaction: { header: { sender: PAYER, nonce } } });
+  const pay = (nonce: number) => g.beforeVerify({
+    paymentPayload: { payload: payload(nonce) },
+    requirements: { payTo: SHOP, asset: 'EUDemo', amount: '30000000' },
+    transportContext: { request: { routePattern: 'GET /wine/:sku', adapter: { getHeader: (n: string) => (n === 'x-kuasa-mandate' ? 'https://k.example/m.json' : undefined) } } },
+  });
+  assert.equal(await pay(1), undefined);
+  await g.verifyFailed({ paymentPayload: { payload: payload(1) } }); // e.g. the facilitator answered 502
+  assert.equal(await pay(1), undefined, 'the same signed payment can be retried');
+  await g.afterVerify({ paymentPayload: { payload: payload(1) }, result: { isValid: false } });
+  assert.equal(await pay(1), undefined, 'released after an invalid verification');
+  await g.afterVerify({ paymentPayload: { payload: payload(1) }, result: { isValid: true } });
+  assert.equal((await pay(1))?.reason, 'kuasa_duplicate_payment', 'a valid verification keeps it');
+  await g.verifiedCanceled({ paymentPayload: { payload: payload(1) } });
+  assert.equal(await pay(1), undefined, 'released when canceled before settlement');
+});

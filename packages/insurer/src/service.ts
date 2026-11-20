@@ -85,7 +85,7 @@ type ClaimRecord = {
   payoutTx?: string;
   paid?: string; amountPaid?: bigint; recordPending?: boolean;
   /** Tiered autonomy: paid automatically at this time unless a human holds it first. */
-  autoPayAt?: number; held?: boolean; decidedBy?: 'auto';
+  autoPayAt?: number; held?: boolean; decidedBy?: 'auto'; /** v2: the on-chain autoApprove tx */ autoApproveTx?: string;
   /** Re-filed orders of an earlier rejected claim: an appeal, always decided by a human. */
   appealOf?: bigint;
   /** Objections raised during the objection window (each holds the claim for a human). */
@@ -455,7 +455,7 @@ export class InsurerService {
       if (this.deps.cover.autoApprove) {
         // v2: the contract itself enforces the rules (limit, window, kind, objections)
         try {
-          await this.deps.cover.autoApprove(rec.claimId, this.deps.operator);
+          rec.autoApproveTx = (await this.deps.cover.autoApprove(rec.claimId, this.deps.operator)).hash;
           rec.verdict = 'approved';
         } catch {
           rec.decidedBy = undefined;
