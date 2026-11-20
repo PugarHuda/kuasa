@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --format=esm --minify --target=es2022 --inject:src/shim.ts --outfile=../../docs/explorer/app.js",
+    "build": "esbuild src/main.ts --bundle --format=esm --minify --target=es2022 --inject:src/shim.ts --outfile=../../docs/explorer/app.js && esbuild src/a2a-fn.ts --bundle --platform=node --external:@concordium/web-sdk --format=esm --target=node20 --outfile=../../docs/explorer/api/a2a.mjs",
     "typecheck": "tsc -p ."
   },
   "dependencies": {

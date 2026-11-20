@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": { "@concordium/web-sdk": "12.0.2" }
+}
