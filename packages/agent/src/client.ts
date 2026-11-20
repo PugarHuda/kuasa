@@ -36,8 +36,9 @@ type PayReq = { network: string; asset: string; amount: string; payTo: string };
  * Payment-time policy (runs when x402 asks us to sign): the payee must be the counterparty we
  * verified for this request, and amount/asset/network/payee must fit the mandate. Fails closed.
  */
-export function paymentAllowed(scope: Scope, expectedPayTo: string | undefined, r: PayReq): boolean {
+export function paymentAllowed(scope: Scope, expectedPayTo: string | undefined, r: PayReq, expectedAmount?: bigint): boolean {
   if (!expectedPayTo || r.payTo !== expectedPayTo) return false;
+  if (expectedAmount !== undefined && (!/^\d+$/.test(r.amount) || BigInt(r.amount) !== expectedAmount)) return false;
   if (r.network !== CONCORDIUM_TESTNET_CAIP2) return false;
   if ((r.asset || 'CCD').toUpperCase() !== scope.asset.toUpperCase()) return false;
   if (!/^\d+$/.test(r.amount) || BigInt(r.amount) > BigInt(scope.maxPerOrder)) return false;
@@ -56,6 +57,10 @@ export class KuasaAgent {
   private insurerTreasury?: string;
   /** The payee verified for the payment currently being made (calls are sequential). */
   private expectPayTo?: string;
+  /** When paying a quote, the exact amount quoted. */
+  private expectAmount?: bigint;
+  /** Payments run one at a time: the expected payee/amount belong to exactly one payment. */
+  private payQueue: Promise<unknown> = Promise.resolve();
   constructor(readonly opts: {
     shopUrl: string; insurerUrl?: string; mandateUrl: string; payer: string; payerKey: string; scope: Scope;
     /** CIS-8004 registry used to check the shop before paying it (two-way trust). */
@@ -82,7 +87,7 @@ export class KuasaAgent {
 
   /** Never trust a 402: payee must be the verified counterparty; amount, asset and network must fit the mandate. */
   private withinMandate(r: PayReq) {
-    return paymentAllowed(this.opts.scope, this.expectPayTo, r);
+    return paymentAllowed(this.opts.scope, this.expectPayTo, r, this.expectAmount);
   }
 
   private headers = () => ({ [MANDATE_HEADER]: this.opts.mandateUrl });
@@ -108,7 +113,13 @@ export class KuasaAgent {
   }
 
   /** Pays an x402 resource at a configured counterparty (shop or insurer) only. */
-  private async payAt(url: URL, extra: Record<string, string> = {}): Promise<BuyResult> {
+  private payAt(url: URL, extra: Record<string, string> = {}, expectAmount?: bigint): Promise<BuyResult> {
+    const run = this.payQueue.then(() => this.payAtNow(url, extra, expectAmount));
+    this.payQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async payAtNow(url: URL, extra: Record<string, string>, expectAmount?: bigint): Promise<BuyResult> {
     if (url.origin === new URL(this.opts.shopUrl).origin) {
       if (!this.trustedShop || Date.now() - this.trustedShop.at > TRUST_TTL_MS) {
         const why = await this.verifyShop();
@@ -121,6 +132,7 @@ export class KuasaAgent {
     } else {
       return { ok: false, reasons: ['refusing to pay outside the configured shop and insurer'] };
     }
+    this.expectAmount = expectAmount;
     let res: Response;
     try {
       res = await this.payFetch(url, { headers: { ...this.headers(), ...extra } });
@@ -128,6 +140,7 @@ export class KuasaAgent {
       return { ok: false, reasons: [`payment failed: ${(e as Error).message}`] };
     } finally {
       this.expectPayTo = undefined;
+      this.expectAmount = undefined;
     }
     if (!res.ok) {
       const body = await res.text();
@@ -204,7 +217,7 @@ export class KuasaAgent {
     const before = (await this.coverStatus()).policies.length;
     const u = new URL('/cover/buy', this.insurerUrl);
     u.searchParams.set('quoteId', q.quoteId);
-    const paid = await this.payAt(u);
+    const paid = await this.payAt(u, {}, q.premium !== undefined ? BigInt(q.premium) : undefined);
     if (!paid.ok) return paid;
     const policy = await this.waitForPolicy(before);
     return policy

@@ -44,3 +44,4 @@ Kuasa Cover was built against interfaces, so each testnet stand-in has a named r
 4. Persist service state in a database instead of local JSON files, and run the insurer as a stateless replicated service with a single claims-decision queue.
 5. Fronting-carrier agreement, policy wording, claims-handling procedure and a DPIA (no personal data on-chain; ZK proofs only).
 6. Security review of both contracts and the guard. Bug bounty.
+7. Contract hardening deferred on testnet to keep the recorded evidence valid (enforced off-chain today by the assessor and service): distinct orders per duplicate claim, one policy per premium transaction, one claim per order across all policies of a mandate, `agent_token` checked against the mandate, and a bounded per-payer policy index.

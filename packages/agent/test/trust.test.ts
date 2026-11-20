@@ -32,3 +32,12 @@ test('payment-time policy only pays the verified payTo for that counterparty', a
   assert.equal(paymentAllowed(scope, SHOP, req(OTHER)), false, 'another allow-listed merchant is not the verified shop');
   assert.equal(paymentAllowed(scope, undefined, req(SHOP)), false, 'fail closed without a verified counterparty');
 });
+
+test('insurer payments must match the quoted premium exactly', async () => {
+  const { paymentAllowed } = await import('../src/client.js');
+  const scope = { asset: 'EUDemo', maxPerOrder: '50000000', merchants: [SHOP] };
+  const req = (amount: string) => ({ network: 'ccd:4221332d34e1694168c2a0c0b3fd0f27', asset: 'EUDemo', amount, payTo: SHOP });
+  assert.equal(paymentAllowed(scope, SHOP, req('1749600'), 1749600n), true);
+  assert.equal(paymentAllowed(scope, SHOP, req('1749601'), 1749600n), false, 'insurer asks more than quoted');
+  assert.equal(paymentAllowed(scope, SHOP, req('24000000')), true, 'no expected amount: mandate limits only');
+});

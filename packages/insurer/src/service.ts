@@ -42,6 +42,8 @@ export type InsurerDeps = {
   operator?: Wallet;
   /** Called with a JSON snapshot after every state change (persist it; restore via the constructor). */
   persist?: (snapshot: string) => void;
+  /** Upper bound on live quotes held in memory (oldest evicted first). */
+  maxQuotes?: number;
 };
 
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
@@ -74,6 +76,8 @@ type Disclosure = { claimId: string; account: string; doc: object };
  */
 export class InsurerService {
   private quotes = new Map<string, StoredQuote>();
+  /** Quotes whose premium payment is in flight: one quote backs one payment. */
+  private paying = new Set<string>();
   private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string }[] = [];
   /** Premiums that settled but whose policy is not on-chain yet; the quote travels with them. */
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
@@ -125,6 +129,12 @@ export class InsurerService {
     if ('refused' in fresh) return fresh;
     const quoteId = await sha256Hex(canonicalJson({ ...req, limit: String(req.limit), order: req.order && { ...req.order, amount: String(req.order.amount) }, at: this.deps.now(), n: Math.random() }));
     const stored: StoredQuote = { ...fresh, quoteId, request: req, expires: this.deps.now() + QUOTE_TTL_MS };
+    for (const [id, q] of this.quotes) if (q.expires < this.deps.now() && !this.paying.has(id)) this.quotes.delete(id);
+    const cap = this.deps.maxQuotes ?? 10_000;
+    for (const id of this.quotes.keys()) {
+      if (this.quotes.size < cap) break;
+      if (!this.paying.has(id)) this.quotes.delete(id); // Map keeps insertion order: oldest first
+    }
     this.quotes.set(quoteId, stored);
     return stored;
   }
@@ -158,10 +168,12 @@ export class InsurerService {
     const q = this.quotes.get(quoteId);
     if (!q || q.expires < this.deps.now()) return 'unknown or expired quote';
     if (payer !== q.payer) return 'payer is not the agent this quote is for';
+    if (this.paying.has(quoteId)) return 'this quote is already being paid';
+    this.paying.add(quoteId); // reserve before any await: one quote, one payment
     const fresh = await this.price(q.request);
-    if ('refused' in fresh) return fresh.refused;
-    if (fresh.premium !== q.premium || amount !== q.premium) return 'premium changed; request a new quote';
-    return null;
+    const reason = 'refused' in fresh ? fresh.refused : fresh.premium !== q.premium || amount !== q.premium ? 'premium changed; request a new quote' : null;
+    if (reason) this.paying.delete(quoteId);
+    return reason;
   }
 
   /** After the premium settled: write the policy on-chain (3 attempts; kept as unissued otherwise). */
@@ -184,6 +196,7 @@ export class InsurerService {
       this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period' });
       this.premiumsIn += q.premium;
       this.quotes.delete(quoteId);
+      this.paying.delete(quoteId);
       this.save();
       return id;
     };
@@ -215,6 +228,13 @@ export class InsurerService {
     this.save();
     return null;
   }
+
+  /** The reserved premium payment did not settle: the quote may be paid again. */
+  releaseQuote(quoteId: string) {
+    this.paying.delete(quoteId);
+  }
+
+  quoteCount = () => this.quotes.size;
 
   async retryUnissued() {
     if (this.retrying) return;

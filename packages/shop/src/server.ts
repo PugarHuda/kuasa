@@ -118,4 +118,4 @@ for (const [path, p] of Object.entries(catalog)) {
   app.get(path, (_, res) => json(res, { ok: true, item: p.name, price: p.price, asset: ASSET, shipped: 'order confirmed; ships to the address on file' }));
 }
 
-app.listen(PORT, () => console.log(`[shop] http://localhost:${PORT}  registry <${state.registry},0>  payTo ${payTo}`));
+app.listen(PORT, process.env.HOST ?? '127.0.0.1', () => console.log(`[shop] http://localhost:${PORT}  registry <${state.registry},0>  payTo ${payTo}`));
