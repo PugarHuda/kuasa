@@ -9,11 +9,14 @@
     "kuasa-mcp": "./src/mcp.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@concordium/web-sdk": "^12.0.2",
     "@kuasa/chain": "workspace:*",
+    "@kuasa/core": "workspace:*",
+    "@kuasa/merchant": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@x402/concordium": "~2.31.0",
     "@x402/core": "~2.31.0",

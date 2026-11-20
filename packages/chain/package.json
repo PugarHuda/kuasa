@@ -2,8 +2,13 @@
   "name": "@kuasa/chain",
   "version": "0.1.0",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "typecheck": "tsc -p ." },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
   "dependencies": {
     "@concordium/web-sdk": "^12.0.2",
     "@kuasa/core": "workspace:*"

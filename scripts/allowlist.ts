@@ -14,7 +14,8 @@ const VERIFIER = 'https://web3id-verifier.testnet.concordium.com';
 const BACKEND = 'https://allowlistapi.testnet.concordium.com';
 const TOKEN = 'EUDemo';
 const EU = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK'];
-const targets: [string, number][] = [['alice', 1], ['teen', 1], ['merchant', 0]]; // agent payers + shop payTo
+// agent payers, shop payTo, shop recorder (merchant-loss payouts), insurer treasury (premiums + payouts)
+const targets: [string, number][] = [['alice', 1], ['teen', 1], ['merchant', 0], ['merchant', 1], ['insurer', 0]];
 
 const grpc = connect();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

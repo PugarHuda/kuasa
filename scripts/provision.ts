@@ -13,6 +13,7 @@ const cast: Record<string, [Attributes, number]> = {
   alice: [{ dob: '19900415', countryOfResidence: 'DK', nationality: 'DK' }, 2],
   teen: [{ dob: '20100301', countryOfResidence: 'DK', nationality: 'DK' }, 2],
   merchant: [{ dob: '19800101', countryOfResidence: 'NL', nationality: 'NL' }, 2],
+  insurer: [{ dob: '19750101', countryOfResidence: 'NL', nationality: 'NL' }, 2], // #0 treasury (EUDemo pool), #1 operator
 };
 
 const grpc = connect();

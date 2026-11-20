@@ -8,7 +8,7 @@
  *   on-chain registry entry are checked; after settlement a receipt is anchored on-chain.
  * - Also serves the public Kuasa documents (mandates, proofs, agent cards) from .kuasa/public.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { x402Facilitator } from '@x402/core/facilitator';
@@ -16,12 +16,12 @@ import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
-import { bigintJson, connect, KuasaRegistry, TESTNET, wallet } from '@kuasa/chain';
-import { KuasaGuard, MANDATE_HEADER, type Offer } from '@kuasa/merchant';
+import { AuditLog, bigintJson, connect, KuasaCover, KuasaRegistry, registerData, TESTNET, wallet } from '@kuasa/chain';
+import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer } from '@kuasa/merchant';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4021);
-const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string };
+const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string; shopAgent?: string };
 const merchant = JSON.parse(readFileSync(new URL('accounts/merchant.json', ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const payTo = merchant.find((a) => a.credNumber === 0)!.address;
 const sponsor = merchant.find((a) => a.credNumber === 1)!;
@@ -32,9 +32,11 @@ const UNIT = 1_000_000n;
 const EU = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK'];
 
 /** Catalog: path -> product. Paths are the x402 route patterns, which KuasaGuard keys offers by. */
+/** Wine needs Kuasa Cover for the order once the cover contract is deployed. */
+const WINE_COVER = state.cover ? { minCover: 20n * UNIT } : {};
 const catalog: Record<string, { name: string; price: bigint } & Offer> = {
-  '/shop/wine/rioja': { name: 'Rioja Reserva 2019, 75cl', price: 24n * UNIT, category: 'wine', requirements: { minAge: 18, residencyIn: EU } },
-  '/shop/wine/case': { name: 'Case of 6 Rioja Reserva', price: 60n * UNIT, category: 'wine', requirements: { minAge: 18, residencyIn: EU } },
+  '/shop/wine/rioja': { name: 'Rioja Reserva 2019, 75cl', price: 24n * UNIT, category: 'wine', requirements: { minAge: 18, residencyIn: EU, ...WINE_COVER } },
+  '/shop/wine/case': { name: 'Case of 6 Rioja Reserva', price: 60n * UNIT, category: 'wine', requirements: { minAge: 18, residencyIn: EU, ...WINE_COVER } },
   '/shop/groceries/bread': { name: 'Sourdough loaf', price: 3n * UNIT, category: 'groceries', requirements: {} },
   '/shop/vape/mint': { name: 'Mint e-liquid 10ml', price: 10n * UNIT, category: 'vape', requirements: { minAge: 18, residencyIn: EU } },
 };
@@ -46,13 +48,29 @@ const guard = new KuasaGuard({
   offers: Object.fromEntries(Object.entries(catalog).map(([p, o]) => [p, { category: o.category, requirements: o.requirements }])),
   recorder: wallet(sponsor.address, sponsor.key),
   localOrigin: `http://localhost:${PORT}`, // demo: documents are served by this same process
+  agents: new Cis8004Registry(grpc),
+  cover: state.cover ? new KuasaCover(grpc, BigInt(state.cover)) : undefined,
 });
 
 const grpcCfg = { host: TESTNET.grpc.host, port: TESTNET.grpc.port, useTls: true };
 const facilitator = new x402Facilitator().register(CONCORDIUM_TESTNET_CAIP2,
   new FacilitatorScheme({ signer: toConcordiumFacilitatorSigner(sponsor.address, sponsor.key, grpcCfg) }));
 const server = new x402ResourceServer(facilitator as never).register(CONCORDIUM_TESTNET_CAIP2, new ServerScheme());
-server.onBeforeVerify(guard.beforeVerify as never).onAfterSettle(guard.afterSettle as never).onSettleFailure(guard.settleFailed as never);
+// Receipts survive restarts (buyers look them up to file claims).
+const RECEIPTS = new URL('shop-receipts.json', ROOT);
+if (existsSync(RECEIPTS)) guard.receipts.push(...JSON.parse(readFileSync(RECEIPTS, 'utf8')));
+const saveReceipts = () => { const tmp = new URL('shop-receipts.json.tmp', ROOT); writeFileSync(tmp, JSON.stringify(guard.receipts)); renameSync(tmp, RECEIPTS); };
+// EU AI Act Art. 12: every guard decision is logged; batches are anchored on-chain every minute.
+const audit = new AuditLog({ dir: new URL('audit/shop/', ROOT), register: (d) => registerData(grpc, d, wallet(sponsor.address, sponsor.key)) })
+  .start(60_000, (e) => console.error('[audit]', e.message));
+server.onBeforeVerify((async (ctx: Parameters<typeof guard.beforeVerify>[0]) => {
+  const r = await guard.beforeVerify(ctx);
+  const payer = (ctx.paymentPayload.payload as { signedTransaction?: { header?: { sender?: string } } })?.signedTransaction?.header?.sender;
+  audit.append({ kind: 'guard-decision', payer, payTo: ctx.requirements.payTo, amount: ctx.requirements.amount, outcome: r ? 'refused' : 'allowed', reason: r?.message });
+  return r;
+}) as never)
+  .onAfterSettle((async (ctx: Parameters<typeof guard.afterSettle>[0]) => { await guard.afterSettle(ctx); saveReceipts(); audit.append({ kind: 'settled', paymentTx: ctx.result.transaction, amount: ctx.requirements.amount }); }) as never)
+  .onSettleFailure(guard.settleFailed as never);
 
 const routes = Object.fromEntries(Object.entries(catalog).map(([path, p]) => [`GET ${path}`, {
   accepts: { scheme: 'exact', network: CONCORDIUM_TESTNET_CAIP2, payTo, price: { amount: String(p.price), asset: ASSET }, maxTimeoutSeconds: 120 },
@@ -65,6 +83,13 @@ const json = (res: express.Response, body: unknown, status = 200) => res.status(
 app.use((_, res, next) => { res.setHeader('access-control-allow-origin', '*'); res.setHeader('access-control-allow-headers', '*'); res.setHeader('access-control-expose-headers', '*'); next(); });
 app.use('/kuasa', express.static(fileURLToPath(new URL('public/', ROOT))));
 
+/** A2A Agent Card with the Kuasa extension: buying agents check this token in CIS-8004 before paying. */
+app.get('/.well-known/agent-card.json', (_, res) => json(res, {
+  name: 'Kuasa demo shop', description: 'Regulated goods for AI agents (age and residency checked with ZK proofs; insured purchases).',
+  url: `http://localhost:${PORT}`, protocols: ['x402', 'kuasa/v1'],
+  kuasa: { payTo, agentToken: state.shopAgent, agentRegistry: '<12802,0>', asset: ASSET, cover: state.cover ? `<${state.cover},0>` : undefined },
+}));
+
 app.get('/catalog', (_, res) => json(res, Object.entries(catalog).map(([path, p]) => ({ path, name: p.name, price: p.price, asset: ASSET, category: p.category, requirements: p.requirements }))));
 
 /** Free pre-flight: would this agent be allowed to buy `path`? Same decision as the paid route. */
@@ -72,12 +97,21 @@ app.get('/quote', async (req, res) => {
   const path = String(req.query.path ?? '');
   const p = catalog[path];
   if (!p) return json(res, { ok: false, reasons: ['unknown product'] }, 404);
-  const d = await guard.decide({ mandateUrl: req.header(MANDATE_HEADER), route: path, payer: String(req.query.payer ?? ''), payTo, asset: ASSET, amount: p.price });
-  json(res, d);
+  const payer = String(req.query.payer ?? '');
+  const d = await guard.decide({ mandateUrl: req.header(MANDATE_HEADER), route: path, payer, payTo, asset: ASSET, amount: p.price });
+  // An order reference lets the agent buy per-order cover before paying (send it back in x-kuasa-order).
+  const orderRef = d.ok || d.reasons.every((r) => r.startsWith('cover required')) ? await guard.issueOrderRef({ payer, payTo, route: path, amount: p.price }) : undefined;
+  json(res, { ...d, orderRef, amount: p.price, payTo });
 });
 
 // Operator view for the console: loopback only.
-app.get('/kuasa-log', (req, res) => !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
+/** Lets a buyer find the on-chain receipt for its own payment (both are public on-chain). */
+app.get('/receipt/:paymentTx', (req, res) => {
+  const r = guard.receipts.find((x) => x.paymentTx === req.params.paymentTx);
+  return r ? json(res, { order: r.order, orderRef: r.orderRef, receiptTx: r.receiptTx, amount: r.amount }) : json(res, { pending: true }, 404);
+});
+
+app.get('/kuasa-log', (req, res) => !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, audit: audit.anchors(), unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
 
 app.use(paymentMiddleware(routes as never, server));
 for (const [path, p] of Object.entries(catalog)) {
