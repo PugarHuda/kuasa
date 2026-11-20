@@ -37,6 +37,8 @@ export type InsurerDeps = {
   /** kuasa-registry events of a finalized transaction, with block time. */
   registryEvents(tx: string): Promise<{ at: number; events: RegistryEvent[] } | null>;
   treasuryBalance(): Promise<bigint>;
+  /** Claims already paid to this agent payer (on-chain), for experience rating. */
+  paidClaims?(payer: string): Promise<number>;
   /** Submits a payout from the treasury and returns its hash without waiting for finalization. */
   pay(to: string, amount: bigint, memo: string): Promise<string>;
   /** Outcome of a submitted transaction. */
@@ -50,6 +52,10 @@ export type InsurerDeps = {
   maxQuotes?: number;
   /** Upper bound on live quotes per agent payer (its oldest evicted first). */
   maxQuotesPerPayer?: number;
+  /** Tiered autonomy: positive claims paying at most this are paid automatically after an objection window (unset = every claim waits for a human). */
+  autoPayLimit?: bigint;
+  /** Objection window before an automatic payout (default 2 minutes). */
+  autoPayDelayMs?: number;
 };
 
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
@@ -68,6 +74,8 @@ type ClaimRecord = {
   /** Submitted payout transfer not yet confirmed: checked before anything is sent again. */
   payoutTx?: string;
   paid?: string; amountPaid?: bigint; recordPending?: boolean;
+  /** Tiered autonomy: paid automatically at this time unless a human holds it first. */
+  autoPayAt?: number; held?: boolean; decidedBy?: 'auto';
   /** Why an approved claim is not paid (e.g. insufficient pool); `final` when it never will be. */
   payoutBlocked?: string; final?: boolean;
   busy?: Promise<{ decided: true; paid?: string; reason?: string }>;
@@ -167,6 +175,7 @@ export class InsurerService {
       limit: req.limit, days: req.days,
       mandate: { maxPerOrder: BigInt(m.scope.maxPerOrder), categories: m.scope.categories, merchants: m.scope.merchants },
       provenAgeAndResidency: proven, ownerKind: m.principal.kind, incidents: Number(e.incidents), receipts: Number(e.receipts),
+      paidClaims: this.deps.paidClaims ? await this.deps.paidClaims(m.agent.payer) : 0,
       order: req.order && { amount: req.order.amount },
     };
     const q = quote(input);
@@ -334,6 +343,8 @@ export class InsurerService {
       claimId, policyId: c.policyId, holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
       assessment: a, receiptTxs, orders: c.orders, mandateId: p.mandate.id,
     };
+    const limit = this.deps.autoPayLimit;
+    if (a.ok && limit !== undefined && a.payout <= limit && !this.fraud.get(c.claimant)) rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
     this.claims.set(claimId, rec);
     this.save();
 
@@ -356,6 +367,24 @@ export class InsurerService {
       this.save();
     }
     return a;
+  }
+
+  /** A human takes the claim over: no automatic payout. */
+  hold(claimId: bigint) {
+    const rec = this.claims.get(claimId);
+    if (!rec) throw new Error('claim not assessed yet');
+    rec.held = true;
+    rec.autoPayAt = undefined;
+    this.save();
+  }
+
+  /** Pays small, positively assessed claims whose objection window has passed and nobody held. */
+  async runAutoPay() {
+    for (const rec of this.claims.values()) {
+      if (rec.autoPayAt === undefined || rec.held || rec.verdict || this.deps.now() < rec.autoPayAt) continue;
+      rec.decidedBy = 'auto';
+      await this.decide(rec.claimId, true).catch(() => { rec.decidedBy = undefined; });
+    }
   }
 
   /**

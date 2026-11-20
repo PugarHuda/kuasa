@@ -47,7 +47,7 @@ export class KuasaGuard {
   private identity: IdentitySource;
   private spend: SpendControl;
   readonly log: { at: number; mandate?: string; payer?: string; amount?: string; decision: Decision }[] = [];
-  readonly receipts: { mandate: string; order: string; orderRef?: string; paymentTx: string; receiptTx: string; amount: string }[] = [];
+  readonly receipts: { mandate: string; order: string; orderRef?: string; paymentTx: string; receiptTx: string; amount: string; payer?: string; route?: string; at?: number }[] = [];
   /** Settled payments whose receipt could not be recorded; reconcile manually. */
   readonly unrecorded: { mandate: string; paymentTx: string; amount: string; error: string }[] = [];
 
@@ -228,7 +228,7 @@ export class KuasaGuard {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const rec = await this.opts.registry.recordReceipt(f.owner, f.id, order, ctx.result.transaction, f.amount, this.opts.recorder);
-        this.receipts.push({ mandate: f.id, order, orderRef: f.orderRef, paymentTx: ctx.result.transaction, receiptTx: rec.hash, amount: ctx.requirements.amount });
+        this.receipts.push({ mandate: f.id, order, orderRef: f.orderRef, paymentTx: ctx.result.transaction, receiptTx: rec.hash, amount: ctx.requirements.amount, payer, route: f.route, at: Date.now() });
         this.inFlight.delete(key);
         return;
       } catch (e) {

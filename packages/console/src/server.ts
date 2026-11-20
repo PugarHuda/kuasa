@@ -12,6 +12,7 @@ import { bigintJson, cis8004GetMetadata, cis8004SetMetadata, connect, KuasaCover
 import { sha256Hex } from '@kuasa/core';
 import { isClaimId } from './validate.js';
 import { STEPS } from './demo.js';
+import { trace } from './ai-agent.js';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4022);
@@ -115,11 +116,14 @@ async function badge(name: string) {
 
 /** Demo runner (recording the submission video): steps of the storyline, run for real. */
 app.get('/demo', (_, res) => res.sendFile(fileURLToPath(new URL('demo.html', import.meta.url))));
-app.get('/api/demo/steps', (_req, res) => json(res, STEPS.map(({ id, title, caption, run }) => ({ id, title, caption, runnable: !!run }))));
+app.get('/api/demo/steps', (_req, res) => json(res, STEPS.map(({ id, title, caption, run, ai }) => ({ id, title, caption, ai: !!ai, runnable: !!run }))));
+app.get('/api/demo/trace', (_req, res) => json(res, trace));
+const solvency = async () => (await fetch(`${INSURER}/solvency`)).json();
+app.get('/api/solvency', async (_req, res) => { try { json(res, await solvency()); } catch (e) { json(res, { error: (e as Error).message }, 502); } });
 app.post('/api/demo/:id', async (req, res) => {
   const step = STEPS.find((x) => x.id === req.params.id);
   if (!step?.run) return json(res, { error: 'no such runnable step' }, 404);
-  try { json(res, { ok: true, result: await step.run({ publishCover, badge }) }); } catch (e) { json(res, { ok: false, error: (e as Error).message }, 500); }
+  try { json(res, { ok: true, result: await step.run({ publishCover, badge, solvency }) }); } catch (e) { json(res, { ok: false, error: (e as Error).message }, 500); }
 });
 
 /** Owner revokes: signed by the owner account (#0). Effective for every merchant on the next check. */

@@ -118,6 +118,14 @@ app.get('/receipt/:paymentTx', (req, res) => {
   return r ? json(res, { order: r.order, orderRef: r.orderRef, receiptTx: r.receiptTx, amount: r.amount }) : json(res, { pending: true }, 404);
 });
 
+/** The agent's own purchase history (needs its payer proof: what was bought is not on-chain). */
+app.get('/payments/:payer', async (req, res) => {
+  const payer = req.params.payer;
+  const ok = await verifyPayerProof({ header: (n) => req.header(n), payer, audience: `http://localhost:${PORT}`, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false);
+  if (!ok) return json(res, { error: 'payer proof required' }, 401);
+  json(res, guard.receipts.filter((r) => r.payer === payer).slice(-20).map(({ route, amount, paymentTx, at }) => ({ item: route, amount, paymentTx, at: at && new Date(at).toISOString() })));
+});
+
 app.get('/kuasa-log', (req, res) => !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, audit: audit.anchors(), unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
 
 app.use(paymentMiddleware(routes as never, server));
