@@ -1,0 +1,16 @@
+{
+  "name": "@kuasa/example-agentkit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@coinbase/agentkit": "^0.10.4",
+    "viem": "2.58.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  }
+}

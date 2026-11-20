@@ -15,8 +15,8 @@ const root = new URL('../.kuasa/', import.meta.url);
 const state = JSON.parse(readFileSync(new URL('state.json', root), 'utf8')) as { cover: string; registry: string; shopAgent: string };
 const archives = readdirSync(new URL('archive/', root)).map((d) => new URL(`archive/${d}/`, root));
 const files = [new URL('shop-receipts.json', root), ...archives.map((d) => new URL('shop-receipts.json', d))].filter(existsSync);
-const sold = new Map<string, { paymentTx: string; amount: string }>();
-for (const f of files) for (const r of JSON.parse(readFileSync(f, 'utf8')) as { order: string; paymentTx: string; amount: string }[]) sold.set(r.order, r);
+const sold = new Map<string, { mandate: string; paymentTx: string; amount: string }>();
+for (const f of files) for (const r of JSON.parse(readFileSync(f, 'utf8')) as { mandate: string; order: string; paymentTx: string; amount: string }[]) sold.set(r.order, r);
 
 const grpc = connect();
 const cover = new KuasaCover(grpc, BigInt(state.cover));
@@ -30,28 +30,35 @@ for (const f of [new URL('insurer-state.json', root), ...archives.map((d) => new
     hints.set(String((c.claimId as { $big?: string }).$big ?? c.claimId), c.receiptTxs ?? []);
   }
 }
-async function signedByUs(order: string, txs: string[]) {
+async function signedByUs(order: string, mandateId: string, txs: string[]) {
   for (const tx of txs) {
     const st = await grpc.getBlockItemStatus(sdk.TransactionHash.fromHexString(tx)).catch(() => null);
     const sender = st?.status === 'finalized' ? (st.outcome?.summary as { sender?: sdk.AccountAddress.Type } | undefined)?.sender : undefined;
     if (!sender || sdk.AccountAddress.toBase58(sender) !== recorder) continue; // only receipts our own recorder signed
     const ev = await registryEventsOfTx(grpc, tx, BigInt(state.registry));
-    if (ev?.events.some((e) => e.type === 'Receipt' && e.order === order)) return true;
+    if (ev?.events.some((e) => e.type === 'Receipt' && e.order === order && e.id === mandateId)) return true;
   }
   return false;
 }
+const backed = new Set<string>();
 for (let id = 0n; ; id++) {
   const c = await cover.claim(id);
   if (!c) break;
   const key = `kuasa:attest:${id}`;
   const prior = await cis8004GetMetadata(grpc, state.shopAgent, key);
-  if (prior?.startsWith('orders-match')) { console.log(key, 'already attested'); continue; }
+  // An order counts only if it was sold under the mandate of the policy being claimed on.
+  const policy = await cover.policy(c.policyId);
+  const mandateId = policy?.mandate.id ?? '';
   let found = 0, onChain = 0;
-  for (const o of c.orders) {
-    if (sold.has(o)) found++;
-    else if (await signedByUs(o, hints.get(String(id)) ?? [])) { found++; onChain++; }
+  for (const o of new Set(c.orders)) {
+    if (sold.get(o)?.mandate === mandateId) found++;
+    else if (await signedByUs(o, mandateId, hints.get(String(id)) ?? [])) { found++; onChain++; }
   }
-  const verdict = found === c.orders.length ? 'orders-match' : found === 0 ? 'orders-unknown' : 'orders-partial';
+  const reused = c.orders.some((o) => backed.has(o));
+  const verdict = new Set(c.orders).size < c.orders.length ? 'orders-duplicate'
+    : reused ? 'orders-reused'
+    : found === c.orders.length ? 'orders-match' : found === 0 ? 'orders-unknown' : 'orders-partial';
+  if (verdict === 'orders-match') for (const o of c.orders) backed.add(o); // one purchase backs one claim
   const value = `${verdict};orders=${found}/${c.orders.length};src=${onChain ? 'signed-receipts' : 'sales-book'};by=merchant;at=${Math.floor(Date.now() / 1000)}`;
   if (prior && prior.split(';')[0] === verdict) { console.log(key, 'unchanged', verdict); continue; }
   const r = await cis8004SetMetadata(grpc, state.shopAgent, key, value, wallet(acc.address, acc.key));
