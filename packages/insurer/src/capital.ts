@@ -28,6 +28,9 @@ export class CapitalLedger {
     return { accounts: [...this.accounts.values()].map((a) => ({ ...a })), txs: [...this.txs] };
   }
 
+  /** Marks a transaction as used (e.g. a premium payment) so it can never be booked as capital. */
+  reserve(tx: string) { this.txs.add(tx); }
+
   /** A verified transfer into the pool (each transaction counts once). */
   deposit(provider: string, amount: bigint, tx: string, at = 0) {
     if (this.txs.has(tx)) throw new Error('deposit already recorded');

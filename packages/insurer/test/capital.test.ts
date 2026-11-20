@@ -42,3 +42,10 @@ test('capital memo: only transfers marked "kuasa capital" are deposits', async (
   assert.equal(isCapitalMemo('78186b7561736120636f76657220706f6f6c206361706974616c'), false, 'a different text');
   assert.equal(isCapitalMemo(undefined), false);
 });
+
+test('a transaction reserved as a premium can never become a capital deposit', () => {
+  const l = new CapitalLedger();
+  l.reserve('premium-tx');
+  assert.throws(() => l.deposit('lp', 5n * 1_000_000n, 'premium-tx'), /already recorded/);
+  assert.equal(new CapitalLedger(l.snapshot()).snapshot().txs.includes('premium-tx'), true, 'persisted');
+});

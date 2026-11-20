@@ -7865,7 +7865,27 @@ var tokenHex = (id) => {
   return h;
 };
 var coverBindsToAgent = (p, a) => p.agentToken === tokenHex(a.token_id) && p.holder === a.owner_account;
-async function mcp(name, args) {
+function withRetryAndCache(fn, ttlMs, max = 500) {
+  const cache = /* @__PURE__ */ new Map();
+  return async (key) => {
+    const now = Date.now();
+    const hit = cache.get(key);
+    if (hit && now - hit.at < ttlMs) return hit.v;
+    if (hit) cache.delete(key);
+    const v = await fn(key).catch(() => new Promise((r) => setTimeout(r, 400)).then(() => fn(key)));
+    if (v === null || v === void 0) return v;
+    for (const [k, e] of cache) if (now - e.at >= ttlMs) cache.delete(k);
+    while (cache.size >= max) cache.delete(cache.keys().next().value);
+    cache.set(key, { at: now, v });
+    return v;
+  };
+}
+var mcpCached = withRetryAndCache((key) => {
+  const { name, args } = JSON.parse(key);
+  return mcpOnce(name, args);
+}, 3e4);
+var mcp = (name, args) => mcpCached(JSON.stringify({ name, args }));
+async function mcpOnce(name, args) {
   const r = await fetch(MCP, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });
   const raw = await r.text();
   const res = JSON.parse(raw.slice(raw.indexOf("{"))).result;

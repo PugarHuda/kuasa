@@ -46,6 +46,15 @@ async function treasuryPay(to: string, amount: bigint, memo: string) {
     treasury.signer, undefined, { autoScale: false, validate: true });
   return sdk.TransactionHash.toHexString(hash);
 }
+/** Outcome of a submitted transfer: success, failed, or pending when finality is not confirmed within 30 s. */
+async function txOutcomeOf(hash: string): Promise<'success' | 'failed' | 'pending'> {
+  const tx = sdk.TransactionHash.fromHexString(hash);
+  const done = await Promise.race([grpc.waitForTransactionFinalization(tx).then(() => true), new Promise<false>((r) => setTimeout(() => r(false), 30_000))]).catch(() => false);
+  if (!done) return 'pending';
+  const st = await grpc.getBlockItemStatus(tx);
+  if (st.status !== 'finalized' || !st.outcome) return 'pending';
+  return (st.outcome.summary as { transactionType?: string }).transactionType === 'failed' ? 'failed' : 'success';
+}
 const toJsonBig = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? { $big: x.toString() } : x));
 const fromJsonBig = (t: string) => JSON.parse(t, (_k, x) => (x && typeof x === 'object' && typeof x.$big === 'string' && Object.keys(x).length === 1 ? BigInt(x.$big) : x));
 const AP2_MERCHANTS: Record<string, string> = {
@@ -122,14 +131,7 @@ const svc = new InsurerService({
   autoPayLimit: BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000), // 10 EUDemo: smaller claims pay after the objection window
   autoPayDelayMs: Number(process.env.KUASA_AUTOPAY_DELAY_MS ?? 120_000),
   pay: (to, amount, memo) => treasuryPay(to, amount, memo), // submitted; txOutcome confirms it
-  txOutcome: async (hash) => {
-    const tx = sdk.TransactionHash.fromHexString(hash);
-    const done = await Promise.race([grpc.waitForTransactionFinalization(tx).then(() => true), new Promise<false>((r) => setTimeout(() => r(false), 30_000))]).catch(() => false);
-    if (!done) return 'pending';
-    const st = await grpc.getBlockItemStatus(tx);
-    if (st.status !== 'finalized' || !st.outcome) return 'pending';
-    return (st.outcome.summary as { transactionType?: string }).transactionType === 'failed' ? 'failed' : 'success';
-  },
+  txOutcome: (hash) => txOutcomeOf(hash),
   saveDisclosure: async (doc) => {
     const body = canonicalJson(doc);
     const hash = await sha256Hex(body);
@@ -180,6 +182,8 @@ server.onAfterSettle((async (ctx: Parameters<KuasaGuard['afterSettle']>[0]) => {
   await guard.afterSettle(ctx); // receipt: the premium draws down the mandate budget
   if (ctx.result.success !== false) {
     svc.markSettled(quoteIdOf(ctx)); // consumed before issuance: the quote can never back another payment
+    capital.reserve(ctx.result.transaction); // a premium payment can never be booked as capital
+    saveCapital();
     const policyId = await svc.issue(quoteIdOf(ctx), ctx.result.transaction);
     audit.append({ kind: 'premium', payer: payerOf(ctx), amount: ctx.requirements.amount, premiumTx: ctx.result.transaction, policyId });
   }
@@ -438,16 +442,24 @@ app.post('/capital/withdraw', async (req, res) => {
       const sv = await solvencyNow(); // the pool after every earlier withdrawal settled (they ran before this one)
       capital.withdraw(provider, amount, { pool: sv.pool, exposure: sv.exposure }, Date.now(), LOCKUP_MS);
       saveCapital();
+      let hash: string;
       try {
-        const hash = await treasuryPay(provider, amount, 'kuasa cover capital withdrawal');
-        const done = await grpc.waitForTransactionFinalization(sdk.TransactionHash.fromHexString(hash));
-        if ((done.summary as { transactionType?: string }).transactionType === 'failed') throw new Error('transfer failed');
-        return hash;
+        hash = await treasuryPay(provider, amount, 'kuasa cover capital withdrawal');
       } catch (e) {
-        capital.unwithdraw(provider, amount); // nothing left the pool
+        capital.unwithdraw(provider, amount); // never submitted: nothing left the pool
         saveCapital();
         throw e;
       }
+      // Roll back only on a final "failed". If finality is not confirmed yet the withdrawal stays
+      // booked (the transfer may still land); it shows as pending in the audit log.
+      const outcome = await txOutcomeOf(hash);
+      if (outcome === 'failed') {
+        capital.unwithdraw(provider, amount);
+        saveCapital();
+        throw new Error('the withdrawal transfer failed on-chain; nothing was paid');
+      }
+      if (outcome === 'pending') audit.append({ kind: 'capital-withdrawal-pending', provider, amount: String(amount), tx: hash });
+      return hash;
     });
     audit.append({ kind: 'capital-withdrawal', provider, amount: String(amount), tx: paid });
     json(res, { tx: paid, ...(await capitalView()) });

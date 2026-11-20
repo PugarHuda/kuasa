@@ -47,6 +47,11 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
     ['Pool', eur(s.pool)], ['Live exposure', eur(s.exposure)], ['Coverage', s.coverage === null ? '–' : `×${s.coverage}`],
     ['Live policies', String(s.livePolicies)], ['Premiums in', eur(s.premiums)], ['Paid out', eur(s.paidOut)],
   ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  // Pool vs the cover it owes: one series, the title names it, values labelled.
+  const max = s.pool > s.exposure ? s.pool : s.exposure;
+  const pct = (v: bigint) => (max === 0n ? 0 : Number((v * 1000n) / max) / 10);
+  $('solvency-chart').innerHTML = `<h3>Pool and the cover it owes (EUDemo)</h3><div class="hbar">${[['Pool', s.pool], ['Live exposure', s.exposure]]
+    .map(([k, v]) => `<span>${k}</span><div class="track" title="${k}: ${eur(v as bigint)}"><div class="fill" style="width:${pct(v as bigint)}%"></div></div><span>${eur(v as bigint)}</span>`).join('')}</div>`;
   $('solvent').innerHTML = `<span class="pill ${s.solvent ? 'ok' : 'bad'}">${s.solvent ? 'Solvent: the pool covers every live limit' : 'Under-reserved'}</span>`;
 
   $('policies').innerHTML = policies.map((p, i) => {
@@ -58,6 +63,17 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
     const payout = c.status.tag === 'Paid' ? tx((c.status as { payoutTx: string }).payoutTx) : '–';
     return `<tr><td>#${i}</td><td>#${c.policyId}</td><td>${esc(c.kind)}</td><td>${acct(c.claimant)}</td><td class="n">${eur(c.amount)}</td><td class="n">${c.payout ? eur(c.payout) : '–'}</td><td>${payout}</td><td>${decidedBy(decisions[i])}</td><td>${attested(attests[i])}</td><td>${statusPill(c.status.tag)}</td></tr>`;
   }).reverse().join('');
+  // Claims by outcome: fixed category order and colours, legend always present, counts labelled.
+  const cats = [
+    { key: 'auto', label: 'Paid automatically', color: 'var(--s1)', n: claims.filter((c, i) => c.status.tag === 'Paid' && decisions[i]?.by === 'auto').length },
+    { key: 'human', label: 'Paid after a human decision', color: 'var(--s2)', n: claims.filter((c, i) => c.status.tag === 'Paid' && decisions[i]?.by !== 'auto').length },
+    { key: 'rejected', label: 'Rejected or fraud', color: 'var(--s3)', n: claims.filter((c) => c.status.tag === 'Rejected' || c.status.tag === 'Fraud').length },
+    { key: 'open', label: 'Awaiting a decision', color: 'var(--s4)', n: claims.filter((c) => !['Paid', 'Rejected', 'Fraud'].includes(c.status.tag)).length },
+  ];
+  const total = cats.reduce((a, c) => a + c.n, 0);
+  $('claims-chart').innerHTML = decisions.length === 0 ? '<span class="muted">Reading claim decisions…</span>' : `<h3>Claims by outcome (${total})</h3>
+    <div class="stack" role="img" aria-label="${cats.map((c) => `${c.label}: ${c.n}`).join(', ')}">${cats.filter((c) => c.n > 0).map((c) => `<span style="flex:${c.n};background:${c.color}" title="${c.label}: ${c.n}">${c.n}</span>`).join('')}</div>
+    <div class="legend">${cats.map((c) => `<span><i style="background:${c.color}"></i>${c.label} (${c.n})</span>`).join('')}</div>`;
   $('updated').textContent = `Read from Concordium testnet at ${new Date().toLocaleTimeString()}`;
 }
 

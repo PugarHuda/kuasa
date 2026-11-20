@@ -6,9 +6,9 @@
 <title>Kuasa Explorer</title>
 <meta name="description" content="Live, read-only view of Kuasa Cover on Concordium testnet: policies, claims, pool and proof of solvency, read straight from the chain.">
 <style>
-  :root { --bg: #f7f7f5; --panel: #ffffff; --ink: #16181d; --muted: #5d6570; --line: #e3e5e8; --accent: #2f5bd3; --ok: #11794a; --ok-bg: #e2f5ec; --bad: #b3261e; --bad-bg: #fbe7e5; --warn: #8a5a00; --warn-bg: #fdf1d6; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; } }
-  :root[data-theme="dark"] { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; }
+  :root { --bg: #f7f7f5; --panel: #ffffff; --ink: #16181d; --muted: #5d6570; --line: #e3e5e8; --accent: #2f5bd3; --ok: #11794a; --ok-bg: #e2f5ec; --bad: #b3261e; --bad-bg: #fbe7e5; --warn: #8a5a00; --warn-bg: #fdf1d6; --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; } }
+  :root[data-theme="dark"] { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
   .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
@@ -32,6 +32,16 @@
   .agent h3 { margin: 0 0 4px; font-size: 16px; } .agent p { margin: 4px 0; color: var(--muted); font-size: 14px; }
   .muted { color: var(--muted); font-size: 14px; }
   ol { padding-left: 20px; margin: 0; } li { margin: 4px 0; }
+  .chart { margin-top: 16px; }
+  .chart h3 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+  .hbar { display: grid; grid-template-columns: 110px 1fr auto; gap: 8px 12px; align-items: center; font-size: 14px; }
+  .hbar .track { height: 14px; }
+  .hbar .fill { height: 14px; background: var(--s1); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .stack { display: flex; gap: 2px; height: 28px; }
+  .stack span { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; min-width: 22px; }
+  .stack span:first-child { border-radius: 4px 0 0 4px; } .stack span:last-child { border-radius: 0 4px 4px 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
 </style>
 </head>
 <body>
@@ -53,6 +63,7 @@
     <div class="panel">
       <div id="solvent"><span class="muted">Reading testnet…</span></div>
       <div class="stats" id="stats"></div>
+      <div class="chart" id="solvency-chart" aria-label="Pool and live exposure"></div>
       <p class="muted" style="margin:14px 0 0">The live exposure is the cover still owed by every active, unexpired policy (its limit minus what it already paid out). Small claims of 10 EUDemo or less are paid automatically after an objection window, and larger ones need a human claims handler. The insurer publishes who decided each claim on its CIS-8004 entry (<span class="mono">kuasa:decision:&lt;id&gt;</span>), shown in the Claims table. The shop, the other party to every purchase, attests whether each claim's orders are in its records (<span class="mono">kuasa:attest:&lt;id&gt;</span> on its CIS-8004 entry).</p>
     </div>
   </section>
@@ -70,6 +81,7 @@
 
   <section>
     <h2>Claims</h2>
+    <div class="panel chart" id="claims-chart" style="margin:0 0 12px" aria-label="Claims by outcome"></div>
     <div class="panel scroll"><table><thead><tr><th>Claim</th><th>Policy</th><th>Kind</th><th>Filed by</th><th>Amount</th><th>Payout</th><th>Payout tx</th><th>Decided by</th><th>Merchant attests</th><th>Status</th></tr></thead><tbody id="claims"></tbody></table></div>
   </section>
 
