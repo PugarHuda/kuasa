@@ -167,20 +167,21 @@ test('a rejected purchase gives its order reference back', async () => {
   assert.match((await payWith(g, 2, h))?.message ?? '', /revoked/, 'still the mandate reason, not an unknown ref');
 });
 
-test('order references are bounded (oldest evicted)', async () => {
+test('order references are bounded globally: refused at the cap', async () => {
   const g = makeGuard({}, undefined, { maxOrders: 2 });
-  const refs = [];
-  for (let i = 0; i < 3; i++) refs.push(await g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n }));
-  const h = (ref: string) => ({ 'x-kuasa-mandate': 'https://k.example/m.json', [ORDER_HEADER]: ref });
-  assert.match((await payWith(g, 1, h(refs[0])))?.message ?? '', /unknown or expired order reference/, 'evicted');
-  assert.equal(await payWith(g, 2, h(refs[2])), undefined);
+  const first = await g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n });
+  await g.issueOrderRef({ payer: SHOP, payTo: SHOP, route: 'GET /wine/:sku', amount: 1n });
+  await assert.rejects(g.issueOrderRef({ payer: OWNER, payTo: SHOP, route: 'GET /wine/:sku', amount: 1n }), /too many open order references/);
+  const h = { 'x-kuasa-mandate': 'https://k.example/m.json', [ORDER_HEADER]: first };
+  assert.equal(await payWith(g, 3, h), undefined, 'existing references are never pushed out');
 });
 
-test('order references are capped per payer', async () => {
+test('order references are capped per payer: new ones refused, existing never evicted', async () => {
   const g = makeGuard({}, undefined, { maxOrdersPerPayer: 2 });
-  const other = await g.issueOrderRef({ payer: SHOP, payTo: SHOP, route: 'GET /wine/:sku', amount: 1n });
-  for (let i = 0; i < 5; i++) await g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n });
+  const first = await g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n });
+  await g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n });
+  await assert.rejects(g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n }), /too many open order references/);
   assert.equal(g.orderRefCount(PAYER), 2);
-  assert.equal(g.orderRefCount(SHOP), 1, 'spamming refs for one payer never evicts another payer');
-  void other;
+  const h = { 'x-kuasa-mandate': 'https://k.example/m.json', [ORDER_HEADER]: first };
+  assert.equal(await payWith(g, 7, h), undefined, 'the first reference still works');
 });

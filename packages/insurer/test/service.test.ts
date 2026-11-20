@@ -296,11 +296,13 @@ test('a quote backs exactly one premium payment', async () => {
   assert.equal(await t.svc.checkPurchase(q.quoteId, PAYER, q.premium), null);
 });
 
-test('expired quotes are purged and the store is bounded', async () => {
+test('expired quotes are purged and the store is bounded (refused at the cap)', async () => {
   let now = 1_000_000;
   const t = harness({ now: () => now, maxQuotes: 3 });
-  for (let i = 0; i < 5; i++) await quoteOk(t.svc);
-  assert.equal(t.svc.quoteCount(), 3, 'oldest evicted beyond the cap');
+  for (let i = 0; i < 3; i++) await quoteOk(t.svc);
+  const extra = await t.svc.quote({ mandateUrl: 'https://k.example/m.json', limit: 100n * EUR, days: 30 });
+  assert.ok('refused' in extra);
+  assert.equal(t.svc.quoteCount(), 3);
   now += 11 * 60_000;
   await quoteOk(t.svc);
   assert.equal(t.svc.quoteCount(), 1, 'expired ones purged');
@@ -315,12 +317,31 @@ test('a stale premium reservation expires', async () => {
   assert.equal(await t.svc.checkPurchase(q.quoteId, PAYER, q.premium), null, 'reservation released after its TTL');
 });
 
-test('quotes are capped per payer, so one payer cannot evict another', async () => {
+test('at the per-payer cap new quotes are refused; existing ones are never evicted', async () => {
   const t = harness({ maxQuotesPerPayer: 2 });
-  const mine = await quoteOk(t.svc);
-  const other = harness({ maxQuotesPerPayer: 2 });
-  void other;
-  for (let i = 0; i < 4; i++) await quoteOk(t.svc);
-  assert.equal(t.svc.quoteCount(), 2, 'this payer keeps at most 2');
-  assert.equal(t.svc.quoteOf(mine.quoteId), undefined, 'its own oldest went first');
+  const first = await quoteOk(t.svc);
+  await quoteOk(t.svc);
+  const third = await t.svc.quote({ mandateUrl: 'https://k.example/m.json', limit: 100n * EUR, days: 30 });
+  assert.match('refused' in third ? third.refused : '', /too many open quotes/);
+  assert.ok(t.svc.quoteOf(first.quoteId), 'a third party cannot push out existing quotes');
+});
+
+test('a second payment for an already issued quote goes to refund, not a second policy', async () => {
+  const t = harness();
+  const q = await quoteOk(t.svc);
+  t.svc.markSettled(q.quoteId);
+  assert.equal(await t.svc.issue(q.quoteId, h(9)), 0n);
+  assert.equal(await t.svc.issue(q.quoteId, h(8), q), null);
+  assert.equal(t.policies.size, 1);
+  assert.match(t.svc.state().needsRefund[0].reason, /already issued/);
+});
+
+test('a settled quote keeps its reservation past the TTL', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now });
+  const q = await quoteOk(t.svc);
+  assert.equal(await t.svc.checkPurchase(q.quoteId, PAYER, q.premium), null);
+  t.svc.markSettled(q.quoteId);
+  now += 5 * 60_000;
+  assert.match((await t.svc.checkPurchase(q.quoteId, PAYER, q.premium)) ?? '', /already being paid|unknown/);
 });
