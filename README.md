@@ -23,7 +23,7 @@ Escrow protects you from bad sellers (Concordium's Protocol-Enforced Escrow cove
 | Protocol-Level Token **EUDemo** (allow-listed) | Prices, premiums and payouts; only identity-verified EU accounts can hold it (compliance enforced by the token) |
 | x402 (`@x402/concordium`) | Shop purchases and premium payments; in-process facilitators |
 | Sponsored transactions | Shop and insurer pay the agent's fees, including claim filing |
-| Agent Registry CIS-8004 | Agents and the shop are registered; guards check active + owner; owners publish `kuasa:cover` status in agent metadata; agents verify the shop before paying (two-way trust) |
+| Agent Registry CIS-8004 + Verified by Concordium badge | Agents and the shop are registered with **valid badges** (Agent Cards on GitHub Pages, hash pinned, confirmed by Concordium's hosted `check_badge`); guards check active + owner; owners publish `kuasa:cover` status in agent metadata; agents verify the shop before paying (two-way trust) |
 | Smart contracts (Rust) | `kuasa-registry` (mandates, budgets, receipts, incidents) and `kuasa-cover` (policies, claims, payouts, `claimsAuthorized`; checks mandates cross-contract) |
 | `registerData` | Anchored audit batches of every guard and claim decision (EU AI Act Art. 12 record keeping) |
 | Privacy Guardians (process) | Lawful disclosure route for repeated fraudulent claims |
@@ -78,6 +78,8 @@ pnpm --filter @kuasa/scripts exec tsx fraud-demo.ts teen          # run twice: n
 
 Claude can do the same through MCP: `KUASA_AGENT=alice node --import tsx packages/agent/src/mcp.ts` (tools `kuasa_*`, `cover_quote`, `cover_buy`, `cover_status`, `file_claim`).
 
+Badges: `pnpm --filter @kuasa/scripts exec tsx badges.ts build`, publish `docs/` (GitHub Pages), then `badges.ts pin`.
+
 Tests: `pnpm test && pnpm typecheck`, and `cargo concordium test` in each contract folder (build the registry module first; the cover tests deploy both).
 
 ## Path to production
@@ -94,7 +96,6 @@ See **[docs/PRODUCTION.md](docs/PRODUCTION.md)**. Kuasa Cover is built so the pi
 - **The pool is an account, not a lock.** Contracts cannot hold PLTs yet, so the treasury account holds EUDemo and the cover contract keeps the books and the authorisation (`claimsAuthorized`). Protocol-Level Locks are not live.
 - **Pricing is illustrative.** The risk engine is transparent rules, not actuarial data. Kuasa is not a licensed insurer; production needs a fronting carrier or MGA.
 - **Disclosure is simulated.** The request document is real and anchored on the claim; the court / Privacy Guardians process is described, not executed.
-- **Demo keys.** The console holds the owners' testnet keys so it can revoke and publish cover status; in production the owner signs with their wallet. Everything binds to localhost.
-- **Not live yet (on purpose):** the Verified-by-Concordium badge needs the Agent Card on a public URL; cards are served by the local shop with a Kuasa extension.
+- **Demo keys.** The console holds the owners' testnet keys so it can revoke and publish cover status; in production the owner signs with their wallet. The shop, insurer and console bind to 127.0.0.1 (`HOST` overrides).
 - **Build window.** Kuasa's mandate core (registry contract, policy, guard) was started on 17 November 2026, before the build window opened on 19 November; Kuasa Cover was designed and built from 19 November. The git history shows both.
 - **Use of AI.** Built with an AI coding agent (Claude) under a human lead who set direction and approved each milestone; commits carry a `Co-Authored-By` trailer.

@@ -14,7 +14,7 @@ Kuasa Cover was built against interfaces, so each testnet stand-in has a named r
 | Premium factors: mandate, proofs, history | Add **KYCaaS**, **AML on demand** and **liveness** results as factors | Feb–Mar 2027 | `RiskInput` in `packages/cover/src/risk.ts` |
 | EUDemo (test euro) | **EURQ** (MiCA, Quantoz) or another regulated euro PLT | Live | one env var (`KUASA_ASSET`) |
 | Keys in local files | Owner: Concordium wallet / **WDK** inside the app. Agent and insurer: **Dfns** wallets-as-a-service (MPC) or **Concordium Signer** | WDK v2/v3, Concordium Signer Feb 2027 | `Wallet` signer abstraction in `packages/chain` |
-| Badge not pinned (local Agent Card) | Agent Card on a public URL, hash pinned with `setAgentURI`, Verified-by-Concordium badge | Live | Agent Card already carries the Kuasa extension |
+| Agent Cards on GitHub Pages with valid badges | Cards on the operator's own domain (same pinning flow) | Live | `scripts/badges.ts` |
 
 ## 2. The insurance side
 
