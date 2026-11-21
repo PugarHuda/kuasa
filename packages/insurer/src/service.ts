@@ -126,7 +126,7 @@ export type Detection = {
   orders: [string, string]; paymentTxs: [string, string]; receiptTxs: [string, string];
   /** dismissed: the owner resumed the agent, confirming these purchases were intended */
   status: 'open' | 'filed' | 'dismissed'; claimId?: bigint;
-  /** v3: filed by the insurer itself (fileClaimFor), or why that failed */ filedBy?: 'insurer'; fileError?: string;
+  /** v3: filed by the insurer itself (fileClaimFor), or why that failed */ filedBy?: 'insurer'; fileTx?: string; fileError?: string;
 };
 type Disclosure = { claimId: string; account: string; doc: object };
 
@@ -569,6 +569,7 @@ export class InsurerService {
       const r = await this.deps.cover.fileClaimFor({ policyId: d.policyId, kind: 'AgentMistake', amount: d.amount, evidence: await evidenceHash(evidence), orders: [...d.orders] });
       if (r.id === null) throw new Error(`claim id missing in tx ${r.hash}`);
       d.filedBy = 'insurer';
+      d.fileTx = r.hash;
       await this.assessClaim(r.id, [...d.receiptTxs], evidence);
     } catch (e) {
       d.fileError = (e as Error).message; // the agent can still file it (claimDetected)

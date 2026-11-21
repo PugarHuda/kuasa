@@ -201,32 +201,34 @@ export class KuasaAgent {
       u.searchParams.set('days', String(days));
     }
     const ap2Header: Record<string, string> = ap2 ? { 'x-ap2-intent-mandate': Buffer.from(JSON.stringify(ap2)).toString('base64url') } : {};
-    return (await fetch(u, { headers: { ...this.headers(), ...(await this.proof(this.insurerUrl)), ...ap2Header } })).json() as Promise<{ quoteId?: string; premium?: string; factors?: { name: string }[]; refused?: string }>;
+    return (await fetch(u, { headers: { ...this.headers(), ...(await this.proof(this.insurerUrl)), ...ap2Header } })).json() as Promise<{ quoteId?: string; premium?: string; factors?: { name: string }[]; refused?: string; payer?: string }>;
   }
 
-  async coverStatus() {
+  /** payer: whose cover (defaults to this agent; a sponsor checks the agent it insured). */
+  async coverStatus(payer = this.opts.payer) {
     const u = new URL('/cover/status', this.insurerUrl);
-    u.searchParams.set('payer', this.opts.payer);
+    u.searchParams.set('payer', payer);
     return (await fetch(u)).json() as Promise<{ onChain: { periodRemaining: string; orderLimit: string; policyId: string | null }; policies: { policyId: string; kind: string; limit: string; until: number }[] }>;
   }
 
   /** Waits until the insurer has issued the policy on-chain after the premium settled. */
-  private async waitForPolicy(before: number, timeoutMs = 90_000) {
+  private async waitForPolicy(before: number, timeoutMs = 90_000, insured = this.opts.payer) {
     for (const end = Date.now() + timeoutMs; Date.now() < end; await sleep(3000)) {
-      const s = await this.coverStatus();
+      const s = await this.coverStatus(insured);
       if (s.policies.length > before) return s.policies.at(-1)!;
     }
     return null;
   }
 
-  private async buyQuote(q: { quoteId?: string; premium?: string; refused?: string; factors?: unknown[] }) {
+  private async buyQuote(q: { quoteId?: string; premium?: string; refused?: string; factors?: unknown[]; payer?: string }) {
     if (!q.quoteId) return { ok: false as const, reasons: [q.refused ?? 'no quote'] };
-    const before = (await this.coverStatus()).policies.length;
+    const insured = q.payer ?? this.opts.payer; // a sponsor pays, the quote's agent is insured
+    const before = (await this.coverStatus(insured)).policies.length;
     const u = new URL('/cover/buy', this.insurerUrl);
     u.searchParams.set('quoteId', q.quoteId);
     const paid = await this.payAt(u, {}, q.premium !== undefined ? BigInt(q.premium) : undefined);
     if (!paid.ok) return paid;
-    const policy = await this.waitForPolicy(before);
+    const policy = await this.waitForPolicy(before, 90_000, insured);
     return policy
       ? { ok: true as const, premium: q.premium, factors: q.factors, paymentTx: paid.paymentTx, policy }
       : { ok: false as const, reasons: ['premium paid but the policy is not issued yet; the insurer retries, check cover-status'], paymentTx: paid.paymentTx };

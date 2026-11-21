@@ -39,14 +39,34 @@ const merchant = loadProfile('merchant').accounts.find((a) => a.credNumber === 0
 const insurerState = async () => (await fetch(`${INSURER}/state`, { headers: { 'x-kuasa-console': '1' } })).json() as Promise<{ claims: { claimId: string; paid?: string; autoApproveTx?: string; reason?: string; assessment: { ok: boolean; reason: string } }[]; policies: { policyId: string; terms?: unknown }[] }>;
 const resume = async () => (await fetch(`${CONSOLE}/api/resume/alice`, { method: 'POST', headers: { 'x-kuasa-console': '1' } })).json();
 
+/** Testnet gRPC has transient failures; a purchase refused for one of them is simply retried (no money moved). */
+const TRANSIENT = /unavailable|lookup_failed|UNAVAILABLE|502|timed out/i;
+async function buyRetry(path: string, orderRef?: string) {
+  for (let i = 0; ; i++) {
+    const r = await alice.buy(path, !!orderRef, orderRef) as { ok: boolean; paymentTx?: string; reasons?: string[] };
+    if (r.ok || i >= 4 || !TRANSIENT.test(show(r.reasons))) return r;
+    await sleep(3000);
+  }
+}
+
 /** Buys bread twice and waits until the insurer has detected the pair, held the agent and filed the claim. */
 async function duplicateFiledByInsurer() {
-  const two = await alice.buyTwice('/shop/groceries/bread');
-  const txs = [two.first, two.second].map((x) => (x as { paymentTx?: string }).paymentTx);
-  console.log('   bread paid twice', show(txs));
-  if (txs.some((t) => !t)) throw new Error(`a purchase failed: ${show(two)}`);
+  // buy until the insurer sees a duplicate pair (an unpaired earlier bread can complete one: then the
+  // next purchase is refused by the hold, which is the circuit breaker doing its job)
+  const txs: string[] = [];
+  for (let n = 0; n < 2; n++) {
+    const r = await buyRetry('/shop/groceries/bread');
+    if (r.ok && r.paymentTx) txs.push(r.paymentTx);
+    else console.log('   purchase refused:', show(r.reasons));
+    for (let i = 0; i < 8; i++) {
+      if ((await alice.detections()).detections.some((x) => x.paymentTxs.some((t) => txs.includes(t)))) break;
+      await sleep(5000);
+    }
+    if ((await alice.detections()).detections.some((x) => x.paymentTxs.some((t) => txs.includes(t)))) break;
+  }
+  console.log('   bread paid', show(txs));
   for (let i = 0; i < 60; i++) {
-    const d = (await alice.detections()).detections.find((x) => x.paymentTxs.every((t) => txs.includes(t)));
+    const d = (await alice.detections()).detections.find((x) => x.paymentTxs.some((t) => txs.includes(t)) && x.status !== 'dismissed');
     if (d?.claimId !== undefined) return d as typeof d & { claimId: string };
     if ((d as { fileError?: string } | undefined)?.fileError) throw new Error(`insurer could not file: ${(d as { fileError?: string }).fileError}`);
     await sleep(5000);
@@ -100,6 +120,6 @@ if (steps.includes('sponsor')) {
   const shop = new KuasaAgent({ ...alice.opts, payer: merchant.address, payerKey: merchant.key });
   const sponsored = await shop.sponsorOrderCover({ ref: q.orderRef, amount: BigInt(q.amount!) }) as { policy?: { policyId: string; sponsor?: string }; factors?: { name: string; multiplier: number }[]; premium?: string };
   console.log('   the shop paid', show(sponsored.premium), 'for policy', show(sponsored.policy?.policyId), 'factors', show(sponsored.factors?.map((f) => `${f.name} x${f.multiplier}`)));
-  const bought = await alice.buy('/shop/wine/rioja', true, q.orderRef) as { ok: boolean; paymentTx?: string; reasons?: string[] };
+  const bought = await buyRetry('/shop/wine/rioja', q.orderRef);
   console.log('   insured wine bought by the agent:', show(bought.ok ? bought.paymentTx : bought));
 }

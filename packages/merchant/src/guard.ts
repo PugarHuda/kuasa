@@ -16,7 +16,7 @@ export const ORDER_HEADER = 'x-kuasa-order';
 export type Offer = { category: string; requirements: Requirements & { minCover?: bigint } };
 
 type Payload = { signedTransaction?: { header?: { sender?: string; nonce?: number | string } } };
-type InFlight = { id: string; owner: string; payer: string; route: string; amount: bigint; orderRef?: string; coverHeld: bigint };
+type InFlight = { id: string; owner: string; payer: string; route: string; amount: bigint; orderRef?: string; coverHeld: bigint; intent?: OrderIntent };
 type CoverNeed = { available: bigint; needed: bigint; viaOrder: boolean };
 type OrderIntent = { payer: string; payTo: string; route: string; amount: bigint; expires: number };
 
@@ -215,12 +215,15 @@ export class KuasaGuard {
     if (b.spent + this.reserved(decision.mandateId!) + amount > b.maxTotal) return reject('amount exceeds remaining mandate budget');
     const c = decision.cover;
     if (c && !c.viaOrder && c.available - this.reservedCover(payer) < c.needed) return reject('cover required: period cover is held by purchases still settling');
-    this.inFlight.set(key, { id: decision.mandateId!, owner: decision.owner!, payer, route, amount, orderRef, coverHeld: c && !c.viaOrder ? amount : 0n });
+    this.inFlight.set(key, { id: decision.mandateId!, owner: decision.owner!, payer, route, amount, orderRef, intent, coverHeld: c && !c.viaOrder ? amount : 0n });
   };
 
-  /** x402 `onSettleFailure`: release the reservation. */
+  /** x402 `onSettleFailure`: release the reservation; no money moved, so the order reference is usable again. */
   settleFailed = async (ctx: { paymentPayload: { payload: unknown } }) => {
-    this.inFlight.delete(paymentKey(ctx.paymentPayload.payload).key);
+    const key = paymentKey(ctx.paymentPayload.payload).key;
+    const f = this.inFlight.get(key);
+    if (f?.orderRef && f.intent && !this.orders.has(f.orderRef) && f.intent.expires > this.now()) this.orders.set(f.orderRef, f.intent);
+    this.inFlight.delete(key);
   };
   /** x402 `onVerifyFailure` (verification threw, e.g. the facilitator was unreachable): release. */
   verifyFailed = this.settleFailed;

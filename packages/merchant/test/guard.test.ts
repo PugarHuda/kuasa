@@ -212,3 +212,20 @@ test('insurer circuit breaker: a hold on the payer refuses every purchase; a cle
   assert.equal(await why(async () => null), 'ok');
   assert.match(await why(async () => { throw new Error('502'); }), /hold check unavailable/);
 });
+
+test('an order reference survives a payment that failed before any money moved (verify failure), but is single-use once settled', async () => {
+  const g = makeGuard({}, undefined, {
+    registry: { view: async () => ({ owner: OWNER, payer: PAYER, agentRegistry: { index: 12802n, subindex: 0n }, agentToken: '7', uri: '', maxTotal: 100000000n, spent: 0n, validUntilMs: 4_000_000_000_000n, revoked: false, recorders: [RECORDER], receipts: 0n, incidents: 0n }),
+      recordReceipt: async () => ({ hash: 'r' }) } as never,
+  });
+  const ref = await g.issueOrderRef({ payer: PAYER, payTo: SHOP, route: 'GET /wine/:sku', amount: 24000000n });
+  const payload = (nonce: number) => ({ signedTransaction: { header: { sender: PAYER, nonce } } });
+  const requirements = { payTo: SHOP, asset: 'EUDemo', amount: '24000000' };
+  const headers: Record<string, string> = { 'x-kuasa-mandate': 'https://k.example/m.json', [ORDER_HEADER]: ref };
+  const pay = (nonce: number) => g.beforeVerify({ paymentPayload: { payload: payload(nonce) }, requirements, transportContext: { request: { routePattern: 'GET /wine/:sku', adapter: { getHeader: (n: string) => headers[n] } } } });
+  assert.equal(await pay(1), undefined);
+  await g.verifyFailed({ paymentPayload: { payload: payload(1) } }); // e.g. the payer lacked funds
+  assert.equal(await pay(2), undefined, 'the reference is usable again');
+  await g.afterSettle({ paymentPayload: { payload: payload(2) }, requirements, result: { transaction: 'ab'.repeat(32) } });
+  assert.match((await pay(3))?.message ?? '', /unknown or expired order reference/, 'settled: used up');
+});
