@@ -828,6 +828,7 @@ test('merchant-paid cover: the sponsor signs and pays; the policy covers the age
   assert.equal(await t.svc.checkPurchase(q.quoteId, SHOP, q.premium), null);
   await t.svc.issue(q.quoteId, h(9));
   assert.equal(t.svc.state().policies[0].payer, PAYER, 'the agent is insured');
+  assert.equal(t.svc.state().policies[0].sponsor, SHOP, 'refunds and givebacks go back to the sponsor');
 });
 
 test('giveback: a claim-free policy that ended returns a share of its premium, once', async () => {

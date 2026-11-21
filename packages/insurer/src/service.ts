@@ -143,7 +143,8 @@ export class InsurerService {
   private settled = new Set<string>();
   private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string; /** SKUs of the AP2 intent it was bought under */ skus?: string[];
     /** v3 terms set on-chain for this policy, or why they could not be */ terms?: { autoPayLimit: bigint; objectionWindowMs: bigint; intent: string | null; tx?: string; error?: string };
-    /** premium share returned at the end of a claim-free policy */ giveback?: { amount: bigint; tx?: string } }[] = [];
+    /** premium share returned at the end of a claim-free policy */ giveback?: { amount: bigint; tx?: string };
+    /** merchant-paid cover: who paid the premium (refunds and givebacks go back there) */ sponsor?: string }[] = [];
   /** Premiums that settled but whose policy is not on-chain yet; the quote travels with them. */
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
   /** Paid premiums that can never become a policy (e.g. mandate revoked meanwhile): refund manually. */
@@ -314,7 +315,7 @@ export class InsurerService {
       deductible: DEDUCTIBLE, premium: q.premium, premiumTx, validUntilMs: BigInt(this.deps.now() + days * DAY_MS),
     };
     const record = (id: bigint) => {
-      this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period', ...(q.ownerSignedIntent && q.request.ap2?.skus?.length ? { skus: q.request.ap2.skus } : {}) });
+      this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period', ...(q.request.sponsor ? { sponsor: q.request.sponsor } : {}), ...(q.ownerSignedIntent && q.request.ap2?.skus?.length ? { skus: q.request.ap2.skus } : {}) });
       this.premiumsIn += q.premium;
       this.consume(quoteId);
       this.save();
@@ -592,7 +593,7 @@ export class InsurerService {
       rec.giveback = { amount }; // before paying: never twice
       this.save();
       try {
-        rec.giveback.tx = await this.deps.pay(rec.payer, amount, `kuasa giveback policy ${rec.policyId}`);
+        rec.giveback.tx = await this.deps.pay(rec.sponsor ?? rec.payer, amount, `kuasa giveback policy ${rec.policyId}`);
       } catch {
         rec.giveback = undefined; // retried next round
       }
@@ -856,10 +857,12 @@ export class InsurerService {
       const left = p.validUntilMs - (now > p.validFromMs ? now : p.validFromMs);
       const amount = (p.premium * left) / (p.validUntilMs - p.validFromMs);
       if (amount <= 0n) continue;
-      const entry: { policyId: bigint; to: string; amount: bigint; tx?: string } = { policyId: rec.policyId, to: p.agentPayer, amount };
+      // a sponsored premium goes back to whoever paid it
+      const to = rec.sponsor ?? p.agentPayer;
+      const entry: { policyId: bigint; to: string; amount: bigint; tx?: string } = { policyId: rec.policyId, to, amount };
       this.refunds.push(entry); // recorded before paying: a crash never pays twice (a missing tx is visible for a manual check)
       this.save();
-      entry.tx = await this.deps.pay(p.agentPayer, amount, `kuasa cover refund policy ${rec.policyId}`);
+      entry.tx = await this.deps.pay(to, amount, `kuasa cover refund policy ${rec.policyId}`);
       this.save();
     }
   }

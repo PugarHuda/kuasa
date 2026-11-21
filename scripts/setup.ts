@@ -113,7 +113,8 @@ if (!state.cover) {
   const OBJECTION_WINDOW_MS = BigInt(process.env.KUASA_AUTOPAY_DELAY_MS ?? 120_000);
   // v3 appends objection_bond: Amount (microCCD)
   const OBJECTION_BOND = BigInt(process.env.KUASA_OBJECTION_BOND_MICROCCD ?? 1_000_000);
-  const init = new Uint8Array([...insurerOperator.address.decodedAddress, ...new Uint8Array(new BigUint64Array([BigInt(state.registry), 0n, AUTO_PAY_LIMIT, OBJECTION_WINDOW_MS, OBJECTION_BOND]).buffer)]);
+  // ...and pool: AccountAddress (forfeited objection bonds and slashed operator bonds go there, not to the operator)
+  const init = new Uint8Array([...insurerOperator.address.decodedAddress, ...new Uint8Array(new BigUint64Array([BigInt(state.registry), 0n, AUTO_PAY_LIMIT, OBJECTION_WINDOW_MS, OBJECTION_BOND]).buffer), ...sdk.AccountAddress.fromBase58(insurerTreasury).decodedAddress]);
   const r = await submit(grpc, Transaction.initContract({
     amount: sdk.CcdAmount.zero(), moduleRef: sdk.ModuleReference.fromHexString(state.coverModuleRef),
     initName: sdk.ContractName.fromString('kuasa_cover'), param: sdk.Parameter.fromBuffer(ab(init)),

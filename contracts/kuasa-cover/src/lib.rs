@@ -49,12 +49,15 @@ pub struct InitParams {
     pub objection_window_ms: u64,
     /// v3: CCD an objector must lock with an objection (returned if the claim is rejected).
     pub objection_bond: Amount,
+    /// v3: where forfeited objection bonds and slashed operator bonds go (the pool account), never the operator.
+    pub pool: AccountAddress,
 }
 
 /// v3: bond rules (separate view, so the v2 `rules` view keeps its layout).
 #[derive(Serialize, SchemaType, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct BondRules {
     pub objection_bond: Amount,
+    pub pool: AccountAddress,
 }
 
 /// v3: per-policy terms. They can only tighten the published rules (lower limit, longer window).
@@ -227,8 +230,11 @@ pub struct State<S = StateApi> {
     objection_bonds: StateMap<u64, Vec<(AccountAddress, Amount)>, S>,
     /// agent payer -> operator bond
     bonds: StateMap<AccountAddress, Bond, S>,
-    /// claim -> when it was rejected (a bond cannot leave within 30 days of a rejection)
-    rejected_at: StateMap<u64, Timestamp, S>,
+    /// claims the operator filed for the agent (fileClaimFor): never grounds to slash the agent's bond
+    filed_for: StateSet<u64, S>,
+    /// per agent payer: claims still open (filed, assessed, approved and unpaid), and the last rejection
+    open_claims: StateMap<AccountAddress, u32, S>,
+    last_rejected: StateMap<AccountAddress, Timestamp, S>,
 }
 
 #[derive(Debug, PartialEq, Eq, Reject, Serialize, SchemaType)]
@@ -278,11 +284,13 @@ fn init(ctx: &InitContext, state_builder: &mut StateBuilder) -> InitResult<State
         rules: AutoRules { auto_pay_limit: p.auto_pay_limit, objection_window_ms: p.objection_window_ms },
         assessed_at: state_builder.new_map(),
         objected: state_builder.new_set(),
-        bond_rules: BondRules { objection_bond: p.objection_bond },
+        bond_rules: BondRules { objection_bond: p.objection_bond, pool: p.pool },
         terms: state_builder.new_map(),
         objection_bonds: state_builder.new_map(),
         bonds: state_builder.new_map(),
-        rejected_at: state_builder.new_map(),
+        filed_for: state_builder.new_set(),
+        open_claims: state_builder.new_map(),
+        last_rejected: state_builder.new_map(),
     })
 }
 
@@ -344,6 +352,13 @@ fn read_mandate(host: &Host<State>, key: &MandateKey) -> CResult<MandateEntry> {
         .ok_or(Error::RegistryCall)?;
     let mandate: Option<MandateEntry> = ret.get().map_err(|_| Error::RegistryCall)?;
     mandate.ok_or(Error::MandateInvalid)
+}
+
+/// A claim of this payer left the open set (rejected or paid).
+fn close_claim<S: HasStateApi>(state: &mut State<S>, payer: AccountAddress) {
+    if let Some(mut n) = state.open_claims.get_mut(&payer) {
+        *n = n.saturating_sub(1);
+    }
 }
 
 fn is_live(p: &Policy, now: Timestamp) -> bool {
@@ -409,6 +424,7 @@ fn file_claim_for(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Log
     ensure!(p.kind == ClaimKind::AgentMistake && p.orders.len() == 2, Error::InvalidParams);
     let payer = host.state().policies.get(&p.policy_id).ok_or(Error::NotFound)?.agent_payer;
     let id = file(ctx, host, logger, p, payer)?;
+    let _ = host.state_mut().filed_for.insert(id);
     logger.log(&Event::ClaimFiledFor { claim_id: id, by: sender_account(ctx)? })?;
     Ok(id)
 }
@@ -432,6 +448,7 @@ fn file(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger, p: Fi
     for o in p.orders.iter() {
         ensure!(!state.claimed_orders.contains(&(p.policy_id, *o)), Error::OrderAlreadyClaimed);
     }
+    state.open_claims.entry(payer).or_insert(0).modify(|n| *n += 1);
     for o in p.orders.iter() {
         let _ = state.claimed_orders.insert((p.policy_id, *o));
     }
@@ -485,15 +502,17 @@ fn decide_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
         for o in orders {
             state.claimed_orders.remove(&(policy_id, o));
         }
-        let _ = state.rejected_at.insert(p.claim_id, ctx.metadata().slot_time());
+        let payer = state.policies.get(&policy_id).ok_or(Error::NotFound)?.agent_payer;
+        close_claim(state, payer);
+        let _ = state.last_rejected.insert(payer, ctx.metadata().slot_time());
     }
     logger.log(&Event::ClaimDecided { claim_id: p.claim_id, approve: p.approve })?;
     // Objection bonds: an upheld objection (claim rejected) gets its bond back; a failed one
-    // (claim approved anyway) forfeits it to the operator, for the pool.
+    // (claim approved anyway) forfeits it to the pool account.
     let bonds = host.state().objection_bonds.get(&p.claim_id).map(|b| b.clone()).unwrap_or_default();
-    let operator = host.state().operator;
+    let pool = host.state().bond_rules.pool;
     for (by, amount) in bonds {
-        let to = if p.approve { operator } else { by };
+        let to = if p.approve { pool } else { by };
         host.invoke_transfer(&to, amount).map_err(|_| Error::TransferFailed)?;
         logger.log(&Event::ObjectionBondSettled { claim_id: p.claim_id, to, amount })?;
     }
@@ -589,6 +608,8 @@ fn record_payout(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logg
         ensure!(p.amount > 0 && paid <= policy.limit, Error::OverLimit);
         policy.paid_out = paid;
     }
+    let payer = state.policies.get(&policy_id).ok_or(Error::NotFound)?.agent_payer;
+    close_claim(state, payer);
     let mut c = state.claims.get_mut(&p.claim_id).ok_or(Error::NotFound)?;
     c.status = ClaimStatus::Paid { payout_tx: p.payout_tx };
     c.payout = p.amount;
@@ -607,13 +628,17 @@ fn mark_fraud(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger)
     let policy_id = c.policy_id;
     drop(c);
     logger.log(&Event::ClaimFraud { claim_id: p.claim_id, disclosure: p.disclosure })?;
-    // Proven fraud costs the agent's operator its bond, paid to the operator for the pool.
+    // Proven fraud by the agent's side costs its operator the bond, paid into the pool account.
+    // A claim the operator filed itself (fileClaimFor) is never grounds to slash.
+    if host.state().filed_for.contains(&p.claim_id) {
+        return Ok(());
+    }
     let payer = host.state().policies.get(&policy_id).ok_or(Error::NotFound)?.agent_payer;
     let bond = host.state().bonds.get(&payer).map(|b| *b);
     if let Some(b) = bond {
         host.state_mut().bonds.remove(&payer);
-        let operator = host.state().operator;
-        host.invoke_transfer(&operator, b.amount).map_err(|_| Error::TransferFailed)?;
+        let pool = host.state().bond_rules.pool;
+        host.invoke_transfer(&pool, b.amount).map_err(|_| Error::TransferFailed)?;
         logger.log(&Event::BondSlashed { payer, claim_id: p.claim_id, amount: b.amount })?;
     }
     Ok(())
@@ -649,6 +674,9 @@ fn post_bond(ctx: &ReceiveContext, host: &mut Host<State>, amount: Amount, logge
     let payer: AccountAddress = ctx.parameter_cursor().get()?;
     let poster = sender_account(ctx)?;
     ensure!(amount > Amount::zero(), Error::InvalidParams);
+    // only the agent payer itself or the holder (owner) of one of its policies may bond it
+    let holder = host.state().by_payer.get(&payer).map(|ids| ids.iter().any(|id| host.state().policies.get(id).map(|p| p.holder == poster).unwrap_or(false))).unwrap_or(false);
+    ensure!(poster == payer || holder, Error::Unauthorized);
     let total = match host.state().bonds.get(&payer).map(|b| *b) {
         Some(b) => {
             ensure!(b.poster == poster, Error::Unauthorized);
@@ -676,16 +704,12 @@ fn withdraw_bond(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logg
     let b = host.state().bonds.get(&payer).map(|b| *b).ok_or(Error::NotFound)?;
     ensure!(b.poster == sender_account(ctx)?, Error::Unauthorized);
     let now = ctx.metadata().slot_time();
-    let policies = host.state().by_payer.get(&payer).map(|v| v.clone()).unwrap_or_default();
-    for (id, c) in host.state().claims.iter() {
-        if !policies.contains(&c.policy_id) {
-            continue;
-        }
-        let open = matches!(c.status, ClaimStatus::Filed | ClaimStatus::Assessed { .. } | ClaimStatus::Approved);
-        let recent = c.status == ClaimStatus::Rejected
-            && host.state().rejected_at.get(&*id).map(|t| t.checked_add(Duration::from_millis(CLAIMS_WINDOW_MS)).map(|e| now < e).unwrap_or(true)).unwrap_or(true);
-        ensure!(!open && !recent, Error::BondLocked);
-    }
+    // locked while the bond backs live cover (it earned a premium discount), while a claim is open,
+    // and for 30 days after a rejection (it may still be proven fraud)
+    let live = host.state().by_payer.get(&payer).map(|ids| ids.iter().any(|id| host.state().policies.get(id).map(|p| is_live(&p, now)).unwrap_or(false))).unwrap_or(false);
+    let open = host.state().open_claims.get(&payer).map(|n| *n).unwrap_or(0) > 0;
+    let recent = host.state().last_rejected.get(&payer).map(|t| t.checked_add(Duration::from_millis(CLAIMS_WINDOW_MS)).map(|e| now < e).unwrap_or(true)).unwrap_or(false);
+    ensure!(!live && !open && !recent, Error::BondLocked);
     host.state_mut().bonds.remove(&payer);
     host.invoke_transfer(&b.poster, b.amount).map_err(|_| Error::TransferFailed)?;
     logger.log(&Event::BondWithdrawn { payer, amount: b.amount })?;
