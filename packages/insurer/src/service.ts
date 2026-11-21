@@ -641,7 +641,8 @@ export class InsurerService {
     if (!jurors.includes(juror)) throw new Error('not a juror on the appeals panel');
     if (!rec) throw new Error('unknown claim');
     if (rec.appealOf === undefined) throw new Error('only appeals go to the panel');
-    if (rec.verdict || rec.paid) throw new Error('already decided');
+    // decidedBy is set before the decision's await: a vote arriving meanwhile cannot decide (or settle) twice
+    if (rec.verdict || rec.paid || rec.decidedBy) throw new Error('already decided');
     if ([rec.claimant, rec.holder, rec.recipient].includes(juror)) throw new Error('a party to the claim cannot judge it');
     rec.panel ??= [];
     if (rec.panel.some((v) => v.by === juror)) throw new Error('this juror already voted');
@@ -654,8 +655,15 @@ export class InsurerService {
     const no = rec.panel.length - yes;
     if (yes < need && no < need) return { decided: false as const, yes, no, need };
     rec.decidedBy = 'panel';
-    rec.panelSettlement = this.settlePanel(rec.panel, yes >= need);
-    const d = await this.decide(claimId, yes >= need);
+    let d: Awaited<ReturnType<InsurerService['decide']>>;
+    try {
+      d = await this.decide(claimId, yes >= need);
+    } catch (e) {
+      rec.decidedBy = undefined; // not decided: the panel can retry (no stakes moved)
+      throw e;
+    }
+    rec.panelSettlement ??= this.settlePanel(rec.panel, yes >= need); // once, after the decision stands
+    this.save();
     return { ...d, by: 'panel' as const, approve: yes >= need, yes, no, need, settlement: rec.panelSettlement };
   }
 

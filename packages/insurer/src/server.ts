@@ -580,6 +580,7 @@ app.post('/capital/withdraw', async (req, res) => {
     const amount = big(req.body?.amount);
     if (svc.jurorBusy(provider)) return json(res, { error: 'this juror has a vote on an undecided appeal: its stake stays until the appeal is decided' }, 400);
     const paid = await serialCapital(async () => {
+      if (svc.jurorBusy(provider)) throw new Error('this juror has a vote on an undecided appeal: its stake stays until the appeal is decided');
       reconcileCapital();
       const sv = await solvencyNow();
       capital.withdraw(provider, amount, { pool: sv.pool - pendingOut(), exposure: sv.exposure }, Date.now(), LOCKUP_MS); // in-flight withdrawals already left
