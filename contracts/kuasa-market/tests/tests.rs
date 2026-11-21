@@ -172,8 +172,11 @@ fn anyone_slashes_an_approved_claim_left_unpaid_after_the_grace_period() {
     chain.tick_block_time(Duration::from_millis(DAY)).unwrap();
     let before = chain.account_balance_available(CLAIMANT).unwrap();
     upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).unwrap(); // a stranger, no arbiter
+    assert_eq!(listed(&chain, market)[0].1.bond, Amount::from_ccd(6), "the penalty leaves the bond at once");
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &r, Amount::zero()).is_err(), "escrowed for the exit delay");
+    chain.tick_block_time(Duration::from_millis(7 * DAY)).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &r, Amount::zero()).unwrap();
     assert_eq!(chain.account_balance_available(CLAIMANT).unwrap(), before + Amount::from_ccd(4), "the claimant is compensated");
-    assert_eq!(listed(&chain, market)[0].1.bond, Amount::from_ccd(6));
     assert!(upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).is_err(), "one unpaid claim costs the bond once");
     assert!(upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).is_err(), "and cannot be flagged again");
 }
@@ -189,4 +192,19 @@ fn a_paid_claim_cannot_be_flagged_or_slashed() {
     assert!(upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).is_err(), "paid in time");
     assert_eq!(listed(&chain, market)[0].1.bond, Amount::from_ccd(10));
     assert!(upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &ClaimRef { pool: POOL, claim_id: 0 }, Amount::zero()).is_err(), "a paid claim is not unpaid");
+}
+
+
+#[test]
+fn the_panel_vetoes_a_slash_in_escrow_and_the_bond_is_restored() {
+    let (mut chain, market, _cover) = market_with_approved_claim();
+    let r = ClaimRef { pool: POOL, claim_id: 0 };
+    upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).unwrap();
+    chain.tick_block_time(Duration::from_millis(DAY)).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).unwrap();
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.vetoSlash", &r, Amount::zero()).is_err(), "only the arbiter vetoes");
+    upd(&mut chain, market, ARBITER, "kuasa_market.vetoSlash", &r, Amount::zero()).unwrap();
+    assert_eq!(listed(&chain, market)[0].1.bond, Amount::from_ccd(10), "self-dealing gains nothing");
+    chain.tick_block_time(Duration::from_millis(7 * DAY)).unwrap();
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &r, Amount::zero()).is_err(), "nothing left to release");
 }

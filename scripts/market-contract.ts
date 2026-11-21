@@ -12,13 +12,19 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { loadProfile } from './lib/identity.js';
 
 const STATE = new URL('../.kuasa/state.json', import.meta.url);
-const state = JSON.parse(readFileSync(STATE, 'utf8')) as { cover: string; marketModuleRef?: string; marketContract?: string; marketContractV1?: string; market: { name: string; cover: string; url: string }[] };
+const state = JSON.parse(readFileSync(STATE, 'utf8')) as { cover: string; coverModuleRef: string; marketModuleRef?: string; marketContract?: string; marketContractV1?: string; marketContractV2?: string; market: { name: string; cover: string; url: string }[] };
 // --v2: the registry with arbiter-free slashing (flagUnpaid/slashUnpaid) and the 2-of-3 panel as arbiter;
 // the first registry is kept as marketContractV1 and both insurers leave it (bonds back after 7 days)
 if (process.argv.includes('--v2') && !state.marketContractV1) {
   state.marketContractV1 = state.marketContract; state.marketContract = undefined; state.marketModuleRef = undefined;
   writeFileSync(STATE, JSON.stringify(state, null, 2));
 }
+// --v3: covers bound at registration, checked against the kuasa-cover module and their own pool
+if (process.argv.includes('--v3') && !state.marketContractV2) {
+  state.marketContractV2 = state.marketContract; state.marketContract = undefined; state.marketModuleRef = undefined;
+  writeFileSync(STATE, JSON.stringify(state, null, 2));
+}
+const previous = state.marketContractV2 ?? state.marketContractV1;
 const save = () => writeFileSync(STATE, JSON.stringify(state, null, 2));
 const grpc = connect();
 const acct = (name: string, n: number): Wallet => { const a = loadProfile(name).accounts.find((x) => x.credNumber === n)!; return wallet(a.address, a.key); };
@@ -42,7 +48,9 @@ if (!state.marketContract) {
   // InitParams { arbiter, min_bond: Amount, exit_delay_ms, grace_ms, unpaid_penalty: Amount }; arbiter: the
   // 2-of-3 juror panel account (panel-multisig.ts); grace 10 minutes on testnet (days in production)
   const arbiter = sdk.AccountAddress.fromBase58(loadProfile('panel').accounts[0].address);
-  const init = new Uint8Array([...arbiter.decodedAddress, ...u64(10_000_000n), ...u64(7n * 86_400_000n), ...u64(10n * 60_000n), ...u64(2_000_000n)]);
+  // ...and cover_module: the kuasa-cover module both insurers run (only its contracts count as evidence)
+  const coverModule = sdk.ModuleReference.fromHexString(state.coverModuleRef).decodedModuleRef;
+  const init = new Uint8Array([...arbiter.decodedAddress, ...u64(10_000_000n), ...u64(7n * 86_400_000n), ...u64(10n * 60_000n), ...u64(2_000_000n), ...coverModule]);
   const r = await submit(grpc, Transaction.initContract({ amount: sdk.CcdAmount.zero(), moduleRef: sdk.ModuleReference.fromHexString(state.marketModuleRef), initName: sdk.ContractName.fromString('kuasa_market'), param: sdk.Parameter.fromBuffer(init.buffer) }, sdk.Energy.create(30_000)) as Transaction.Builder, deployer);
   state.marketContract = String(ok(r, 'market init').contractInitialized.address.index); save();
   console.log(`kuasa-market <${state.marketContract},0>`, r.hash);
@@ -53,12 +61,12 @@ const insurers = [
   { pool: acct('insurer', 0), name: 'Kuasa Cover', cover: BigInt(state.cover), url: 'http://localhost:4023', price: 10_000, evm: evmOf('eth-insurer.json') },
   ...state.market.map((m) => ({ pool: acct('insurer2', 0), name: m.name, cover: BigInt(m.cover), url: m.url, price: 8_500, evm: '' })),
 ];
-if (state.marketContractV1) {
-  // leave the first registry: listed as leaving at once, bonds return after its 7-day exit delay
-  const v1 = sdk.ContractAddress.create(BigInt(state.marketContractV1), 0n);
+if (previous) {
+  // leave the previous registry: listed as leaving at once, bonds return after its 7-day exit delay
+  const v1 = sdk.ContractAddress.create(BigInt(previous), 0n);
   for (const i of insurers) {
     const r = await submit(grpc, Transaction.updateContract({ amount: sdk.CcdAmount.zero(), address: v1, receiveName: sdk.ReceiveName.fromString('kuasa_market.leave'), message: sdk.Parameter.empty() }, sdk.Energy.create(30_000)) as Transaction.Builder, i.pool).catch((e) => ({ hash: `skipped: ${(e as Error).message.slice(0, 60)}`, summary: { summary: {} } }));
-    console.log(`${i.name} leaves the first registry`, r.hash);
+    console.log(`${i.name} leaves the previous registry <${previous},0>`, r.hash);
   }
 }
 for (const i of insurers) {

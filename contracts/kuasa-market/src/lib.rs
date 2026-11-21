@@ -93,6 +93,10 @@ pub struct State<S: HasStateApi = StateApi> {
     unpaid: StateMap<(AccountAddress, ContractAddress, u64), Timestamp, S>,
     /// claims already slashed for, per cover contract (each unpaid claim costs the bond once)
     slashed_for: StateSet<(AccountAddress, ContractAddress, u64), S>,
+    /// slashed amounts in escrow: (claimant, amount, release time). They leave the bond at once, reach the
+    /// claimant only after exit_delay_ms, and the arbiter can veto them meanwhile (an insurer approving
+    /// fake claims to its own accounts cannot get its bond back faster than by leaving)
+    escrow: StateMap<(AccountAddress, ContractAddress, u64), (AccountAddress, Amount, Timestamp), S>,
 }
 
 #[derive(Serialize, SchemaType)]
@@ -102,6 +106,8 @@ pub enum Event {
     Withdrawn { pool: AccountAddress, amount: Amount },
     Slashed { pool: AccountAddress, amount: Amount, to: AccountAddress, reason: HashSha2256 },
     FlaggedUnpaid { pool: AccountAddress, claim_id: u64, at: Timestamp },
+    SlashEscrowed { pool: AccountAddress, claim_id: u64, amount: Amount, to: AccountAddress, release_at: Timestamp },
+    SlashVetoed { pool: AccountAddress, claim_id: u64, amount: Amount },
 }
 
 #[derive(Serialize, SchemaType, Debug, PartialEq, Eq, Reject)]
@@ -139,7 +145,7 @@ fn sender_account(ctx: &ReceiveContext) -> CResult<AccountAddress> {
 fn init(ctx: &InitContext, state_builder: &mut StateBuilder) -> InitResult<State> {
     let p: InitParams = ctx.parameter_cursor().get()?;
     Ok(State { arbiter: p.arbiter, min_bond: p.min_bond, exit_delay_ms: p.exit_delay_ms, grace_ms: p.grace_ms, unpaid_penalty: p.unpaid_penalty, cover_module: p.cover_module,
-        insurers: state_builder.new_map(), unpaid: state_builder.new_map(), slashed_for: state_builder.new_set() })
+        insurers: state_builder.new_map(), unpaid: state_builder.new_map(), slashed_for: state_builder.new_set(), escrow: state_builder.new_map() })
 }
 
 /// The pool account registers (or updates) itself; the attached CCD adds to its bond.
@@ -264,8 +270,37 @@ fn slash_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     drop(i);
     let _ = host.state_mut().slashed_for.insert((r.pool, cover, r.claim_id));
     host.state_mut().unpaid.remove(&(r.pool, cover, r.claim_id));
-    host.invoke_transfer(&c.claimant, amount)?;
-    logger.log(&Event::Slashed { pool: r.pool, amount, to: c.claimant, reason: c.evidence })?;
+    let release_at = ctx.metadata().slot_time().checked_add(Duration::from_millis(host.state().exit_delay_ms)).ok_or(Error::InvalidParams)?;
+    let _ = host.state_mut().escrow.insert((r.pool, cover, r.claim_id), (c.claimant, amount, release_at));
+    logger.log(&Event::SlashEscrowed { pool: r.pool, claim_id: r.claim_id, amount, to: c.claimant, release_at })?;
+    Ok(())
+}
+
+/// Anyone, after the release time: the escrowed penalty goes to the claimant.
+#[receive(contract = "kuasa_market", name = "releaseSlash", parameter = "ClaimRef", error = "Error", mutable, enable_logger)]
+fn release_slash(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
+    let r: ClaimRef = ctx.parameter_cursor().get()?;
+    let cover = host.state().insurers.get(&r.pool).map(|i| i.cover).ok_or(Error::UnknownInsurer)?;
+    let (to, amount, release_at) = host.state().escrow.get(&(r.pool, cover, r.claim_id)).map(|e| *e).ok_or(Error::NotApprovedUnpaid)?;
+    ensure!(ctx.metadata().slot_time() >= release_at, Error::TooEarly);
+    host.state_mut().escrow.remove(&(r.pool, cover, r.claim_id));
+    host.invoke_transfer(&to, amount)?;
+    logger.log(&Event::Slashed { pool: r.pool, amount, to, reason: HashSha2256([0; 32]) })?;
+    Ok(())
+}
+
+/// The arbiter (the 2-of-3 juror account), before release: a self-dealt or mistaken slash goes back to the bond.
+#[receive(contract = "kuasa_market", name = "vetoSlash", parameter = "ClaimRef", error = "Error", mutable, enable_logger)]
+fn veto_slash(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
+    ensure!(sender_account(ctx)? == host.state().arbiter, Error::Unauthorized);
+    let r: ClaimRef = ctx.parameter_cursor().get()?;
+    let cover = host.state().insurers.get(&r.pool).map(|i| i.cover).ok_or(Error::UnknownInsurer)?;
+    let (_to, amount, _release) = host.state().escrow.get(&(r.pool, cover, r.claim_id)).map(|e| *e).ok_or(Error::NotApprovedUnpaid)?;
+    host.state_mut().escrow.remove(&(r.pool, cover, r.claim_id));
+    let mut i = host.state_mut().insurers.get_mut(&r.pool).ok_or(Error::UnknownInsurer)?;
+    i.bond += amount;
+    drop(i);
+    logger.log(&Event::SlashVetoed { pool: r.pool, claim_id: r.claim_id, amount })?;
     Ok(())
 }
 

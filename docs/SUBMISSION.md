@@ -48,7 +48,7 @@ https://github.com/PugarHuda/kuasa
 https://youtu.be/Tqe_CLniIl0
 
 ## Testnet link
-https://ccdexplorer.io/testnet/instance/13105/0 (kuasa-cover v3; v2: https://ccdexplorer.io/testnet/instance/13100/0, v1: https://ccdexplorer.io/testnet/instance/13066/0). Second insurer Kuasa Re: https://ccdexplorer.io/testnet/instance/13108/0. Open insurer registry kuasa-market: https://ccdexplorer.io/testnet/instance/13111/0.
+https://ccdexplorer.io/testnet/instance/13105/0 (kuasa-cover v3; v2: https://ccdexplorer.io/testnet/instance/13100/0, v1: https://ccdexplorer.io/testnet/instance/13066/0). Second insurer Kuasa Re: https://ccdexplorer.io/testnet/instance/13108/0. Open insurer registry kuasa-market: https://ccdexplorer.io/testnet/instance/13112/0.
 
 Every live step with its transactions, newest first: https://kuasa-explorer.vercel.app/evidence.html (source: https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md).
 

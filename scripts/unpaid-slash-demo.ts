@@ -50,5 +50,7 @@ console.log("   still on Kuasa Re's contract:", show((await re.claim(claimId))?.
 const before = await ccd(teenAgent.address);
 const slash = await callMarket('slashUnpaid', claimId);
 console.log('3. the investor slashes, no arbiter involved', slash.hash, (slash.summary.summary as any).transactionType);
-console.log(`   the teen agent received ${(Number((await ccd(teenAgent.address)) - before) / 1e6).toFixed(2)} CCD from Kuasa Re's bond`);
+const got = Number((await ccd(teenAgent.address)) - before) / 1e6;
+// v2 paid at once; from v3 the penalty sits in escrow for the exit delay (the panel can veto self-dealing), then releaseSlash pays it
+console.log(got > 0 ? `   the teen agent received ${got.toFixed(2)} CCD from Kuasa Re's bond` : "   the penalty left Kuasa Re's bond into escrow; anyone can releaseSlash it to the teen agent after the exit delay");
 process.exit(0);
