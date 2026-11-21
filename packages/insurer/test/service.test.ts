@@ -851,6 +851,12 @@ test('buyer-chosen terms: maxAutoPay only tightens the automatic limit (0 = ever
   const { t } = await run(0n);
   await filedClaim(t, true, 0n);
   assert.equal(t.svc.state().claims[0].autoPayAt, undefined, 'the buyer asked for a human on every claim');
+  const v2 = harness({ autoPayLimit: 10n * EUR }); // no setTerms on this contract
+  const q2 = await v2.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30, maxAutoPay: 0n });
+  assert.ok(!('refused' in q2));
+  await v2.svc.issue(q2.quoteId, h(9));
+  await filedClaim(v2, true, 0n);
+  assert.equal(v2.svc.state().claims[0].autoPayAt, undefined, 'honoured off-chain even where the contract has no terms');
 });
 
 test('escalation: an appeal of a panel decision goes to a human at the insurer, not to the panel again', async () => {

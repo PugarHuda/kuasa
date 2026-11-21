@@ -75,6 +75,7 @@ test('experience rating (Buhlmann credibility): 50*(1+claims)/(orders+50), x0.7.
   assert.equal(experienceBps(1, 1), 19_607n);
   assert.equal(experienceBps(9, 9), 20_000n, 'cap');
   assert.equal(experienceBps(500, 0), 7_000n, 'floor');
+  assert.equal(experienceBps(10_000, 1), 10_000n, 'receipts cannot dilute a paid claim into a discount');
   assert.equal(premium({ paidClaims: 9 }), 3_499_200n);
   const q = quote({ ...base, paidClaims: 1, receipts: 10 });
   assert.ok(!('refused' in q) && q.factors.some((f) => f.name === 'experience (credibility)' && f.multiplier === 1.6666));

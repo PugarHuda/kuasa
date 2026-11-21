@@ -169,6 +169,7 @@ export class InsurerService {
   /** Quotes whose premium settled: their reservation never lapses. */
   private settled = new Set<string>();
   private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string; /** SKUs of the AP2 intent it was bought under */ skus?: string[];
+    /** the buyer's automatic payout limit (claims above it go to a human), whatever the contract supports */ maxAutoPay?: bigint;
     /** v3 terms set on-chain for this policy, or why they could not be */ terms?: { autoPayLimit: bigint; objectionWindowMs: bigint; intent: string | null; tx?: string; error?: string };
     /** premium share returned at the end of a claim-free policy */ giveback?: { amount: bigint; tx?: string };
     /** merchant-paid cover: who paid the premium (refunds and givebacks go back there) */ sponsor?: string;
@@ -354,7 +355,7 @@ export class InsurerService {
       deductible: DEDUCTIBLE, premium: q.premium, premiumTx, validUntilMs: BigInt(this.deps.now() + days * DAY_MS),
     };
     const record = (id: bigint) => {
-      this.policies.push({ policyId: id, quoteId, premiumTx, premium: q.premium, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period', ...(q.request.sponsor ? { sponsor: q.request.sponsor } : {}), ...(q.ownerSignedIntent && q.request.ap2?.skus?.length ? { skus: q.request.ap2.skus } : {}) });
+      this.policies.push({ policyId: id, quoteId, premiumTx, premium: q.premium, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period', ...(q.request.sponsor ? { sponsor: q.request.sponsor } : {}), ...(q.ownerSignedIntent && q.request.ap2?.skus?.length ? { skus: q.request.ap2.skus } : {}), ...(q.request.maxAutoPay !== undefined ? { maxAutoPay: q.request.maxAutoPay } : {}) });
       this.premiumsIn += q.premium;
       this.consume(quoteId);
       this.save();
@@ -499,8 +500,9 @@ export class InsurerService {
     const limit = this.deps.autoPayLimit;
     // Automatic only where the chain proves the loss: not for appeals, not for wrong items, not for
     // outside-intent orders (the goods were delivered: a human checks they are returned).
-    const own = this.policies.find((x) => x.policyId === c.policyId)?.terms?.autoPayLimit;
-    if (a.ok && limit !== undefined && a.payout <= limit && (own === undefined || a.payout <= own) && !this.flagged(rec) && rec.appealOf === undefined && c.kind !== 'WrongItem' && ev?.reason !== 'AM20') rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
+    const pol = this.policies.find((x) => x.policyId === c.policyId);
+    const within = (v?: bigint) => v === undefined || a.payout <= v;
+    if (a.ok && limit !== undefined && a.payout <= limit && within(pol?.terms?.autoPayLimit) && within(pol?.maxAutoPay) && !this.flagged(rec) && rec.appealOf === undefined && c.kind !== 'WrongItem' && ev?.reason !== 'AM20') rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
     this.claims.set(claimId, rec);
     for (const d of this.detections) if (d.status === 'open' && d.orders.every((o) => c.orders.includes(o))) Object.assign(d, { status: 'filed', claimId });
     this.save();

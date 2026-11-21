@@ -632,8 +632,8 @@ app.post('/claims/:id/hold', consoleOnly, (req, res) => {
   try { svc.hold(big(req.params.id)); json(res, { held: true }); } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
 
-/** A claim's evidence document by its hash (public: sha256 of its canonical JSON is the claim's on-chain `evidence`). */
-app.get('/evidence/:hash', async (req, res) => {
+/** A claim's evidence document by its hash (sha256 of its canonical JSON is the claim's on-chain `evidence`). Console only: it carries the claimant's own note; publication is curated (scripts/publish-evidence.ts). */
+app.get('/evidence/:hash', consoleOnly, async (req, res) => {
   for (const c of svc.state().claims) {
     if (c.evidenceDoc && await evidenceHash(c.evidenceDoc) === req.params.hash) return res.type('json').send(canonicalJson(c.evidenceDoc));
   }

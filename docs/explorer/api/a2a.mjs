@@ -7703,7 +7703,8 @@ function experienceBps(orders, paidClaims) {
   const c = BigInt(Math.max(0, Math.floor(paidClaims)));
   const n = BigInt(Math.max(0, Math.floor(orders), Math.floor(paidClaims)));
   const bps = BPS * 50n * (1n + c) / (n + 50n);
-  return bps < 7000n ? 7000n : bps > 20000n ? 20000n : bps;
+  const floor = c > 0n ? BPS : 7000n;
+  return bps < floor ? floor : bps > 20000n ? 20000n : bps;
 }
 
 // ../cover/src/assess.ts

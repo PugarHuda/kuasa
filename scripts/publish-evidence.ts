@@ -2,8 +2,9 @@
  * Publishes claim evidence documents next to the explorer, content-addressed: docs/explorer/evidence/<hash>.json,
  * where <hash> = sha256 of the canonical JSON = the claim's on-chain `evidence`. A document is written only
  * when its hash matches the claim on the current cover contract, so anyone can re-hash it and compare.
- * Sources: documents the insurer verified at assessment, and the insurer-filed duplicates (rebuilt from its
- * detections exactly as it filed them). Usage: tsx publish-evidence.ts, then redeploy the explorer.
+ * Default: only the insurer-filed duplicates (rebuilt from its detections exactly as it filed them; they hold
+ * payment transactions and nothing a user wrote). --all also publishes documents claimants submitted (their
+ * free-text note and delivery notes): only with the claimants' consent. Then redeploy the explorer.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { canonicalJson, type ClaimEvidence, evidenceHash } from '@kuasa/core';
@@ -19,7 +20,7 @@ const ins = JSON.parse(readFileSync(new URL('insurer-state.json', root), 'utf8')
 const cover = new KuasaCover(connect(), BigInt(st.cover));
 
 const docs: { claimId: bigint; doc: ClaimEvidence }[] = [
-  ...(ins.claims ?? []).filter((c) => c.evidenceDoc).map((c) => ({ claimId: big(c.claimId), doc: c.evidenceDoc! })),
+  ...(process.argv.includes('--all') ? (ins.claims ?? []).filter((c) => c.evidenceDoc).map((c) => ({ claimId: big(c.claimId), doc: c.evidenceDoc! })) : []),
   ...(ins.detections ?? []).filter((d) => d.filedBy === 'insurer' && d.claimId !== undefined)
     .map((d) => ({ claimId: big(d.claimId), doc: { v: 2, reason: 'AM10', paymentTxs: [...d.paymentTxs], note: 'detected on-chain and filed by the insurer' } as ClaimEvidence })),
 ];

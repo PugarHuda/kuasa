@@ -48,7 +48,9 @@ export function experienceBps(orders: number, paidClaims: number): bigint {
   const c = BigInt(Math.max(0, Math.floor(paidClaims)));
   const n = BigInt(Math.max(0, Math.floor(orders), Math.floor(paidClaims))); // a paid claim implies an order
   const bps = (BPS * 50n * (1n + c)) / (n + 50n);
-  return bps < 7_000n ? 7_000n : bps > 20_000n ? 20_000n : bps;
+  // a paid claim never earns a discount: many small receipts must not dilute a claim below the prior
+  const floor = c > 0n ? BPS : 7_000n;
+  return bps < floor ? floor : bps > 20_000n ? 20_000n : bps;
 }
 
 export function quote(input: RiskInput): Quote | { refused: string } {
