@@ -80,6 +80,7 @@ All identities come from the testnet identity provider with invented attributes.
 | **AM20 paid** (prompt-injection cover) | v2 claim #8, outside the owner-signed AP2 intent, approved by a human: 23 EUDemo paid; the insurer published `by=human;verdict=approved;reason=AM20` | payout [tx](https://ccdexplorer.io/testnet/transaction/c576a5e4a2779dbad5069775157fd5cef875aecce8dbc6938a67d4c43864edad) |
 | WI10 paid | v2 claim #4 (wrong item, merchant-signed delivery note) approved by a human; 2 EUDemo paid | payout [tx](https://ccdexplorer.io/testnet/transaction/2a0f1aab3ee599e47cc3f830e987198a9ea3f0677e0c969a11537d27bd5a72e0) |
 | Capital ledger true-up | Running totals left the capital ledger 8.67 EUDemo above the pool after demo resets. Events are now booked by transaction hash; the drift was charged once to the insurer's own capital (outside providers untouched), and the ledger equals the pool again | – (off-chain ledger, audited) |
+| **Appeals panel** (Kleros-style) | Alice's agent appealed rejected claim #1 by re-filing its orders (claim #2, recognised as an appeal). Two independent jurors, accounts that are no party to the claim, voted with signed requests; the majority rejected it, as the shop's objection still held. The insurer published `by=panel;verdict=rejected` | appeal [tx](https://ccdexplorer.io/testnet/transaction/3641cecbd94e9fb41a2ac16c0df3739d060213fec70be5a340dad943acf0ede6) |
 
 ## The mandate layer, transaction by transaction (first run)
 

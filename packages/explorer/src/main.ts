@@ -28,7 +28,8 @@ const day = (ms: bigint) => new Date(Number(ms)).toISOString().slice(0, 10);
 function decidedBy(d: Awaited<ReturnType<typeof decisionOf>> | undefined) {
   if (!d?.by) return '<span class="muted">–</span>';
   const code = d.reason ? ` <span class="mono" title="reason code">${esc(d.reason)}</span>` : '';
-  return (d.by === 'auto' ? '<span class="pill warn">automatic</span>' : '<span class="pill ok">human</span>') + code;
+  const who = d.by === 'auto' ? '<span class="pill warn">automatic</span>' : d.by === 'panel' ? '<span class="pill ok">appeals panel</span>' : '<span class="pill ok">human</span>';
+  return who + code;
 }
 
 function attested(a: string | null | undefined) {

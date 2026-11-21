@@ -7781,6 +7781,8 @@ var SCORE = {
   WrongItem: () => null,
   MerchantLoss: (c) => c.status.tag === "Paid" ? 30 : null
 };
+var MIN_LIMIT = 10000000n;
+var MIN_DAYS_MS = 7n * 86400000n;
 function feedbackFor(payer, books, now = Date.now()) {
   const out = [];
   for (const b of books) {
@@ -7793,7 +7795,8 @@ function feedbackFor(payer, books, now = Date.now()) {
         if (score === null || score === void 0) continue;
         out.push({ score, tag1: "kuasa-cover", tag2: c.status.tag === "Fraud" ? "fraud" : c.kind, createdAt: new Date(Number(p.validFromMs)).toISOString(), evidence: { network: "ccd:testnet", contract, claimId: String(id), policyId: String(policyId), status: c.status.tag } });
       }
-      if (claims.length === 0 && Number(p.validUntilMs) < now && p.status === "Active") {
+      const real = p.limit >= MIN_LIMIT && p.validUntilMs - p.validFromMs >= MIN_DAYS_MS;
+      if (claims.length === 0 && real && Number(p.validUntilMs) < now && p.status === "Active") {
         out.push({ score: 100, tag1: "kuasa-cover", tag2: "claim-free", createdAt: new Date(Number(p.validUntilMs)).toISOString(), evidence: { network: "ccd:testnet", contract, policyId: String(policyId), status: "Expired" } });
       }
     });
