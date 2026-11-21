@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export NODE_OPTIONS="--max-old-space-size=384"
-JURORS=4j733XjURhA9UFkxfNbZHsKpRSMvnbQjJyjbbMHUKuzMu8huDH,4Gw69UEYtxxE1EroXsp3AwAZWa38cKCuQZCgs9HYLc1Xys4oqg
+JURORS=4j733XjURhA9UFkxfNbZHsKpRSMvnbQjJyjbbMHUKuzMu8huDH,4Gw69UEYtxxE1EroXsp3AwAZWa38cKCuQZCgs9HYLc1Xys4oqg,3rZHyHaQNaPrpfXzoiFL2Df6NgxFYDzuJCmqPyzGtPdh5CYUQA
 pids=()
 trap 'kill "${pids[@]}" 2>/dev/null' EXIT
 (cd packages/shop && KUASA_SHOP_PUBLIC_URL="${SHOP_PUBLIC:-}" node --import tsx src/server.ts) & pids+=($!)
