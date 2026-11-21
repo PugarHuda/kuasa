@@ -1,6 +1,6 @@
 import { AccountAddress } from '@concordium/web-sdk';
 import type { Wallet } from '@kuasa/chain';
-import { canonicalJson, type Claim, type ClaimEvidence, evidenceHash, type SignedDeliveryNote, type IssuePolicyParams, type Mandate, type MandateEntry, type Policy, type RegistryEvent, sha256Hex } from '@kuasa/core';
+import { canonicalJson, type Claim, type ClaimEvidence, evidenceHash, REASON_CODES, type SignedDeliveryNote, type IssuePolicyParams, type Mandate, type MandateEntry, type Policy, type RegistryEvent, sha256Hex } from '@kuasa/core';
 import { assess, type Assessment, DUPLICATE_WINDOW_MS, findDuplicates, type SeenReceipt, quote, type Quote, type RiskInput, scopeFromAp2Intent, type Ap2IntentMandate } from '@kuasa/cover';
 import type { IdentitySource } from '@kuasa/merchant';
 
@@ -24,6 +24,8 @@ export type InsurerDeps = {
   identity: IdentitySource;
   /** Checks the requester controls the agent payer (signed payer proof); quotes count toward that payer's quota. */
   verifyPayer(payer: string, proof: unknown): Promise<boolean>;
+  /** True iff the mandate's principal signed this AP2 intent (its `user_authorization`). Only then do its SKUs back AM20 claims. */
+  verifyAp2Owner?(intent: Ap2IntentMandate, owner: string): Promise<boolean>;
   /** Concordium account of a merchant named in an AP2 intent (AP2 names merchants; Kuasa needs accounts). */
   ap2Merchant?(name: string): string | undefined;
   cover: {
@@ -81,6 +83,8 @@ export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; or
   /** The user's AP2 Intent Mandate, when the agent works under one: the Kuasa mandate must sit inside it. */
   ap2?: Ap2IntentMandate };
 export type StoredQuote = Quote & {
+  /** The AP2 intent carried the principal's signature (checked at quote time). */
+  ownerSignedIntent?: boolean;
   quoteId: string; request: QuoteRequest; mandateId: string; owner: string; payer: string; token: string; expires: number;
 };
 type ClaimRecord = {
@@ -106,7 +110,8 @@ type ClaimRecord = {
 export type Detection = {
   payer: string; policyId: bigint; owner: string; mandateId: string; amount: bigint; at: number;
   orders: [string, string]; paymentTxs: [string, string]; receiptTxs: [string, string];
-  status: 'open' | 'filed'; claimId?: bigint;
+  /** dismissed: the owner resumed the agent, confirming these purchases were intended */
+  status: 'open' | 'filed' | 'dismissed'; claimId?: bigint;
 };
 type Disclosure = { claimId: string; account: string; doc: object };
 
@@ -145,6 +150,8 @@ export class InsurerService {
   private detections: Detection[] = [];
   /** Agents whose purchases are paused by the circuit breaker (payer -> reason, since). */
   private holds = new Map<string, { reason: string; at: number; published?: boolean }>();
+  /** Receipts at or before this time (per mandate) were confirmed by the owner when resuming the agent. */
+  private confirmedBefore = new Map<string, number>();
 
   constructor(private deps: InsurerDeps, snapshot?: string) {
     if (snapshot) {
@@ -167,6 +174,7 @@ export class InsurerService {
       this.objectionsBy = new Map(Object.entries(s.objectionsBy ?? {}));
       this.detections = s.detections ?? [];
       this.holds = new Map(Object.entries(s.holds ?? {}));
+      this.confirmedBefore = new Map(Object.entries(s.confirmedBefore ?? {}));
     }
   }
 
@@ -176,7 +184,7 @@ export class InsurerService {
       policies: this.policies, unissued: this.unissued, needsRefund: this.needsRefund, claims: [...this.claims.values()].map(({ busy, busyApprove, ...r }) => r),
       fraud: Object.fromEntries(this.fraud), pendingDisclosures: this.pendingDisclosures, disclosures: this.disclosures,
       payouts: this.payouts, premiumsIn: this.premiumsIn, refunds: this.refunds, objectionsBy: Object.fromEntries(this.objectionsBy),
-      detections: this.detections, holds: Object.fromEntries(this.holds),
+      detections: this.detections, holds: Object.fromEntries(this.holds), confirmedBefore: Object.fromEntries(this.confirmedBefore),
     }));
   }
 
@@ -236,8 +244,9 @@ export class InsurerService {
     };
     const q = quote(input);
     if ('refused' in q) return q;
-    if (req.ap2) q.factors.push({ name: 'AP2 intent', multiplier: 1, reason: 'Kuasa mandate sits inside the user’s AP2 Intent Mandate (merchants and expiry)' });
-    return { ...q, mandateId: id, owner: m.principal.account, payer: m.agent.payer, token: m.agent.registry.tokenId };
+    const ownerSigned = !!req.ap2 && !!this.deps.verifyAp2Owner && await this.deps.verifyAp2Owner(req.ap2, m.principal.account).catch(() => false);
+    if (req.ap2) q.factors.push({ name: 'AP2 intent', multiplier: 1, reason: `Kuasa mandate sits inside the user’s AP2 Intent Mandate (merchants and expiry)${ownerSigned ? '; signed by the owner, so its SKUs define outside-intent (AM20) cover' : '; not signed by the owner, so no outside-intent (AM20) cover'}` });
+    return { ...q, mandateId: id, owner: m.principal.account, payer: m.agent.payer, token: m.agent.registry.tokenId, ownerSignedIntent: ownerSigned };
   }
 
   /** x402 before-verify check for a premium payment: returns a refusal reason or null. */
@@ -285,7 +294,7 @@ export class InsurerService {
       deductible: DEDUCTIBLE, premium: q.premium, premiumTx, validUntilMs: BigInt(this.deps.now() + days * DAY_MS),
     };
     const record = (id: bigint) => {
-      this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period', ...(q.request.ap2?.skus?.length ? { skus: q.request.ap2.skus } : {}) });
+      this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period', ...(q.ownerSignedIntent && q.request.ap2?.skus?.length ? { skus: q.request.ap2.skus } : {}) });
       this.premiumsIn += q.premium;
       this.consume(quoteId);
       this.save();
@@ -405,7 +414,8 @@ export class InsurerService {
     // No double cover: orders paid, approved or still open under ANY policy of the same mandate.
     const paidOrders = [...this.claims.values()].filter((x) => x.mandateId === p.mandate.id && x.verdict !== 'rejected' && (x.paid || x.verdict === 'approved' || x.assessment.ok)).flatMap((x) => x.orders);
     // The off-chain evidence counts only if it is exactly what the claimant committed to on-chain.
-    const ev = evidence && (await evidenceHash(evidence).catch(() => '')) === c.evidence ? evidence : undefined;
+    const knownCode = !!evidence && Object.hasOwn(REASON_CODES, evidence.reason);
+    const ev = evidence && knownCode && (await evidenceHash(evidence).catch(() => '')) === c.evidence ? evidence : undefined;
     const delivery = [];
     for (const d of ev?.delivery?.slice(0, 2) ?? []) {
       const signer = recorderOf.get(d.note.order + d.note.paymentTx);
@@ -463,7 +473,8 @@ export class InsurerService {
   async onReceipts(seen: SeenReceipt[]): Promise<Detection[]> {
     const now = Math.max(this.deps.now(), ...seen.map((r) => r.at));
     const known = new Set(this.recent.map((r) => r.receiptTx + r.order));
-    this.recent = [...this.recent, ...seen.filter((r) => !known.has(r.receiptTx + r.order))].filter((r) => now - r.at <= 2 * DUPLICATE_WINDOW_MS);
+    this.recent = [...this.recent, ...seen.filter((r) => !known.has(r.receiptTx + r.order))]
+      .filter((r) => now - r.at <= 2 * DUPLICATE_WINDOW_MS && r.at > (this.confirmedBefore.get(r.mandateId) ?? 0));
     const used = new Set([...this.detections.flatMap((d) => d.orders), ...[...this.claims.values()].flatMap((c) => c.orders)]);
     const found: Detection[] = [];
     for (const d of findDuplicates(this.recent, used)) {
@@ -495,6 +506,13 @@ export class InsurerService {
     if (!this.holds.has(payer)) return false;
     await this.deps.unhold?.(payer);
     this.holds.delete(payer);
+    // Resuming confirms what the agent bought so far: those receipts never trip the breaker again.
+    const now = this.deps.now();
+    for (const d of this.detections.filter((x) => x.payer === payer)) {
+      this.confirmedBefore.set(d.mandateId, now);
+      if (d.status === 'open') d.status = 'dismissed';
+    }
+    this.recent = this.recent.filter((r) => r.at > (this.confirmedBefore.get(r.mandateId) ?? 0));
     this.save();
     return true;
   }

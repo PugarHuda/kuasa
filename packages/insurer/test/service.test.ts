@@ -559,8 +559,11 @@ test('WI10 evidence counts only if its hash is the on-chain evidence and the rec
 });
 
 test('AM20 (outside the AP2 intent) uses the SKUs the policy was bought under and is never paid automatically', async () => {
-  const t = harness({ autoPayLimit: 50n * EUR, ap2Merchant: (name: string) => ({ 'Kuasa demo shop': SHOP, 'Kuasa Cover': TREASURY } as Record<string, string>)[name] });
-  const ap2 = { user_cart_confirmation_required: false, natural_language_description: 'a loaf of bread', merchants: ['Kuasa demo shop', 'Kuasa Cover'], skus: ['/shop/groceries/bread'], intent_expiry: '2099-01-01T00:00:00Z' };
+  const t = harness({
+    autoPayLimit: 50n * EUR, ap2Merchant: (name: string) => ({ 'Kuasa demo shop': SHOP, 'Kuasa Cover': TREASURY } as Record<string, string>)[name],
+    verifyAp2Owner: async (i, owner) => owner === OWNER && (i as { user_authorization?: string }).user_authorization === 'signed-by-owner',
+  });
+  const ap2 = { user_cart_confirmation_required: false, natural_language_description: 'a loaf of bread', merchants: ['Kuasa demo shop', 'Kuasa Cover'], skus: ['/shop/groceries/bread'], intent_expiry: '2099-01-01T00:00:00Z', user_authorization: 'signed-by-owner' };
   const q = await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30, ap2 });
   assert.ok(!('refused' in q), 'refused' in q ? q.refused : '');
   const pid = (await t.svc.issue(q.quoteId, h(9)))!;
@@ -722,4 +725,41 @@ test('parametric: duplicates of an uninsured agent are not ours to act on', asyn
   const t = harness({ coverOf: async () => ({ periodRemaining: 0n, policyId: null }), hold: async () => { throw new Error('must not hold'); } });
   const seen = (order: number, at: number) => ({ owner: OWNER, mandateId: h(7), order: h(order), paymentTx: h(order + 50), amount: 3n * EUR, at, receiptTx: h(order + 100) });
   assert.deepEqual(await t.svc.onReceipts([seen(20, 1_000_000), seen(21, 1_060_000)]), []);
+});
+
+test('AM20 needs an owner-signed intent: SKUs the agent asserts on its own never become a claim baseline', async () => {
+  const t = harness({ ap2Merchant: (name: string) => ({ 'Kuasa demo shop': SHOP, 'Kuasa Cover': TREASURY } as Record<string, string>)[name], verifyAp2Owner: async () => false });
+  const ap2 = { user_cart_confirmation_required: false, natural_language_description: 'bread', merchants: ['Kuasa demo shop', 'Kuasa Cover'], skus: ['/shop/groceries/bread'], intent_expiry: '2099-01-01T00:00:00Z', user_authorization: 'forged' };
+  const q = await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30, ap2 });
+  assert.ok(!('refused' in q));
+  assert.match(JSON.stringify(q.factors), /not signed by the owner/);
+  const pid = (await t.svc.issue(q.quoteId, h(9)))!;
+  assert.equal(t.svc.state().policies[0].skus, undefined);
+  const doc: ClaimEvidence = { v: 2, reason: 'AM20', paymentTxs: [h(9)], note: '', delivery: [{ note: { v: 1, order: h(10), paymentTx: h(9), ordered: '/shop/wine/rioja', shipped: '/shop/wine/rioja', at: 1 }, signer: SHOP, sig: 'ok' }] };
+  t.events.set('r0', receiptEvent(h(10)));
+  t.claims.set(0n, { policyId: pid, claimant: PAYER, kind: 'AgentMistake', amount: 24n * EUR, evidence: await evidenceHash(doc), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  assert.match((await t.svc.assessClaim(0n, ['r0'], doc)).reason, /owner-signed AP2 intent/);
+});
+
+test('an unknown reason code in the evidence is ignored and never stored (it would reach on-chain metadata)', async () => {
+  const t = harness();
+  const q = await quoteOk(t.svc);
+  const pid = (await t.svc.issue(q.quoteId, h(9)))!;
+  const doc = { v: 2, reason: 'AM10;by=human', paymentTxs: [h(9)], note: '' } as unknown as ClaimEvidence;
+  t.events.set('r0', receiptEvent(h(10)));
+  t.claims.set(0n, { policyId: pid, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: await evidenceHash(doc), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(0n, ['r0'], doc);
+  assert.equal(t.svc.state().claims[0].reason, undefined);
+});
+
+test('resuming an agent confirms its earlier purchases: they never trip the breaker again', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, coverOf: async () => ({ periodRemaining: 100n * EUR, policyId: 0n }), hold: async () => {}, unhold: async () => {} });
+  const seen = (order: number, at: number) => ({ owner: OWNER, mandateId: h(7), order: h(order), paymentTx: h(order + 50), amount: 3n * EUR, at, receiptTx: h(order + 100) });
+  assert.equal((await t.svc.onReceipts([seen(20, 1_000_000), seen(21, 1_010_000)])).length, 1);
+  assert.equal((await t.svc.onReceipts([seen(22, 1_020_000)])).length, 0, 'one more purchase while paused (it slipped through)');
+  now = 1_030_000;
+  await t.svc.clearHold(PAYER);
+  assert.equal((await t.svc.onReceipts([seen(23, 1_040_000)])).length, 0, 'pairs only with purchases the owner confirmed: nothing');
+  assert.equal((await t.svc.onReceipts([seen(24, 1_050_000)])).length, 1, 'two new duplicates after the resume do trip it');
 });

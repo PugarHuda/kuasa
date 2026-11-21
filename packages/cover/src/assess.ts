@@ -59,13 +59,13 @@ export function assess(i: AssessInput): Assessment {
   }
 
   const reason = i.reason ?? defaultReason(claim.kind);
-  if (!REASON_CODES[reason] || REASON_CODES[reason].kind !== claim.kind) return no(`reason code ${reason} does not fit a ${claim.kind} claim`);
+  if (!Object.hasOwn(REASON_CODES, reason) || REASON_CODES[reason].kind !== claim.kind) return no(`reason code ${reason} does not fit a ${claim.kind} claim`);
   const noteFor = (r: (typeof matched)[number]) => i.delivery?.find((d) => d.order === r.order && (r.paymentTx === undefined || d.paymentTx === r.paymentTx));
 
   switch (reason) {
     case 'AM20': {
       if (matched.length !== 1) return no('an outside-intent claim covers exactly one receipt');
-      if (!i.intentSkus?.length) return no('this policy was not bought under an AP2 intent that names SKUs');
+      if (!i.intentSkus?.length) return no('this policy was not bought under an owner-signed AP2 intent that names SKUs');
       const d = noteFor(matched[0]);
       if (!d) return no('an outside-intent claim needs the merchant-signed delivery note for the order');
       if (i.intentSkus.includes(d.ordered)) return no(`${d.ordered} is inside the user’s AP2 intent`);

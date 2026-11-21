@@ -21,9 +21,9 @@ import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/se
 import { solvency } from '@kuasa/cover';
 import { handleA2a } from './a2a.js';
 import { CapitalLedger, isCapitalMemo } from './capital.js';
-import { AuditLog, bigintJson, cis8004SetMetadata, claimKey, COVER_V1, connect, finalizedHeight, registryReceiptsAt, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
+import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, claimKey, COVER_V1, connect, finalizedHeight, registryReceiptsAt, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, type ClaimEvidence, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
-import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyDeliveryNote, verifyPayerProof } from '@kuasa/merchant';
+import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyAp2Intent, verifyDeliveryNote, verifyPayerProof } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
 import { checkSponsorable, jsonSafe, SponsorBudget } from './sponsor.js';
 import { Transaction } from '@concordium/web-sdk/transactions';
@@ -72,8 +72,13 @@ const ap2Of = (v: unknown) => { try { return v ? JSON.parse(Buffer.from(String(v
 function publishDecision(claimId: bigint | string, by: 'auto' | 'human', verdict: 'approved' | 'rejected', paid?: string) {
   if (!state.insurerAgent) return;
   const reason = svc.state().claims.find((c) => String(c.claimId) === String(claimId))?.reason;
-  const value = `by=${by};verdict=${verdict};paid=${paid ?? '-'};${reason ? `reason=${reason};` : ''}at=${Math.floor(Date.now() / 1000)}`;
-  void cis8004SetMetadata(grpc, state.insurerAgent, claimKey('decision', state.cover, claimId), value, treasury)
+  // metadata is ;/= delimited: only a known reason-code shape goes in, never claimant text
+  const code = reason && /^[A-Z]{2}\d{2}$/.test(reason) ? `reason=${reason};` : '';
+  const value = `by=${by};verdict=${verdict};paid=${paid ?? '-'};${code}at=${Math.floor(Date.now() / 1000)}`;
+  const key = claimKey('decision', state.cover, claimId);
+  // a decision is final: if it is already on-chain (e.g. republished after a restart), pay no fee again
+  void cis8004GetMetadata(grpc, state.insurerAgent, key)
+    .then((existing) => (existing?.includes(`verdict=${verdict};`) ? undefined : cis8004SetMetadata(grpc, state.insurerAgent!, key, value, treasury)))
     .catch((e) => console.error('[insurer] publishing decision failed', String(claimId), (e as Error).message));
 }
 
@@ -138,6 +143,7 @@ const svc = new InsurerService({
   // Circuit breaker: holds live on the insurer's own CIS-8004 entry, where any merchant guard can read them.
   hold: async (payer, reason) => { if (state.insurerAgent) await cis8004SetMetadata(grpc, state.insurerAgent, holdKey(payer), `hold;reason=${reason};at=${Math.floor(Date.now() / 1000)}`, treasury); },
   unhold: async (payer) => { if (state.insurerAgent) await cis8004SetMetadata(grpc, state.insurerAgent, holdKey(payer), `clear;by=owner;at=${Math.floor(Date.now() / 1000)}`, treasury); },
+  verifyAp2Owner: (intent, owner) => verifyAp2Intent(intent, owner, (a) => grpc.getAccountInfo(a)),
   verifyDelivery: (d, signer) => verifyDeliveryNote(d, signer, (a) => grpc.getAccountInfo(a)),
   treasuryBalance: () => eudemoBalance(treasury.address.address),
   paidClaims: async (payer) => {

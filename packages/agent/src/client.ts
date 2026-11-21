@@ -237,8 +237,8 @@ export class KuasaAgent {
   }
 
   /** Period cover (option A): insure this agent for `days` up to `limit`. */
-  async coverBuy(limit: bigint, days = 30) {
-    return this.buyQuote(await this.coverQuote(limit, days));
+  async coverBuy(limit: bigint, days = 30, ap2?: object) {
+    return this.buyQuote(await this.coverQuote(limit, days, undefined, ap2));
   }
 
   /** Per-order cover (option B): quote the order at the shop, insure exactly it, then buy with the order reference. */
