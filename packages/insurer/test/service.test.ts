@@ -92,6 +92,14 @@ test('no second period policy while one is live (re-checked at purchase); order 
   assert.ok('refused' in await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30 }));
   const o = await t.svc.quote({ mandateUrl: 'x', limit: 20n * EUR, days: 1, order: { ref: h(3), amount: 20n * EUR } });
   assert.ok(!('refused' in o), 'refused' in o ? o.refused : '');
+  // two open period quotes paid concurrently: only the first reservation goes through
+  live = null;
+  const [a, b] = [await quoteOk(t.svc), await quoteOk(t.svc)];
+  const [ra, rb] = await Promise.all([t.svc.checkPurchase(a.quoteId, PAYER, a.premium), t.svc.checkPurchase(b.quoteId, PAYER, b.premium)]);
+  assert.equal(ra, null);
+  assert.match(rb!, /already being bought/);
+  t.svc.releaseQuote(a.quoteId); // a's payment failed: b may go ahead
+  assert.equal(await t.svc.checkPurchase(b.quoteId, PAYER, b.premium), null);
   const down = harness({ coverOf: async () => { throw new Error('502'); } });
   assert.match((await down.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30 }) as { refused: string }).refused, /unavailable/);
 });

@@ -192,7 +192,7 @@ export class InsurerService {
     if (Number(e.validUntilMs) < this.deps.now()) return { refused: 'mandate expired' };
     if (req.limit > e.maxTotal) return { refused: 'cover limit exceeds the mandate budget' };
     if (!req.order && this.deps.coverOf) {
-      // Re-checked at purchase (checkPurchase re-prices), so two open quotes cannot both become policies.
+      // Issued policies only; checkPurchase also blocks a second period purchase in flight for the same payer.
       const v = await this.deps.coverOf(m.agent.payer).catch(() => null);
       if (!v) return { refused: 'cover status unavailable; try again' };
       if (v.policyId !== null && v.periodRemaining > 0n) return { refused: `this agent already has period cover (policy #${v.policyId}); cancel it or wait for it to end` };
@@ -226,7 +226,12 @@ export class InsurerService {
     if (payer !== q.payer) return 'payer is not the agent this quote is for';
     this.dropStaleReservations();
     if (this.paying.has(quoteId)) return 'this quote is already being paid';
-    this.paying.set(quoteId, this.deps.now()); // reserve before any await: one quote, one payment
+    // coverOf only sees issued policies: a period premium in flight or paid-but-unissued for this payer blocks another one.
+    const isPeriod = (o?: StoredQuote) => !!o && o.payer === q.payer && !o.request.order;
+    if (isPeriod(q) && ([...this.paying.keys()].some((id) => isPeriod(this.quotes.get(id))) || this.unissued.some((u) => isPeriod(u.quote)))) {
+      return 'a period policy for this agent is already being bought';
+    }
+    this.paying.set(quoteId, this.deps.now()); // reserve before any await: one quote, one payment (and one period purchase per payer)
     const fresh = await this.price(q.request);
     const reason = 'refused' in fresh ? fresh.refused : fresh.premium !== q.premium || amount !== q.premium ? 'premium changed; request a new quote' : null;
     if (reason) this.paying.delete(quoteId);
