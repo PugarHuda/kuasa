@@ -22,7 +22,8 @@ export async function makePayerProof(payer: string, signer: AccountSigner, audie
 export async function verifyPayerProof(args: {
   header: (name: string) => string | undefined;
   payer: string;
-  audience: string;
+  /** This service's origin(s): e.g. its localhost address and its public URL. */
+  audience: string | string[];
   now?: number;
   accountInfo: (address: AccountAddress.Type) => Promise<AccountInfo>;
 }): Promise<boolean> {
@@ -34,7 +35,10 @@ export async function verifyPayerProof(args: {
   try {
     const sig = JSON.parse(Buffer.from(header(PAYER_PROOF_HEADERS.sig) ?? '', 'base64url').toString());
     const info = await args.accountInfo(AccountAddress.fromBase58(payer));
-    return await verifyMessageSignature(payerProofMessage(payer, ts, audience), sig, info);
+    for (const a of Array.isArray(audience) ? audience : [audience]) {
+      if (await verifyMessageSignature(payerProofMessage(payer, ts, a), sig, info)) return true;
+    }
+    return false;
   } catch {
     return false;
   }

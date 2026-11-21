@@ -47,6 +47,8 @@ const mispick = new Map<string, string>();
 const recorderWallet = wallet(sponsor.address, sponsor.key);
 
 const grpc = connect();
+/** Signed requests may be addressed to the shop locally or at its public URL (e.g. a tunnel). */
+const AUDIENCES = [`http://localhost:${PORT}`, ...(process.env.KUASA_PUBLIC_URL ? [process.env.KUASA_PUBLIC_URL.replace(/\/$/, '')] : [])];
 const registry = new KuasaRegistry(grpc, BigInt(state.registry));
 /**
  * Cover from every insurer on the market counts: period cover adds up (co-insurance: each insurer pays
@@ -142,7 +144,7 @@ app.get('/quote', async (req, res) => {
   let orderRef: string | undefined;
   let orderRefNote: string | undefined;
   if (d.ok || d.reasons.every((r) => r.startsWith('cover required'))) {
-    const proven = await verifyPayerProof({ header: (n) => req.header(n), payer, audience: `http://localhost:${PORT}`, accountInfo: (a) => grpc.getAccountInfo(a) });
+    const proven = await verifyPayerProof({ header: (n) => req.header(n), payer, audience: AUDIENCES, accountInfo: (a) => grpc.getAccountInfo(a) });
     if (!proven) orderRefNote = 'payer proof required for an order reference';
     else orderRef = await guard.issueOrderRef({ payer, payTo, route: path, amount: p.price }).catch((e) => { orderRefNote = (e as Error).message; return undefined; });
   }
@@ -159,7 +161,7 @@ app.get('/receipt/:paymentTx', (req, res) => {
 /** The agent's own purchase history (needs its payer proof: what was bought is not on-chain). */
 app.get('/payments/:payer', async (req, res) => {
   const payer = req.params.payer;
-  const ok = await verifyPayerProof({ header: (n) => req.header(n), payer, audience: `http://localhost:${PORT}`, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false);
+  const ok = await verifyPayerProof({ header: (n) => req.header(n), payer, audience: AUDIENCES, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false);
   if (!ok) return json(res, { error: 'payer proof required' }, 401);
   json(res, guard.receipts.filter((r) => r.payer === payer).slice(-20).map(({ route, amount, paymentTx, at }) => ({ item: route, amount, paymentTx, at: at && new Date(at).toISOString() })));
 });
@@ -171,7 +173,7 @@ app.get('/payments/:payer', async (req, res) => {
 app.get('/delivery/:paymentTx', async (req, res) => {
   const r = guard.receipts.find((x) => x.paymentTx === req.params.paymentTx);
   if (!r?.payer || !r.route) return json(res, { error: 'unknown order' }, 404);
-  const ok = await verifyPayerProof({ header: (n) => req.header(n), payer: r.payer, audience: `http://localhost:${PORT}`, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false);
+  const ok = await verifyPayerProof({ header: (n) => req.header(n), payer: r.payer, audience: AUDIENCES, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false);
   if (!ok) return json(res, { error: 'payer proof required' }, 401);
   const note = { v: 1 as const, order: r.order, paymentTx: r.paymentTx, ordered: r.route, shipped: r.shipped ?? r.route, at: r.at ?? 0 };
   json(res, await signDeliveryNote(note, sponsor.address, recorderWallet.signer));

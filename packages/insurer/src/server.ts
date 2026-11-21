@@ -32,6 +32,8 @@ const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4023);
 const PUBLIC_URL = process.env.KUASA_INSURER_URL ?? `http://localhost:${PORT}`;
 const SHOP_ORIGIN = process.env.KUASA_SHOP_URL ?? 'http://localhost:4021';
+/** Signed requests may be addressed to this service locally or at its public URL (e.g. a tunnel). */
+const AUDIENCES = [PUBLIC_URL, ...(process.env.KUASA_PUBLIC_URL ? [process.env.KUASA_PUBLIC_URL.replace(/\/$/, '')] : [])];
 const ASSET = process.env.KUASA_ASSET ?? 'EUDemo';
 const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover: string; coverV1?: string; coverV2?: string; insurerAgent?: string };
 // Serve an older book (e.g. to decide a claim left on v2 after the switch to v3): KUASA_COVER_INDEX + KUASA_STATE_FILE.
@@ -135,7 +137,7 @@ const svc = new InsurerService({
   // the requester must sign with the agent payer key (audience: this service's public origin)
   // AP2 names merchants; their Concordium accounts (demo: the shop's payTo and the insurer's pool)
   ap2Merchant: (name) => AP2_MERCHANTS[name],
-  verifyPayer: (payer, proof) => verifyPayerProof({ header: proof as (n: string) => string | undefined, payer, audience: PUBLIC_URL, accountInfo: (a) => grpc.getAccountInfo(a) }),
+  verifyPayer: (payer, proof) => verifyPayerProof({ header: proof as (n: string) => string | undefined, payer, audience: AUDIENCES, accountInfo: (a) => grpc.getAccountInfo(a) }),
   cover: {
     issuePolicy: async (p) => { const r = await cover.issuePolicy(p, operator); return { hash: r.hash, id: KuasaCover.idFromEvents(r.summary, coverIndex) }; },
     policy: (id) => cover.policy(id),
@@ -609,7 +611,7 @@ app.post('/capital/deposit', async (req, res) => {
 app.post('/capital/withdraw', async (req, res) => {
   const provider = String(req.header('x-kuasa-payer') ?? '');
   try {
-    if (!(await verifyPayerProof({ header: (n) => req.header(n), payer: provider, audience: PUBLIC_URL, accountInfo: (a) => grpc.getAccountInfo(a) }))) return json(res, { error: 'provider proof required' }, 401);
+    if (!(await verifyPayerProof({ header: (n) => req.header(n), payer: provider, audience: AUDIENCES, accountInfo: (a) => grpc.getAccountInfo(a) }))) return json(res, { error: 'provider proof required' }, 401);
     const amount = big(req.body?.amount);
     if (svc.jurorBusy(provider)) return json(res, { error: 'this juror has a vote on an undecided appeal: its stake stays until the appeal is decided' }, 400);
     const paid = await serialCapital(async () => {
@@ -676,7 +678,7 @@ app.get('/appeals', (_req, res) => json(res, svc.openAppeals()));
 app.post('/appeals/:id/vote', async (req, res) => {
   const juror = String(req.header('x-kuasa-payer') ?? '');
   // the juror signs with its own account key (same signed-request format as an agent payer proof)
-  const ok = await verifyPayerProof({ header: (n) => req.header(n), payer: juror, audience: PUBLIC_URL, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false);
+  const ok = await verifyPayerProof({ header: (n) => req.header(n), payer: juror, audience: AUDIENCES, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false);
   if (!ok) return json(res, { error: 'juror signature required' }, 401);
   try {
     const r = await svc.panelVote(big(req.params.id), juror, req.body?.approve === true);

@@ -18,7 +18,38 @@ export const TESTNET = {
 } as const;
 
 export function connect(host: string = TESTNET.grpc.host, port: number = TESTNET.grpc.port, tls = true): ConcordiumGRPCClient {
-  return new ConcordiumGRPCNodeClient(host, port, tls ? credentials.createSsl() : credentials.createInsecure(), { timeout: 15_000 });
+  return withRetry(new ConcordiumGRPCNodeClient(host, port, tls ? credentials.createSsl() : credentials.createInsecure(), { timeout: 15_000 }));
+}
+
+/** A busy public node answers HTTP 429 / UNAVAILABLE: worth retrying (the request was not served). */
+export const isTransient = (e: unknown) => /\b429\b|UNAVAILABLE|RESOURCE_EXHAUSTED/i.test(`${(e as { code?: string })?.code ?? ''} ${(e as Error)?.message ?? ''}`);
+
+/**
+ * Every promise-returning client call is retried on a transient node error with exponential backoff
+ * (0.5, 1, 2, 4, 8 s). Only reads and idempotent submissions go through the client: a sendBlockItem that
+ * was rejected with 429 was never accepted, so resending the same signed item is safe. Streams pass through.
+ */
+export function withRetry<T extends object>(client: T, delays = [500, 1_000, 2_000, 4_000, 8_000]): T {
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      const v = Reflect.get(target, prop, receiver);
+      if (typeof v !== 'function') return v;
+      return (...args: unknown[]) => {
+        const first = v.apply(receiver, args);
+        if (!(first instanceof Promise)) return first;
+        return (async () => {
+          let p: Promise<unknown> = first;
+          for (let i = 0; ; i++) {
+            try { return await p; } catch (e) {
+              if (i >= delays.length || !isTransient(e)) throw e;
+              await new Promise((r) => setTimeout(r, delays[i] * (0.75 + Math.random() / 2)));
+              p = v.apply(receiver, args);
+            }
+          }
+        })();
+      };
+    },
+  });
 }
 
 /** An account that can sign: address + exported Ed25519 key (single-key accounts). */
