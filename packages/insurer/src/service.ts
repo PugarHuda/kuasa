@@ -274,7 +274,8 @@ export class InsurerService {
   async checkPurchase(quoteId: string, payer: string, amount: bigint): Promise<string | null> {
     const q = this.quotes.get(quoteId);
     if (!q || q.expires < this.deps.now()) return 'unknown or expired quote';
-    if (payer !== q.payer && payer !== q.request.sponsor) return 'payer is not the agent (or the sponsor) this quote is for';
+    // a sponsored quote is paid by the sponsor only (refunds and givebacks go back to the sponsor)
+    if (payer !== (q.request.sponsor ?? q.payer)) return q.request.sponsor ? 'this quote is sponsored: only the sponsor pays it' : 'payer is not the agent this quote is for';
     this.dropStaleReservations();
     if (this.paying.has(quoteId)) return 'this quote is already being paid';
     // coverOf only sees issued policies: a period premium in flight or paid-but-unissued for this payer blocks another one.

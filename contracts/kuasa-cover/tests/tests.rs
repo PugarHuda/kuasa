@@ -489,7 +489,11 @@ fn bond_can_be_withdrawn_when_nothing_is_open() {
     pay(&mut t, OWNER, "postBond", &PAYER, Amount::from_ccd(10)).unwrap();
     assert!(call(&mut t, STRANGER, "withdrawBond", &PAYER).is_err(), "poster only");
     assert!(call(&mut t, OWNER, "withdrawBond", &PAYER).is_err(), "locked while it backs live cover");
-    t.chain.tick_block_time(Duration::from_millis(50_000)).unwrap(); // the policy ends
+    t.chain.tick_block_time(Duration::from_millis(50_000)).unwrap(); // the policy ends ...
+    assert!(call(&mut t, OWNER, "withdrawBond", &PAYER).is_err(), "... but claims can still be filed for 30 days");
+    call(&mut t, OWNER, "cancelPolicy", &0u64).unwrap();
+    assert!(call(&mut t, OWNER, "withdrawBond", &PAYER).is_err(), "cancelling does not shorten the lock");
+    t.chain.tick_block_time(Duration::from_millis(30 * 86_400_000)).unwrap(); // claims window over
     let before = ccd(&t, OWNER);
     call(&mut t, OWNER, "withdrawBond", &PAYER).unwrap();
     assert!(ccd(&t, OWNER) + Amount::from_micro_ccd(100_000) > before + Amount::from_ccd(10));

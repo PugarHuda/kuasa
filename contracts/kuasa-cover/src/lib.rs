@@ -704,9 +704,10 @@ fn withdraw_bond(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logg
     let b = host.state().bonds.get(&payer).map(|b| *b).ok_or(Error::NotFound)?;
     ensure!(b.poster == sender_account(ctx)?, Error::Unauthorized);
     let now = ctx.metadata().slot_time();
-    // locked while the bond backs live cover (it earned a premium discount), while a claim is open,
-    // and for 30 days after a rejection (it may still be proven fraud)
-    let live = host.state().by_payer.get(&payer).map(|ids| ids.iter().any(|id| host.state().policies.get(id).map(|p| is_live(&p, now)).unwrap_or(false))).unwrap_or(false);
+    // locked until every policy of this payer is past its claims window (claims can still be filed
+    // then, whatever the status), while a claim is open, and for 30 days after a rejection
+    let claimable = |p: &Policy| p.valid_until.checked_add(Duration::from_millis(CLAIMS_WINDOW_MS)).map(|end| now <= end).unwrap_or(true);
+    let live = host.state().by_payer.get(&payer).map(|ids| ids.iter().any(|id| host.state().policies.get(id).map(|p| claimable(&p)).unwrap_or(false))).unwrap_or(false);
     let open = host.state().open_claims.get(&payer).map(|n| *n).unwrap_or(0) > 0;
     let recent = host.state().last_rejected.get(&payer).map(|t| t.checked_add(Duration::from_millis(CLAIMS_WINDOW_MS)).map(|e| now < e).unwrap_or(true)).unwrap_or(false);
     ensure!(!live && !open && !recent, Error::BondLocked);

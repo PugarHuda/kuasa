@@ -824,7 +824,8 @@ test('merchant-paid cover: the sponsor signs and pays; the policy covers the age
   const q = await t.svc.quote({ mandateUrl: 'x', limit: 20n * EUR, days: 1, order: { ref: h(3), amount: 20n * EUR }, sponsor: SHOP });
   assert.ok(!('refused' in q), 'refused' in q ? q.refused : '');
   assert.deepEqual(proofs, [SHOP]);
-  assert.match((await t.svc.checkPurchase(q.quoteId, OWNER, q.premium))!, /payer/);
+  assert.match((await t.svc.checkPurchase(q.quoteId, OWNER, q.premium))!, /only the sponsor/);
+  assert.match((await t.svc.checkPurchase(q.quoteId, PAYER, q.premium))!, /only the sponsor/, 'not even the agent: the refund would go to the sponsor');
   assert.equal(await t.svc.checkPurchase(q.quoteId, SHOP, q.premium), null);
   await t.svc.issue(q.quoteId, h(9));
   assert.equal(t.svc.state().policies[0].payer, PAYER, 'the agent is insured');

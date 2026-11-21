@@ -5,7 +5,8 @@ import { solvency } from '@kuasa/cover';
 
 /** kuasa-cover instances, oldest first: v1 (history) and v2 (current, automation rules on-chain). */
 export const COVER_V1 = 13066n;
-export const COVERS = [COVER_V1, 13100n];
+/** Every kuasa-cover book, oldest first; the last is the current one: v1 (history), v2, v3. */
+export const COVERS = [COVER_V1, 13100n, 13105n];
 export const CURRENT = COVERS[COVERS.length - 1];
 /** v1 claim records keep un-namespaced CIS-8004 keys; later contracts namespace them (same rule as @kuasa/chain claimKey). */
 export const claimKey = (kind: 'decision' | 'attest', cover: bigint, id: number | bigint) =>
