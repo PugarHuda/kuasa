@@ -187,18 +187,31 @@
   </div>
 </section>
 
+<section class="slide" aria-label="The market">
+  <div class="margin"><div class="clause">§6.1</div><div class="doc">Co-insurance and syndication</div></div>
+  <div class="body">
+    <h2>A market, not an insurer</h2>
+    <div class="grid2">
+      <div><b>An open, bonded registry</b>Any insurer joins kuasa-market &lt;13110,0&gt; from its pool with a CCD bond; leaving takes 7 days; an arbiter can slash the bond to pay a claimant. Two insurers live: Kuasa Cover and Kuasa Re.</div>
+      <div><b>The agent shops for cover</b>It finds insurers on-chain, keeps those its owner's mandate names, buys the cheapest, or splits a large limit across free capacity: Bob's 90 EUDemo went 80.36 to Kuasa Re and 9.64 to Kuasa Cover.</div>
+      <div><b>One loss, paid once</b>Contribution: each insurer pays only what the others have not paid of the verified loss, checked again right before money moves.</div>
+      <div><b>Reputation that travels</b>Paid claims post to ERC-8004 on Ethereum by themselves; another insurer reads them back (two-way identity binding, trusted peers only) and prices them: Kuasa Re charged Alice ×1.17.</div>
+    </div>
+  </div>
+</section>
+
 <section class="slide" aria-label="Evidence">
   <div class="margin"><div class="clause">§7</div><div class="doc">Schedule of evidence, Concordium testnet</div></div>
   <div class="body">
     <h2>Live, and checkable by anyone</h2>
     <div class="facts">
-      <div><div class="n">9</div><div class="l">claims, each with three records</div></div>
-      <div><div class="n">4</div><div class="l">valid badges</div></div>
-      <div><div class="n">×3.4</div><div class="l">pool covers live limits</div></div>
-      <div><div class="n">100</div><div class="l">automated tests</div></div>
+      <div><div class="n">56</div><div class="l">live steps, each with its transactions</div></div>
+      <div><div class="n">2</div><div class="l">insurers on an open, bonded registry</div></div>
+      <div><div class="n">2</div><div class="l">chains: claims on Concordium, reputation on Ethereum</div></div>
+      <div><div class="n">179</div><div class="l">automated tests</div></div>
     </div>
-    <p class="small">Every transaction is linked in docs/TESTNET.md. Contracts: kuasa-registry &lt;13065,0&gt;, kuasa-cover &lt;13066,0&gt;.</p>
-    <div class="links"><a href="https://kuasa-explorer.vercel.app">kuasa-explorer.vercel.app</a><a href="https://ccdexplorer.io/testnet/instance/13066/0">kuasa-cover on CCDExplorer</a><a href="https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md">All transactions</a></div>
+    <p class="small">Every transaction is linked in docs/TESTNET.md. Contracts: kuasa-registry &lt;13065,0&gt;, kuasa-cover v3 &lt;13105,0&gt;, Kuasa Re &lt;13108,0&gt;, kuasa-market &lt;13110,0&gt;. The evidence tour lists every step.</p>
+    <div class="links"><a href="https://kuasa-explorer.vercel.app">kuasa-explorer.vercel.app</a><a href="https://kuasa-explorer.vercel.app/evidence.html">Evidence tour</a><a href="https://ccdexplorer.io/testnet/instance/13105/0">kuasa-cover v3 on CCDExplorer</a><a href="https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md">All transactions</a></div>
   </div>
 </section>
 

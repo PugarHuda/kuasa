@@ -5,11 +5,30 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleA2a } from '../../insurer/src/a2a.js';
-import { coverOf, riskOf, scan, solvencyNow } from './chain.js';
+import { solvency } from '@kuasa/cover';
+import { coverOf, eudemoOf, marketInsurers, riskOf, scan, solvencyNow } from './chain.js';
 import { feedbackFor } from './erc8004.js';
 import { verifyEvmAgent } from './evm.js';
 
+/**
+ * The market in one call: every insurer on the open registry (kuasa-market <13110,0>) with its bond,
+ * price and URL, and its pool, live limits and free capacity recomputed from its own book.
+ */
+async function market() {
+  const [listed, { books }] = await Promise.all([marketInsurers(), scan()]);
+  const out = [];
+  for (const i of listed) {
+    const book = books.find((b) => b.cover === i.cover);
+    const pool = await eudemoOf(i.pool).catch(() => 0n);
+    const s = book ? solvency({ pool, now: Date.now(), policies: book.policies, claims: book.claims.map((c) => ({ status: c.status.tag })) }) : null;
+    out.push({ name: i.name, pool: i.pool, cover: `<${i.cover},0>`, url: i.url, priceMultiplier: i.priceBps / 10_000, bondMicroCcd: String(i.bond), leaving: i.exitAt !== null,
+      poolBalance: String(pool), liveLimits: s ? String(s.exposure) : null, freeCapacity: s ? String(s.pool > s.exposure ? s.pool - s.exposure : 0n) : null });
+  }
+  return { registry: '<13110,0>', insurers: out, note: 'free capacity counts this book only; an insurer may back other books from the same pool' };
+}
+
 const skills = {
+  market: () => market(),
   solvency: () => solvencyNow(),
   risk: async (d: Record<string, unknown>) => riskOf(String(d.payer ?? '')),
   // Cross-chain: an agent on an EVM chain proves its Ethereum key; we answer with its Concordium badge and cover.

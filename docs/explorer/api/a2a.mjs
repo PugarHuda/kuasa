@@ -3453,8 +3453,15 @@ async function handleA2a(body, skills2) {
   }
 }
 
-// src/chain.ts
-import { AccountAddress as AccountAddress2, ConcordiumGRPCWebClient, ContractAddress, Parameter, ReceiveName, ReturnValue } from "@concordium/web-sdk";
+// ../cover/src/risk.ts
+var BPS = 10000n;
+function experienceBps(orders, paidClaims) {
+  const c = BigInt(Math.max(0, Math.floor(paidClaims)));
+  const n = BigInt(Math.max(0, Math.floor(orders), Math.floor(paidClaims)));
+  const bps = BPS * 50n * (1n + c) / (n + 50n);
+  const floor = c > 0n ? BPS : 7000n;
+  return bps < floor ? floor : bps > 20000n ? 20000n : bps;
+}
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
@@ -7696,15 +7703,24 @@ function decodeClaim(bytes) {
   r.end();
   return c;
 }
-
-// ../cover/src/risk.ts
-var BPS = 10000n;
-function experienceBps(orders, paidClaims) {
-  const c = BigInt(Math.max(0, Math.floor(paidClaims)));
-  const n = BigInt(Math.max(0, Math.floor(orders), Math.floor(paidClaims)));
-  const bps = BPS * 50n * (1n + c) / (n + 50n);
-  const floor = c > 0n ? BPS : 7000n;
-  return bps < floor ? floor : bps > 20000n ? 20000n : bps;
+function decodeMarketInsurers(bytes) {
+  const r = new R(bytes);
+  const n = r.u32();
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const pool = r.account();
+    const name = r.str();
+    const cover = r.u64();
+    r.u64();
+    const url = r.str();
+    const priceBps = r.u32();
+    const evm = r.str();
+    const bond = r.u64();
+    const exitAt = r.u8() === 1 ? r.u64() : null;
+    out.push({ pool, name, cover, url, priceBps, evm, bond, exitAt });
+  }
+  r.end();
+  return out;
 }
 
 // ../cover/src/assess.ts
@@ -7728,6 +7744,7 @@ function solvency({ pool, now, policies, claims }) {
 }
 
 // src/chain.ts
+import { AccountAddress as AccountAddress2, ConcordiumGRPCWebClient, ContractAddress, Parameter, ReceiveName, ReturnValue } from "@concordium/web-sdk";
 var COVER_V1 = 13066n;
 var MARKET = [{ name: "Kuasa Re", cover: 13108n, pool: "3QLQkD8ZK4NDKEgQmxrwXkESkw3wwztrtF1sjjbYkGpHEsFcLo", token: [107, 5, 0, 0, 0, 0, 0, 0] }];
 var COVERS = [COVER_V1, 13100n, 13105n, ...MARKET.map((m) => m.cover)];
@@ -7814,6 +7831,12 @@ async function coverOf(payer, cover = CURRENT) {
   return decodeCoverView(await viewCover("coverOf", encodeCoverQuery(payer), cover));
 }
 var REGISTRY = ContractAddress.create(12802n, 0n);
+var MARKET_REGISTRY = 13110n;
+async function marketInsurers() {
+  const r = await grpc.invokeContract({ contract: ContractAddress.create(MARKET_REGISTRY, 0n), method: ReceiveName.fromString("kuasa_market.insurers"), parameter: Parameter.empty() });
+  if (r.tag !== "success" || !r.returnValue) return [];
+  return decodeMarketInsurers(new Uint8Array(ReturnValue.toBuffer(r.returnValue)));
+}
 
 // src/erc8004.ts
 var SCORE = {
@@ -8010,7 +8033,30 @@ async function verifyEvmAgent(d, now = Date.now()) {
 }
 
 // src/a2a-fn.ts
+async function market() {
+  const [listed, { books }] = await Promise.all([marketInsurers(), scan()]);
+  const out = [];
+  for (const i of listed) {
+    const book = books.find((b) => b.cover === i.cover);
+    const pool = await eudemoOf(i.pool).catch(() => 0n);
+    const s = book ? solvency({ pool, now: Date.now(), policies: book.policies, claims: book.claims.map((c) => ({ status: c.status.tag })) }) : null;
+    out.push({
+      name: i.name,
+      pool: i.pool,
+      cover: `<${i.cover},0>`,
+      url: i.url,
+      priceMultiplier: i.priceBps / 1e4,
+      bondMicroCcd: String(i.bond),
+      leaving: i.exitAt !== null,
+      poolBalance: String(pool),
+      liveLimits: s ? String(s.exposure) : null,
+      freeCapacity: s ? String(s.pool > s.exposure ? s.pool - s.exposure : 0n) : null
+    });
+  }
+  return { registry: "<13110,0>", insurers: out, note: "free capacity counts this book only; an insurer may back other books from the same pool" };
+}
 var skills = {
+  market: () => market(),
   solvency: () => solvencyNow(),
   risk: async (d) => riskOf(String(d.payer ?? "")),
   // Cross-chain: an agent on an EVM chain proves its Ethereum key; we answer with its Concordium badge and cover.

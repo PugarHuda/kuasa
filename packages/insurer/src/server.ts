@@ -49,6 +49,11 @@ if (process.env.KUASA_COVER_INDEX) state.cover = process.env.KUASA_COVER_INDEX;
  */
 const PROFILE = process.env.KUASA_PROFILE ?? 'insurer';
 const marketRoot = state.insurerAgent; // the market directory (kuasa:market) lives on the first insurer's entry
+/** Peers whose ERC-8004 ratings this insurer trusts: configured, never taken from an open registry alone. */
+const TRUSTED_POOLS = (process.env.KUASA_TRUSTED_POOLS ?? [
+  JSON.parse(readFileSync(new URL('accounts/insurer.json', ROOT), 'utf8')).accounts.find((a: { credNumber: number }) => a.credNumber === 0)?.address,
+  ...((state as { market?: { treasury: string }[] }).market ?? []).map((m) => m.treasury),
+].join(',')).split(',').map((x) => x.trim()).filter(Boolean);
 if (PROFILE !== 'insurer') {
   state.coverV1 = undefined; state.coverV2 = undefined;
   // its own CIS-8004 entry (owned by its pool): decisions and holds are published there (scripts/market-directory.ts)
@@ -89,8 +94,10 @@ async function trustedRaters(): Promise<`0x${string}`[]> {
     // the open registry: every bonded insurer that is not leaving, with the EVM address it registered
     const r = await grpc.invokeContract({ contract: sdk.ContractAddress.create(BigInt(registryIndex), 0n), method: sdk.ReceiveName.fromString('kuasa_market.insurers'), parameter: sdk.Parameter.empty() });
     if (r.tag !== 'success' || !r.returnValue) return [];
+    // joining the registry is open, so it is no trust anchor by itself: ratings count only from pools this
+    // insurer accepts as peers (KUASA_TRUSTED_POOLS, default: the insurers of this deployment's market)
     return decodeMarketInsurers(new Uint8Array(sdk.ReturnValue.toBuffer(r.returnValue)))
-      .filter((i) => i.exitAt === null && /^0x[0-9a-fA-F]{40}$/.test(i.evm)).map((i) => i.evm.toLowerCase() as `0x${string}`);
+      .filter((i) => i.exitAt === null && TRUSTED_POOLS.includes(i.pool) && /^0x[0-9a-fA-F]{40}$/.test(i.evm)).map((i) => i.evm.toLowerCase() as `0x${string}`);
   }
   if (!marketRoot) return [];
   const registry = new Cis8004Registry(grpc);
