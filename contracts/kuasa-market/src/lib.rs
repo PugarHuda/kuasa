@@ -33,6 +33,8 @@ pub struct InitParams {
     pub grace_ms: u64,
     /// What one unpaid, approved claim costs the insurer's bond (paid to the claimant).
     pub unpaid_penalty: Amount,
+    /// The kuasa-cover module every registered cover contract must run (its claims are the evidence).
+    pub cover_module: ModuleReference,
 }
 
 #[derive(Serialize, SchemaType)]
@@ -85,11 +87,12 @@ pub struct State<S: HasStateApi = StateApi> {
     exit_delay_ms: u64,
     grace_ms: u64,
     unpaid_penalty: Amount,
+    cover_module: ModuleReference,
     insurers: StateMap<AccountAddress, Insurer, S>,
-    /// (pool, claim id) -> when it was first seen Approved and unpaid
-    unpaid: StateMap<(AccountAddress, u64), Timestamp, S>,
-    /// claims already slashed for (each unpaid claim costs the bond once)
-    slashed_for: StateSet<(AccountAddress, u64), S>,
+    /// (pool, cover contract, claim id) -> when it was first seen Approved and unpaid
+    unpaid: StateMap<(AccountAddress, ContractAddress, u64), Timestamp, S>,
+    /// claims already slashed for, per cover contract (each unpaid claim costs the bond once)
+    slashed_for: StateSet<(AccountAddress, ContractAddress, u64), S>,
 }
 
 #[derive(Serialize, SchemaType)]
@@ -119,6 +122,8 @@ pub enum Error {
     CoverUnreadable,
     NotApprovedUnpaid,
     AlreadySlashed,
+    /// The cover contract does not run the kuasa-cover module, or is not the one the insurer registered.
+    WrongCover,
 }
 
 type CResult<T> = Result<T, Error>;
@@ -133,7 +138,7 @@ fn sender_account(ctx: &ReceiveContext) -> CResult<AccountAddress> {
 #[init(contract = "kuasa_market", parameter = "InitParams")]
 fn init(ctx: &InitContext, state_builder: &mut StateBuilder) -> InitResult<State> {
     let p: InitParams = ctx.parameter_cursor().get()?;
-    Ok(State { arbiter: p.arbiter, min_bond: p.min_bond, exit_delay_ms: p.exit_delay_ms, grace_ms: p.grace_ms, unpaid_penalty: p.unpaid_penalty,
+    Ok(State { arbiter: p.arbiter, min_bond: p.min_bond, exit_delay_ms: p.exit_delay_ms, grace_ms: p.grace_ms, unpaid_penalty: p.unpaid_penalty, cover_module: p.cover_module,
         insurers: state_builder.new_map(), unpaid: state_builder.new_map(), slashed_for: state_builder.new_set() })
 }
 
@@ -146,7 +151,19 @@ fn register(ctx: &ReceiveContext, host: &mut Host<State>, amount: Amount, logger
     let prev = host.state().insurers.get(&pool).map(|i| i.clone());
     if let Some(i) = &prev {
         ensure!(i.exit_at.is_none(), Error::Leaving);
+        // the cover contract is bound for good: switching it could hide unpaid claims from the market
+        ensure!(i.cover == p.cover, Error::WrongCover);
     }
+    // the evidence must come from the real kuasa-cover code, not a contract that reports what it likes
+    let module = host.contract_module_reference(p.cover).map_err(|_| Error::WrongCover)?;
+    ensure!(module == host.state().cover_module, Error::WrongCover);
+    // ...and that cover contract must name this account as its pool (bondRules: objection bond, pool)
+    let mut rv = host
+        .invoke_contract_read_only(&p.cover, &(), EntrypointName::new_unchecked("bondRules"), Amount::zero())
+        .map_err(|_| Error::WrongCover)?
+        .ok_or(Error::WrongCover)?;
+    let (_bond, cover_pool): (Amount, AccountAddress) = rv.get().map_err(|_| Error::WrongCover)?;
+    ensure!(cover_pool == pool, Error::WrongCover);
     let bond = prev.map(|i| i.bond).unwrap_or_else(Amount::zero) + amount;
     ensure!(bond >= host.state().min_bond, Error::BondTooSmall);
     let _ = host.state_mut().insurers.insert(pool, Insurer { name: p.name, cover: p.cover, url: p.url, price_bps: p.price_bps, evm: p.evm, bond, exit_at: None });
@@ -197,9 +214,8 @@ fn slash(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> C
     Ok(())
 }
 
-/// Reads a claim from the insurer's own cover contract (the one it registered).
-fn read_claim(host: &Host<State>, pool: &AccountAddress, claim_id: u64) -> CResult<CoverClaim> {
-    let cover = host.state().insurers.get(pool).map(|i| i.cover).ok_or(Error::UnknownInsurer)?;
+/// Reads a claim from the insurer's own cover contract (the one it registered, bound for good).
+fn read_claim(host: &Host<State>, cover: ContractAddress, claim_id: u64) -> CResult<CoverClaim> {
     let mut rv = host
         .invoke_contract_read_only(&cover, &claim_id, EntrypointName::new_unchecked("claim"), Amount::zero())
         .map_err(|_| Error::CoverUnreadable)?
@@ -212,12 +228,14 @@ fn read_claim(host: &Host<State>, pool: &AccountAddress, claim_id: u64) -> CResu
 #[receive(contract = "kuasa_market", name = "flagUnpaid", parameter = "ClaimRef", error = "Error", mutable, enable_logger)]
 fn flag_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
     let r: ClaimRef = ctx.parameter_cursor().get()?;
-    let c = read_claim(host, &r.pool, r.claim_id)?;
+    let cover = host.state().insurers.get(&r.pool).map(|i| i.cover).ok_or(Error::UnknownInsurer)?;
+    let c = read_claim(host, cover, r.claim_id)?;
     ensure!(c.status == CoverClaimStatus::Approved, Error::NotApprovedUnpaid);
-    ensure!(!host.state().slashed_for.contains(&(r.pool, r.claim_id)), Error::AlreadySlashed);
-    if host.state().unpaid.get(&(r.pool, r.claim_id)).is_none() {
+    ensure!(c.claimant != r.pool, Error::Unauthorized); // an insurer cannot claim its own bond back
+    ensure!(!host.state().slashed_for.contains(&(r.pool, cover, r.claim_id)), Error::AlreadySlashed);
+    if host.state().unpaid.get(&(r.pool, cover, r.claim_id)).is_none() {
         let at = ctx.metadata().slot_time();
-        let _ = host.state_mut().unpaid.insert((r.pool, r.claim_id), at);
+        let _ = host.state_mut().unpaid.insert((r.pool, cover, r.claim_id), at);
         logger.log(&Event::FlaggedUnpaid { pool: r.pool, claim_id: r.claim_id, at })?;
     }
     Ok(())
@@ -228,20 +246,24 @@ fn flag_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger
 #[receive(contract = "kuasa_market", name = "slashUnpaid", parameter = "ClaimRef", error = "Error", mutable, enable_logger)]
 fn slash_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
     let r: ClaimRef = ctx.parameter_cursor().get()?;
-    ensure!(!host.state().slashed_for.contains(&(r.pool, r.claim_id)), Error::AlreadySlashed);
-    let flagged = host.state().unpaid.get(&(r.pool, r.claim_id)).map(|t| *t).ok_or(Error::NotApprovedUnpaid)?;
+    // the cover contract is bound at registration and cannot change while registered
+    let cover = host.state().insurers.get(&r.pool).map(|i| i.cover).ok_or(Error::UnknownInsurer)?;
+    ensure!(!host.state().slashed_for.contains(&(r.pool, cover, r.claim_id)), Error::AlreadySlashed);
+    let flagged = host.state().unpaid.get(&(r.pool, cover, r.claim_id)).map(|t| *t).ok_or(Error::NotApprovedUnpaid)?;
     let due = flagged.checked_add(Duration::from_millis(host.state().grace_ms)).ok_or(Error::InvalidParams)?;
     ensure!(ctx.metadata().slot_time() >= due, Error::TooEarly);
-    let c = read_claim(host, &r.pool, r.claim_id)?;
+    // read from the cover contract recorded when the claim was flagged
+    let c = read_claim(host, cover, r.claim_id)?;
     ensure!(c.status == CoverClaimStatus::Approved, Error::NotApprovedUnpaid);
+    ensure!(c.claimant != r.pool, Error::Unauthorized);
     let penalty = host.state().unpaid_penalty;
     let mut i = host.state_mut().insurers.get_mut(&r.pool).ok_or(Error::UnknownInsurer)?;
     let amount = if penalty < i.bond { penalty } else { i.bond };
     ensure!(amount > Amount::zero(), Error::BondTooSmall);
     i.bond -= amount;
     drop(i);
-    let _ = host.state_mut().slashed_for.insert((r.pool, r.claim_id));
-    host.state_mut().unpaid.remove(&(r.pool, r.claim_id));
+    let _ = host.state_mut().slashed_for.insert((r.pool, cover, r.claim_id));
+    host.state_mut().unpaid.remove(&(r.pool, cover, r.claim_id));
     host.invoke_transfer(&c.claimant, amount)?;
     logger.log(&Event::Slashed { pool: r.pool, amount, to: c.claimant, reason: c.evidence })?;
     Ok(())

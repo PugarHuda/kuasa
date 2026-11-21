@@ -10,10 +10,17 @@ const SIGNER: Signer = Signer::with_one_key();
 const DAY: u64 = 86_400_000;
 
 fn setup() -> (Chain, ContractAddress) {
+    let (chain, market, _, _) = setup_with_cover();
+    (chain, market)
+}
+
+/// The market plus a real kuasa-cover instance (registered covers must run that module).
+fn setup_with_cover() -> (Chain, ContractAddress, ContractAddress, ContractAddress) {
     let mut chain = Chain::builder().block_time(Timestamp::from_timestamp_millis(1_000)).build().unwrap();
     for a in [ARBITER, POOL, OTHER, CLAIMANT] {
         chain.create_account(Account::new(a, Amount::from_ccd(1_000)));
     }
+    let cover_module = chain.module_deploy_v1(SIGNER, ARBITER, module_load_v1("../kuasa-cover/concordium-out/module.wasm.v1").expect("build kuasa-cover first")).unwrap().module_reference;
     let module = module_load_v1("concordium-out/module.wasm.v1").expect("build first (cargo concordium build)");
     let m = chain.module_deploy_v1(SIGNER, ARBITER, module).unwrap();
     let market = chain
@@ -21,11 +28,19 @@ fn setup() -> (Chain, ContractAddress) {
             amount: Amount::zero(),
             mod_ref: m.module_reference,
             init_name: OwnedContractName::new_unchecked("init_kuasa_market".into()),
-            param: OwnedParameter::from_serial(&InitParams { arbiter: ARBITER, min_bond: Amount::from_ccd(10), exit_delay_ms: 7 * DAY, grace_ms: DAY, unpaid_penalty: Amount::from_ccd(4) }).unwrap(),
+            param: OwnedParameter::from_serial(&InitParams { arbiter: ARBITER, min_bond: Amount::from_ccd(10), exit_delay_ms: 7 * DAY, grace_ms: DAY, unpaid_penalty: Amount::from_ccd(4), cover_module }).unwrap(),
         })
         .unwrap()
         .contract_address;
-    (chain, market)
+    let registry = {
+        let m = chain.module_deploy_v1(SIGNER, ARBITER, module_load_v1("../kuasa-registry/concordium-out/module.wasm.v1").unwrap()).unwrap();
+        chain.contract_init(SIGNER, ARBITER, Energy::from(10_000), InitContractPayload { amount: Amount::zero(), mod_ref: m.module_reference, init_name: OwnedContractName::new_unchecked("init_kuasa".into()), param: OwnedParameter::empty() }).unwrap().contract_address
+    };
+    let cover = chain.contract_init(SIGNER, ARBITER, Energy::from(10_000), InitContractPayload {
+        amount: Amount::zero(), mod_ref: cover_module, init_name: OwnedContractName::new_unchecked("init_kuasa_cover".into()),
+        param: OwnedParameter::from_serial(&kuasa_cover::InitParams { operator: AccountAddress([6; 32]), registry, auto_pay_limit: 25_000_000, objection_window_ms: 60_000, objection_bond: Amount::from_ccd(1), pool: POOL }).unwrap(),
+    }).unwrap().contract_address;
+    (chain, market, cover, registry)
 }
 
 fn call(chain: &mut Chain, market: ContractAddress, who: AccountAddress, name: &str, amount: Amount, param: OwnedParameter) -> Result<ContractInvokeSuccess, ContractInvokeError> {
@@ -37,8 +52,8 @@ fn call(chain: &mut Chain, market: ContractAddress, who: AccountAddress, name: &
     })
 }
 
-fn reg(name: &str) -> OwnedParameter {
-    OwnedParameter::from_serial(&RegisterParams { name: name.into(), cover: ContractAddress::new(13108, 0), url: "http://localhost:4024".into(), price_bps: 8_500, evm: String::new() }).unwrap()
+fn reg_for(name: &str, cover: ContractAddress) -> OwnedParameter {
+    OwnedParameter::from_serial(&RegisterParams { name: name.into(), cover, url: "http://localhost:4024".into(), price_bps: 8_500, evm: String::new() }).unwrap()
 }
 
 fn listed(chain: &Chain, market: ContractAddress) -> Vec<(AccountAddress, Insurer)> {
@@ -55,8 +70,11 @@ fn listed(chain: &Chain, market: ContractAddress) -> Vec<(AccountAddress, Insure
 
 #[test]
 fn anyone_joins_with_a_bond_and_is_listed() {
-    let (mut chain, market) = setup();
+    let (mut chain, market, cover, _) = setup_with_cover();
+    let reg = |n: &str| reg_for(n, cover);
     assert!(call(&mut chain, market, POOL, "register", Amount::from_ccd(5), reg("Kuasa Re")).is_err(), "bond below the minimum");
+    assert!(call(&mut chain, market, OTHER, "register", Amount::from_ccd(10), reg("Squatter")).is_err(), "the cover contract names another pool");
+    assert!(call(&mut chain, market, POOL, "register", Amount::from_ccd(10), reg_for("Fake", ContractAddress::new(market.index, 0))).is_err(), "not the kuasa-cover module");
     call(&mut chain, market, POOL, "register", Amount::from_ccd(10), reg("Kuasa Re")).unwrap();
     let l = listed(&chain, market);
     assert_eq!(l.len(), 1);
@@ -69,7 +87,8 @@ fn anyone_joins_with_a_bond_and_is_listed() {
 
 #[test]
 fn leaving_waits_the_exit_delay_then_returns_the_bond() {
-    let (mut chain, market) = setup();
+    let (mut chain, market, cover, _) = setup_with_cover();
+    let reg = |n: &str| reg_for(n, cover);
     call(&mut chain, market, POOL, "register", Amount::from_ccd(10), reg("Kuasa Re")).unwrap();
     assert!(call(&mut chain, market, POOL, "withdraw", Amount::zero(), OwnedParameter::empty()).is_err(), "not leaving");
     call(&mut chain, market, POOL, "leave", Amount::zero(), OwnedParameter::empty()).unwrap();
@@ -85,7 +104,8 @@ fn leaving_waits_the_exit_delay_then_returns_the_bond() {
 
 #[test]
 fn only_the_arbiter_slashes_and_the_claimant_is_paid() {
-    let (mut chain, market) = setup();
+    let (mut chain, market, cover, _) = setup_with_cover();
+    let reg = |n: &str| reg_for(n, cover);
     call(&mut chain, market, POOL, "register", Amount::from_ccd(10), reg("Kuasa Re")).unwrap();
     let s = |amount| OwnedParameter::from_serial(&SlashParams { pool: POOL, amount, to: CLAIMANT, reason: HashSha2256([9; 32]) }).unwrap();
     assert!(call(&mut chain, market, OTHER, "slash", Amount::zero(), s(Amount::from_ccd(3))).is_err(), "not the arbiter");
@@ -123,22 +143,12 @@ fn upd<P: concordium_std::Serial>(chain: &mut Chain, c: ContractAddress, from: A
     })
 }
 
-fn deploy(chain: &mut Chain, path: &str, init: &str, param: OwnedParameter) -> ContractAddress {
-    let m = chain.module_deploy_v1(SIGNER, ARBITER, module_load_v1(path).expect("build the module first")).unwrap();
-    chain.contract_init(SIGNER, ARBITER, Energy::from(10_000), InitContractPayload {
-        amount: Amount::zero(), mod_ref: m.module_reference, init_name: OwnedContractName::new_unchecked(init.into()), param,
-    }).unwrap().contract_address
-}
 
 /// The market plus a real insurer: registry, cover contract, the insurer registered with a 10 CCD bond,
 /// and an approved claim (id 0) filed by the agent payer CLAIMANT.
 fn market_with_approved_claim() -> (Chain, ContractAddress, ContractAddress) {
-    let (mut chain, market) = setup();
+    let (mut chain, market, cover, registry) = setup_with_cover(); // its cover: operator OPERATOR, pool POOL
     for a in [OWNER, OPERATOR] { chain.create_account(Account::new(a, Amount::from_ccd(1_000))); }
-    let registry = deploy(&mut chain, "../kuasa-registry/concordium-out/module.wasm.v1", "init_kuasa", OwnedParameter::empty());
-    let cover = deploy(&mut chain, "../kuasa-cover/concordium-out/module.wasm.v1", "init_kuasa_cover", OwnedParameter::from_serial(&kuasa_cover::InitParams {
-        operator: OPERATOR, registry, auto_pay_limit: 25 * EUR, objection_window_ms: 60_000, objection_bond: Amount::from_ccd(1), pool: POOL,
-    }).unwrap());
     let mandate = HashSha2256([7; 32]);
     upd(&mut chain, registry, OWNER, "kuasa.issue", &RegistryIssue { id: mandate, payer: CLAIMANT, agent_registry: ContractAddress::new(12802, 0), agent_token: "ee04".into(),
         uri: "https://k.example/m".into(), max_total: 150 * EUR, valid_until: Timestamp::from_timestamp_millis(100 * DAY), recorders: vec![] }, Amount::zero()).unwrap();
