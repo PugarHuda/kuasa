@@ -67,6 +67,9 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
     // (v1, v2) were the build-up, with demo claims staged on purpose; v3 and the market are the live book.
     ['Loss ratio (all books)', ratio(s.paidOut, s.premiums)],
     ['Loss ratio (v3 + market)', liveRatio],
+    // what the price is built for (docs/PRICING.md, Monte Carlo over the real assessor): the testnet book is
+    // dominated by claims staged on purpose, far above any real agent's mistake rate
+    ['Loss ratio priced for', '35% (0.5% mistakes)'],
   ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   // Pool vs the cover it owes: one series, the title names it, values labelled.
   const max = s.pool > s.exposure ? s.pool : s.exposure;

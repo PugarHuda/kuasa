@@ -7831,7 +7831,7 @@ async function coverOf(payer, cover = CURRENT) {
   return decodeCoverView(await viewCover("coverOf", encodeCoverQuery(payer), cover));
 }
 var REGISTRY = ContractAddress.create(12802n, 0n);
-var MARKET_REGISTRY = 13110n;
+var MARKET_REGISTRY = 13111n;
 async function marketInsurers() {
   const r = await grpc.invokeContract({ contract: ContractAddress.create(MARKET_REGISTRY, 0n), method: ReceiveName.fromString("kuasa_market.insurers"), parameter: Parameter.empty() });
   if (r.tag !== "success" || !r.returnValue) return [];
@@ -8053,7 +8053,7 @@ async function market() {
       freeCapacity: s ? String(s.pool > s.exposure ? s.pool - s.exposure : 0n) : null
     });
   }
-  return { registry: "<13110,0>", insurers: out, note: "free capacity counts this book only; an insurer may back other books from the same pool" };
+  return { registry: "<13111,0>", insurers: out, note: "free capacity counts this book only; an insurer may back other books from the same pool" };
 }
 var skills = {
   market: () => market(),

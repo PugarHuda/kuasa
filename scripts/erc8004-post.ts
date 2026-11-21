@@ -8,11 +8,11 @@
  * - Feedback entries come from the explorer's public A2A skill `erc8004-feedback`, recomputed from the
  *   Concordium cover contracts.
  * - Progress is kept in .kuasa/erc8004.json, so a rerun posts only what is new.
- * Usage: tsx erc8004-post.ts [--register-only]. Redeploy the explorer after it writes files.
+ * Usage: tsx erc8004-post.ts [agent name, default alice] [--register-only]. Redeploy the explorer after it writes files.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createPublicClient, createWalletClient, http, keccak256, parseEther, parseEventLogs, toBytes, toHex, type Hex } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import { cis8004GetMetadata, cis8004SetMetadata, connect, wallet as cwallet } from '@kuasa/chain';
 import { loadProfile } from './lib/identity.js';
@@ -21,18 +21,33 @@ const IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 const REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 const RPC = process.env.SEPOLIA_RPC ?? 'https://ethereum-sepolia-rpc.publicnode.com';
 const SITE = 'https://kuasa-explorer.vercel.app';
-const ALICE_PAYER = '4DRGyL6GkXQXs8CT7KovczM9SbwVgn8KsKAvQtFt4G4puhXKLc';
-const ALICE_TOKEN = 'ee04000000000000'; // CIS-8004 token of Alice's agent on <12802,0>
+const NAME = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 'alice';
+const demo = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { agents: Record<string, string>; mandates: Record<string, { payer: string }> };
+const ALICE_PAYER = demo.mandates[NAME].payer; // the agent's Concordium payer account
+const ALICE_TOKEN = demo.agents[NAME]; // its CIS-8004 token on <12802,0>
+const Display = NAME[0].toUpperCase() + NAME.slice(1);
 
 const kuasa = new URL('../.kuasa/', import.meta.url);
 const out = new URL('../docs/explorer/erc8004/', import.meta.url);
 const abi = (n: string) => { const j = JSON.parse(readFileSync(new URL(`erc8004/${n}.json`, import.meta.url), 'utf8')); return Array.isArray(j) ? j : j.abi; };
 const key = (f: string) => JSON.parse(readFileSync(new URL(f, kuasa), 'utf8')).privateKey as Hex;
-const agentKey = privateKeyToAccount(key('eth-alice-agent.json'));
+// each agent has its own EVM key (created once, kept in .kuasa, never in git)
+const agentKeyFile = new URL(`eth-${NAME}-agent.json`, kuasa);
+if (!existsSync(agentKeyFile)) writeFileSync(agentKeyFile, JSON.stringify({ privateKey: generatePrivateKey() }));
+const agentKey = privateKeyToAccount(key(`eth-${NAME}-agent.json`));
 const insurerKey = privateKeyToAccount(key('eth-insurer.json'));
 const stateFile = new URL('erc8004.json', kuasa);
-const state = (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { posted: {} }) as { agentId?: string; registerTx?: string; posted: Record<string, { tx: string; uri: string }> };
-const save = () => writeFileSync(stateFile, JSON.stringify(state, null, 2));
+// one progress file for every agent (and for the insurer's automatic posting): posted entries are keyed by claim
+const all = (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { posted: {} }) as { agentId?: string; registerTx?: string; posted: Record<string, { tx: string; uri: string }>; agents?: Record<string, { agentId: string; registerTx: string }> };
+const mine = NAME === 'alice' ? (all.agentId ? { agentId: all.agentId, registerTx: all.registerTx! } : undefined) : all.agents?.[NAME];
+const state = { agentId: mine?.agentId, registerTx: mine?.registerTx, posted: all.posted };
+const save = () => {
+  const cur = (existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { posted: {} }) as typeof all;
+  cur.posted = { ...cur.posted, ...state.posted };
+  if (NAME === 'alice') { cur.agentId = state.agentId; cur.registerTx = state.registerTx; }
+  else cur.agents = { ...(cur.agents ?? {}), [NAME]: { agentId: state.agentId!, registerTx: state.registerTx! } };
+  writeFileSync(stateFile, JSON.stringify(cur, null, 2));
+};
 
 const pub = createPublicClient({ chain: sepolia, transport: http(RPC) });
 const wallet = (account: typeof agentKey) => createWalletClient({ account, chain: sepolia, transport: http(RPC) });
@@ -47,17 +62,17 @@ if (await pub.getBalance({ address: agentKey.address }) < parseEther('0.003')) {
 }
 
 // 2. register Alice's agent (once), pointing at a registration file that names its Concordium identity
-const regPath = 'erc8004/alice-agent.json';
+const regPath = `erc8004/${NAME}-agent.json`;
 if (!state.agentId) {
   const tx = await wallet(agentKey).writeContract({ address: IDENTITY, abi: abi('IdentityRegistry'), functionName: 'register', args: [`${SITE}/${regPath}`] });
   const r = await wait(tx);
   const ev = parseEventLogs({ abi: abi('IdentityRegistry'), logs: r.logs, eventName: 'Registered' })[0] as unknown as { args: { agentId: bigint } };
   state.agentId = String(ev.args.agentId); state.registerTx = tx; save();
-  console.log(`2. registered Alice's agent: ERC-8004 agentId ${state.agentId}`, tx);
+  console.log(`2. registered ${Display}'s agent: ERC-8004 agentId ${state.agentId}`, tx);
 }
-writeFileSync(new URL('alice-agent.json', out), JSON.stringify({
+writeFileSync(new URL(`${NAME}-agent.json`, out), JSON.stringify({
   type: 'https://eips.ethereum.org/EIPS/eip-8004#registration-v1',
-  name: "Alice's shopping agent (Kuasa Cover insured)",
+  name: `${Display}'s shopping agent (Kuasa Cover insured)`,
   description: 'An AI shopping agent with a mandate on Concordium testnet, insured by Kuasa Cover. Its claim outcomes are posted here as ERC-8004 feedback by the insurer.',
   endpoints: [
     { name: 'Concordium CIS-8004', endpoint: `ccd:testnet:<12802,0>:${ALICE_TOKEN}` },
@@ -74,7 +89,7 @@ writeFileSync(new URL('alice-agent.json', out), JSON.stringify({
   const link = `eip155:11155111:${IDENTITY}:${state.agentId}`;
   const grpc = connect();
   if ((await cis8004GetMetadata(grpc, ALICE_TOKEN, 'kuasa:erc8004')) !== link) {
-    const o = loadProfile('alice').accounts.find((a) => a.credNumber === 0)!;
+    const o = loadProfile(NAME).accounts.find((a) => a.credNumber === 0)!;
     const r = await cis8004SetMetadata(grpc, ALICE_TOKEN, 'kuasa:erc8004', link, cwallet(o.address, o.key));
     console.log('   linked on the CIS-8004 entry: kuasa:erc8004 =', link, r.hash);
   }

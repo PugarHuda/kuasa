@@ -35,6 +35,7 @@ Kuasa Cover makes agent commerce insurable:
 - **Pricing that learns, like an insurer's.** Experience rating uses Bühlmann credibility (a claim weighs more the fewer orders back it), per-order cover reacts to order velocity and spend surges, and claims carry Stripe-style compelling evidence for the human deciding. The buyer can ask for a human on every claim (`maxAutoPay`).
 - **A market the agents find on-chain.** Insurers describe themselves on their own CIS-8004 entries; agents discover them there, split a large limit across insurers' free capacity (syndication), and each insurer pays only what others have not (contribution).
 - **Reputation that travels.** Claim outcomes go to the ERC-8004 registry on Ethereum automatically, and other insurers price that reputation, with a two-way identity binding and only market insurers as raters.
+- **Slashing without an arbiter.** If an insurer leaves an approved claim unpaid, anyone can slash its market bond to pay the claimant: the registry reads the insurer's own cover contract. Judgement calls go to a Concordium account re-keyed to 2-of-3 juror keys.
 - **Owner rules.** An owner can say "pause my agent above X an hour"; the insurer enforces it through the circuit breaker.
 - **A market, not a single insurer.** A second insurer, Kuasa Re, runs the same contract module with its own operator, pool and price. The agent compares quotes from every insurer its owner allowed and buys the cheapest; the shop counts cover from all of them, and no loss is paid twice.
 - **Never sells cover it cannot pay.** A quote is refused when its limit plus every live limit would exceed the pool (fully collateralised underwriting capacity); capital providers add capacity.
@@ -114,6 +115,9 @@ pnpm --filter @kuasa/scripts exec tsx bond-discount-demo.ts     # operator bond:
 pnpm --filter @kuasa/scripts exec tsx demo-video.ts               # demo mode: market, portable reputation, a parametric claim end to end
 pnpm --filter @kuasa/scripts exec tsx syndicate-demo.ts           # a limit no insurer can carry alone, split across the market
 pnpm --filter @kuasa/scripts exec tsx rules-demo.ts               # owner rule: pause the agent above 5 EUDemo an hour
+pnpm --filter @kuasa/scripts exec tsx unpaid-slash-demo.ts        # staged negligence: an approved claim left unpaid, anyone slashes the bond
+pnpm --filter @kuasa/scripts exec tsx panel-multisig.ts           # the market arbiter as a 2-of-3 juror multisig account
+pnpm --filter @kuasa/scripts exec tsx giveback-demo.ts            # 7 days of cover, no claim: 10% of the premium back
 pnpm --filter @kuasa/scripts exec tsx market-demo.ts              # two insurers quote the same cover; the agent buys the cheapest
 pnpm --filter @kuasa/scripts exec tsx velocity-demo.ts            # three quick orders, then the per-order quote carries the velocity factor
 node --import tsx src/cli.ts alice claim-reason WI10 3 <paymentTx> # file with a reason code (AM20/WI10 attach the shop's signed delivery note)

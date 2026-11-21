@@ -67,7 +67,7 @@
       <a href="https://github.com/PugarHuda/kuasa/blob/main/docs/PRICING.md">Pricing check</a>
       <a href="https://ccdexplorer.io/testnet/instance/13105/0">kuasa-cover v3 &lt;13105,0&gt;</a> (v2 <a href="https://ccdexplorer.io/testnet/instance/13100/0">&lt;13100,0&gt;</a>, v1 <a href="https://ccdexplorer.io/testnet/instance/13066/0">&lt;13066,0&gt;</a> kept)
       <a href="https://ccdexplorer.io/testnet/instance/13108/0">Kuasa Re &lt;13108,0&gt;</a>
-      <a href="https://ccdexplorer.io/testnet/instance/13110/0">kuasa-market &lt;13110,0&gt;</a>
+      <a href="https://ccdexplorer.io/testnet/instance/13111/0">kuasa-market &lt;13111,0&gt;</a>
       <a href="https://ccdexplorer.io/testnet/instance/13065/0">kuasa-registry &lt;13065,0&gt;</a>
     </div>
   </header>
@@ -77,6 +77,7 @@
     <div class="panel">
       <div id="solvent"><span class="muted">Reading testnet…</span></div>
       <div class="stats" id="stats"></div>
+      <p class="muted" style="margin:10px 0 0">Why the testnet loss ratio is high: nearly every claim here was staged on purpose to show a flow (duplicate orders, wrong items, prompt injection, fraud attempts, appeals, a merchant loss), on a few dozen small orders. The premium is priced for real mistake rates: a Monte Carlo run over the real assessor gives a 35% loss ratio at 0.5% mistakes per order and breaks even near 1.2% (<a href="https://github.com/PugarHuda/kuasa/blob/main/docs/PRICING.md">pricing check</a>); experience rating makes agents above that pay more.</p>
       <div class="chart" id="solvency-chart" aria-label="Pool and live exposure"></div>
       <div id="holds" style="margin-top:12px"><span class="muted">Reading circuit breaker…</span></div>
       <p class="muted" style="margin:14px 0 0">The live exposure is the cover still owed by every active, unexpired policy (its limit minus what it already paid out). Small claims of 10 EUDemo or less are paid automatically after an objection window, and larger ones need a human claims handler. The insurer publishes who decided each claim on its CIS-8004 entry (<span class="mono">kuasa:decision:&lt;id&gt;</span>), shown in the Claims table. The shop, the other party to every purchase, attests whether each claim's orders are in its records (<span class="mono">kuasa:attest:&lt;id&gt;</span> on its CIS-8004 entry). Loss ratio is claims paid divided by premiums earned; on testnet it is far above 100% because the demo stages mistakes on purpose, and the pool is funded by capital, not by those premiums (see the Monte Carlo pricing in docs/PRICING.md for the break-even rate). The insurer also watches every receipt on-chain: when an insured agent pays twice for the same thing, it publishes a purchase hold (<span class="mono">kuasa:hold:&lt;payer&gt;</span>) that merchant guards honour until the owner resumes the agent. Reason codes follow card chargebacks: AM10 duplicate order, AM20 outside the user's intent (prompt injection), WI10 wrong item shipped, ML10 merchant loss.</p>
@@ -103,7 +104,7 @@
   <section>
     <h2>The market</h2>
     <div class="panel scroll">
-      <p class="muted" style="margin:0 0 10px">Each insurer runs its own instance of the same kuasa-cover module, with its own pool and price, joins the open registry <a href="https://ccdexplorer.io/testnet/instance/13110/0" target="_blank" rel="noopener" class="mono">kuasa-market &lt;13110,0&gt;</a> by itself with a CCD bond (slashable to pay a claimant if an approved claim stays unpaid; leaving takes 7 days). Agents find insurers there and buy the cheapest cover with free capacity, or split it.</p>
+      <p class="muted" style="margin:0 0 10px">Each insurer runs its own instance of the same kuasa-cover module, with its own pool and price, joins the open registry <a href="https://ccdexplorer.io/testnet/instance/13111/0" target="_blank" rel="noopener" class="mono">kuasa-market &lt;13111,0&gt;</a> by itself with a CCD bond (anyone can slash it to pay a claimant once an approved claim stays unpaid past the grace period: the registry reads the insurer's own contract; leaving takes 7 days). Agents find insurers there and buy the cheapest cover with free capacity, or split it.</p>
       <table><thead><tr><th>Insurer</th><th class="n">Bond (registry)</th><th>Contract</th><th>Price</th><th class="n">Pool</th><th class="n">Live limits</th><th class="n">Free capacity</th><th class="n">Policies</th><th class="n">Loss ratio</th></tr></thead><tbody id="market"><tr><td colspan="9" class="muted">Reading testnet…</td></tr></tbody></table>
     </div>
   </section>

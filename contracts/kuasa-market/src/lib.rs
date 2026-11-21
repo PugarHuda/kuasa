@@ -3,8 +3,10 @@
 //! Any insurer joins by itself: its pool account calls `register` with its cover contract, URL, price
 //! and a CCD bond of at least `min_bond`. Agents list insurers with `insurers` and keep those their
 //! owner's mandate allows. Leaving takes `exit_delay_ms`, so an insurer cannot walk out on claims in
-//! flight; after it, `withdraw` returns the bond. The market's arbiter (in production an appeals panel
-//! or a Kleros court) can `slash` a bond to compensate a claimant when an approved claim stays unpaid.
+//! flight; after it, `withdraw` returns the bond. Slashing needs no arbiter for the core promise: anyone can
+//! `flagUnpaid` a claim that the insurer's own cover contract shows as Approved, and if it is still not
+//! Paid after `grace_ms`, anyone can `slashUnpaid`: `unpaid_penalty` of the bond goes to the claimant.
+//! The market's arbiter (in production an appeals panel or a Kleros court) can still `slash` by judgement.
 #![cfg_attr(target_arch = "wasm32", no_std)]
 use concordium_std::*;
 
@@ -27,6 +29,33 @@ pub struct InitParams {
     pub arbiter: AccountAddress,
     pub min_bond: Amount,
     pub exit_delay_ms: u64,
+    /// How long an approved claim may stay unpaid before anyone can slash the insurer's bond.
+    pub grace_ms: u64,
+    /// What one unpaid, approved claim costs the insurer's bond (paid to the claimant).
+    pub unpaid_penalty: Amount,
+}
+
+#[derive(Serialize, SchemaType)]
+pub struct ClaimRef {
+    pub pool: AccountAddress,
+    pub claim_id: u64,
+}
+
+/// kuasa-cover's `claim` view, mirrored here for reading only (same wire format).
+#[derive(Deserial)]
+pub enum CoverClaimKind { AgentMistake, WrongItem, MerchantLoss }
+#[derive(Deserial, PartialEq, Eq)]
+pub enum CoverClaimStatus { Filed, Assessed { ok: bool, reason: HashSha2256 }, Approved, Rejected, Paid { payout_tx: HashSha2256 }, Fraud { disclosure: HashSha2256 } }
+#[derive(Deserial)]
+pub struct CoverClaim {
+    pub policy_id: u64,
+    pub claimant: AccountAddress,
+    pub kind: CoverClaimKind,
+    pub amount: u64,
+    pub evidence: HashSha2256,
+    pub orders: Vec<HashSha2256>,
+    pub status: CoverClaimStatus,
+    pub payout: u64,
 }
 
 #[derive(Serialize, SchemaType)]
@@ -54,7 +83,13 @@ pub struct State<S: HasStateApi = StateApi> {
     arbiter: AccountAddress,
     min_bond: Amount,
     exit_delay_ms: u64,
+    grace_ms: u64,
+    unpaid_penalty: Amount,
     insurers: StateMap<AccountAddress, Insurer, S>,
+    /// (pool, claim id) -> when it was first seen Approved and unpaid
+    unpaid: StateMap<(AccountAddress, u64), Timestamp, S>,
+    /// claims already slashed for (each unpaid claim costs the bond once)
+    slashed_for: StateSet<(AccountAddress, u64), S>,
 }
 
 #[derive(Serialize, SchemaType)]
@@ -63,6 +98,7 @@ pub enum Event {
     Leaving { pool: AccountAddress, exit_at: Timestamp },
     Withdrawn { pool: AccountAddress, amount: Amount },
     Slashed { pool: AccountAddress, amount: Amount, to: AccountAddress, reason: HashSha2256 },
+    FlaggedUnpaid { pool: AccountAddress, claim_id: u64, at: Timestamp },
 }
 
 #[derive(Serialize, SchemaType, Debug, PartialEq, Eq, Reject)]
@@ -80,6 +116,9 @@ pub enum Error {
     InvalidParams,
     #[from(TransferError)]
     Transfer,
+    CoverUnreadable,
+    NotApprovedUnpaid,
+    AlreadySlashed,
 }
 
 type CResult<T> = Result<T, Error>;
@@ -94,7 +133,8 @@ fn sender_account(ctx: &ReceiveContext) -> CResult<AccountAddress> {
 #[init(contract = "kuasa_market", parameter = "InitParams")]
 fn init(ctx: &InitContext, state_builder: &mut StateBuilder) -> InitResult<State> {
     let p: InitParams = ctx.parameter_cursor().get()?;
-    Ok(State { arbiter: p.arbiter, min_bond: p.min_bond, exit_delay_ms: p.exit_delay_ms, insurers: state_builder.new_map() })
+    Ok(State { arbiter: p.arbiter, min_bond: p.min_bond, exit_delay_ms: p.exit_delay_ms, grace_ms: p.grace_ms, unpaid_penalty: p.unpaid_penalty,
+        insurers: state_builder.new_map(), unpaid: state_builder.new_map(), slashed_for: state_builder.new_set() })
 }
 
 /// The pool account registers (or updates) itself; the attached CCD adds to its bond.
@@ -157,6 +197,56 @@ fn slash(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> C
     Ok(())
 }
 
+/// Reads a claim from the insurer's own cover contract (the one it registered).
+fn read_claim(host: &Host<State>, pool: &AccountAddress, claim_id: u64) -> CResult<CoverClaim> {
+    let cover = host.state().insurers.get(pool).map(|i| i.cover).ok_or(Error::UnknownInsurer)?;
+    let mut rv = host
+        .invoke_contract_read_only(&cover, &claim_id, EntrypointName::new_unchecked("claim"), Amount::zero())
+        .map_err(|_| Error::CoverUnreadable)?
+        .ok_or(Error::CoverUnreadable)?;
+    let c: Option<CoverClaim> = rv.get().map_err(|_| Error::CoverUnreadable)?;
+    c.ok_or(Error::NotApprovedUnpaid)
+}
+
+/// Anyone: start the clock on a claim the insurer's cover contract shows as Approved but not Paid.
+#[receive(contract = "kuasa_market", name = "flagUnpaid", parameter = "ClaimRef", error = "Error", mutable, enable_logger)]
+fn flag_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
+    let r: ClaimRef = ctx.parameter_cursor().get()?;
+    let c = read_claim(host, &r.pool, r.claim_id)?;
+    ensure!(c.status == CoverClaimStatus::Approved, Error::NotApprovedUnpaid);
+    ensure!(!host.state().slashed_for.contains(&(r.pool, r.claim_id)), Error::AlreadySlashed);
+    if host.state().unpaid.get(&(r.pool, r.claim_id)).is_none() {
+        let at = ctx.metadata().slot_time();
+        let _ = host.state_mut().unpaid.insert((r.pool, r.claim_id), at);
+        logger.log(&Event::FlaggedUnpaid { pool: r.pool, claim_id: r.claim_id, at })?;
+    }
+    Ok(())
+}
+
+/// Anyone: after the grace period, if the claim is still Approved and unpaid, the penalty goes from the
+/// insurer's bond to the claimant. No arbiter: the insurer's own contract is the evidence.
+#[receive(contract = "kuasa_market", name = "slashUnpaid", parameter = "ClaimRef", error = "Error", mutable, enable_logger)]
+fn slash_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
+    let r: ClaimRef = ctx.parameter_cursor().get()?;
+    ensure!(!host.state().slashed_for.contains(&(r.pool, r.claim_id)), Error::AlreadySlashed);
+    let flagged = host.state().unpaid.get(&(r.pool, r.claim_id)).map(|t| *t).ok_or(Error::NotApprovedUnpaid)?;
+    let due = flagged.checked_add(Duration::from_millis(host.state().grace_ms)).ok_or(Error::InvalidParams)?;
+    ensure!(ctx.metadata().slot_time() >= due, Error::TooEarly);
+    let c = read_claim(host, &r.pool, r.claim_id)?;
+    ensure!(c.status == CoverClaimStatus::Approved, Error::NotApprovedUnpaid);
+    let penalty = host.state().unpaid_penalty;
+    let mut i = host.state_mut().insurers.get_mut(&r.pool).ok_or(Error::UnknownInsurer)?;
+    let amount = if penalty < i.bond { penalty } else { i.bond };
+    ensure!(amount > Amount::zero(), Error::BondTooSmall);
+    i.bond -= amount;
+    drop(i);
+    let _ = host.state_mut().slashed_for.insert((r.pool, r.claim_id));
+    host.state_mut().unpaid.remove(&(r.pool, r.claim_id));
+    host.invoke_transfer(&c.claimant, amount)?;
+    logger.log(&Event::Slashed { pool: r.pool, amount, to: c.claimant, reason: c.evidence })?;
+    Ok(())
+}
+
 /// Every listed insurer (pool account, details). Leaving insurers are listed with their exit time.
 #[receive(contract = "kuasa_market", name = "insurers", return_value = "Vec<(AccountAddress, Insurer)>", error = "Error")]
 fn insurers(_ctx: &ReceiveContext, host: &Host<State>) -> CResult<Vec<(AccountAddress, Insurer)>> {
@@ -168,10 +258,12 @@ pub struct Rules {
     pub arbiter: AccountAddress,
     pub min_bond: Amount,
     pub exit_delay_ms: u64,
+    pub grace_ms: u64,
+    pub unpaid_penalty: Amount,
 }
 
 /// The market's rules: who arbitrates, the minimum bond, the exit delay.
 #[receive(contract = "kuasa_market", name = "rules", return_value = "Rules", error = "Error")]
 fn rules(_ctx: &ReceiveContext, host: &Host<State>) -> CResult<Rules> {
-    Ok(Rules { arbiter: host.state().arbiter, min_bond: host.state().min_bond, exit_delay_ms: host.state().exit_delay_ms })
+    Ok(Rules { arbiter: host.state().arbiter, min_bond: host.state().min_bond, exit_delay_ms: host.state().exit_delay_ms, grace_ms: host.state().grace_ms, unpaid_penalty: host.state().unpaid_penalty })
 }

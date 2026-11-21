@@ -1,0 +1,32 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Teen's shopping agent (Kuasa Cover insured)",
+  "description": "An AI shopping agent with a mandate on Concordium testnet, insured by Kuasa Cover. Its claim outcomes are posted here as ERC-8004 feedback by the insurer.",
+  "endpoints": [
+    {
+      "name": "Concordium CIS-8004",
+      "endpoint": "ccd:testnet:<12802,0>:ef04000000000000"
+    },
+    {
+      "name": "Concordium payer account",
+      "endpoint": "ccd:testnet:4Gw69UEYtxxE1EroXsp3AwAZWa38cKCuQZCgs9HYLc1Xys4oqg"
+    },
+    {
+      "name": "Kuasa Cover badge",
+      "endpoint": "https://kuasa-explorer.vercel.app/?badge=4Gw69UEYtxxE1EroXsp3AwAZWa38cKCuQZCgs9HYLc1Xys4oqg"
+    },
+    {
+      "name": "agentWallet",
+      "endpoint": "eip155:11155111:0x3bc87e8736B19277Eda77fD2496fb2f910CC2147"
+    }
+  ],
+  "registrations": [
+    {
+      "agentId": 11459,
+      "agentRegistry": "eip155:11155111:0x8004A818BFB912233c491871b3d84c89A494BD9e"
+    }
+  ],
+  "supportedTrust": [
+    "reputation"
+  ]
+}

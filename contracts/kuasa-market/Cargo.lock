@@ -1502,11 +1502,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kuasa-cover"
+version = "0.1.0"
+dependencies = [
+ "concordium-std",
+]
+
+[[package]]
 name = "kuasa-market"
 version = "0.1.0"
 dependencies = [
  "concordium-smart-contract-testing",
  "concordium-std",
+ "kuasa-cover",
 ]
 
 [[package]]

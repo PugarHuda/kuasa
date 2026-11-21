@@ -31,7 +31,7 @@ AI agents can pay on their own now. When one makes a mistake, nobody carries the
 - Agents on EVM chains are covered too. An Ethereum key bound through CIS-8 lets an EVM merchant verify an agent's badge and cover from a signature. AgentKit agents can do it with their own wallet.
 - Fraud has consequences: a lawful-disclosure request for the identity provider and Privacy Guardians, anchored only after human review.
 
-**A market, not a single insurer.** Insurers join an open registry contract (kuasa-market) with a CCD bond that an arbiter can slash to pay a claimant. Two insurers are live. An agent finds them on-chain, keeps only those its owner's mandate names, and buys the cheapest cover. A limit no insurer can carry alone is split across their free capacity: Bob's 90 EUDemo went 80.36 to Kuasa Re and 9.64 to Kuasa Cover. Each insurer pays only what the others have not paid of the verified loss, so one loss is paid once.
+**A market, not a single insurer.** Insurers join an open registry contract (kuasa-market) with a CCD bond. If an approved claim stays unpaid, anyone can slash that bond to pay the claimant: the registry reads the insurer's own cover contract, so no arbiter is needed. Judgement calls go to a Concordium account re-keyed to 2-of-3 juror keys. Two insurers are live. An agent finds them on-chain, keeps only those its owner's mandate names, and buys the cheapest cover. A limit no insurer can carry alone is split across their free capacity: Bob's 90 EUDemo went 80.36 to Kuasa Re and 9.64 to Kuasa Cover. Each insurer pays only what the others have not paid of the verified loss, so one loss is paid once.
 
 **Reputation that travels between chains.** Every paid claim is posted to the agent's ERC-8004 reputation on Ethereum Sepolia by the insurer itself (Alice's agent is agentId 11449). Another insurer reads that reputation back to price cover, with a two-way identity binding and trusted peers only: Kuasa Re charged Alice ×1.17 without ever having insured her.
 
@@ -48,7 +48,7 @@ https://github.com/PugarHuda/kuasa
 https://youtu.be/Tqe_CLniIl0
 
 ## Testnet link
-https://ccdexplorer.io/testnet/instance/13105/0 (kuasa-cover v3; v2: https://ccdexplorer.io/testnet/instance/13100/0, v1: https://ccdexplorer.io/testnet/instance/13066/0). Second insurer Kuasa Re: https://ccdexplorer.io/testnet/instance/13108/0. Open insurer registry kuasa-market: https://ccdexplorer.io/testnet/instance/13110/0.
+https://ccdexplorer.io/testnet/instance/13105/0 (kuasa-cover v3; v2: https://ccdexplorer.io/testnet/instance/13100/0, v1: https://ccdexplorer.io/testnet/instance/13066/0). Second insurer Kuasa Re: https://ccdexplorer.io/testnet/instance/13108/0. Open insurer registry kuasa-market: https://ccdexplorer.io/testnet/instance/13111/0.
 
 Every live step with its transactions, newest first: https://kuasa-explorer.vercel.app/evidence.html (source: https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md).
 

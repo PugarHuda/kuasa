@@ -183,6 +183,7 @@ save();
 await mandate('alice', { minAge: 18, euResidency: true });
 await mandate('teen', { euResidency: true }); // a 16-year-old cannot prove 18+, so the shop will refuse wine
 if (existsSync(new URL('accounts/bob.json', ROOT))) await mandate('bob', { minAge: 18, euResidency: true }); // the market demo agent
+if (existsSync(new URL('accounts/carol.json', ROOT))) await mandate('carol', { minAge: 18, euResidency: true }); // the giveback demo agent
 
 console.log(JSON.stringify(state, null, 2));
 process.exit(0);

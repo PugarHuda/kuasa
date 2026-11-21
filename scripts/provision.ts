@@ -13,7 +13,9 @@ const cast: Record<string, [Attributes, number]> = {
   alice: [{ dob: '19900415', countryOfResidence: 'DK', nationality: 'DK' }, 2],
   teen: [{ dob: '20100301', countryOfResidence: 'DK', nationality: 'DK' }, 2],
   bob: [{ dob: '19880612', countryOfResidence: 'NL', nationality: 'NL' }, 2],
-  investor: [{ dob: '19820920', countryOfResidence: 'DE', nationality: 'DE' }, 2], // a capital provider for both insurers // adult; his agent buys syndicated cover on the market
+  investor: [{ dob: '19820920', countryOfResidence: 'DE', nationality: 'DE' }, 2], // a capital provider for both insurers
+  carol: [{ dob: '19910305', countryOfResidence: 'FR', nationality: 'FR' }, 2],
+  panel: [{ dob: '19850101', countryOfResidence: 'NL', nationality: 'NL' }, 1], // the market arbiter: re-keyed to 2-of-3 juror keys (panel-multisig.ts) // a careful owner: short cover, no claims (giveback) // adult; his agent buys syndicated cover on the market
   merchant: [{ dob: '19800101', countryOfResidence: 'NL', nationality: 'NL' }, 2],
   insurer: [{ dob: '19750101', countryOfResidence: 'NL', nationality: 'NL' }, 2], // #0 treasury (EUDemo pool), #1 operator
   insurer2: [{ dob: '19700101', countryOfResidence: 'DE', nationality: 'DE' }, 2], // a second insurer on the market ("Kuasa Re"): #0 pool, #1 operator

@@ -21,7 +21,7 @@ fn setup() -> (Chain, ContractAddress) {
             amount: Amount::zero(),
             mod_ref: m.module_reference,
             init_name: OwnedContractName::new_unchecked("init_kuasa_market".into()),
-            param: OwnedParameter::from_serial(&InitParams { arbiter: ARBITER, min_bond: Amount::from_ccd(10), exit_delay_ms: 7 * DAY }).unwrap(),
+            param: OwnedParameter::from_serial(&InitParams { arbiter: ARBITER, min_bond: Amount::from_ccd(10), exit_delay_ms: 7 * DAY, grace_ms: DAY, unpaid_penalty: Amount::from_ccd(4) }).unwrap(),
         })
         .unwrap()
         .contract_address;
@@ -94,4 +94,89 @@ fn only_the_arbiter_slashes_and_the_claimant_is_paid() {
     call(&mut chain, market, ARBITER, "slash", Amount::zero(), s(Amount::from_ccd(3))).unwrap();
     assert_eq!(chain.account_balance_available(CLAIMANT).unwrap(), before + Amount::from_ccd(3));
     assert_eq!(listed(&chain, market)[0].1.bond, Amount::from_ccd(7));
+}
+
+
+// ---- trustless slashing, against the real kuasa-cover module -------------------------------------
+
+use kuasa_cover::{AssessParams, ClaimKind, DecideParams, FileClaim, IssuePolicy, MandateKey, PayoutParams, PolicyKind};
+
+const OWNER: AccountAddress = AccountAddress([5; 32]);
+const OPERATOR: AccountAddress = AccountAddress([6; 32]);
+const EUR: u64 = 1_000_000;
+
+#[derive(concordium_std::Serial)]
+struct RegistryIssue {
+    id: HashSha2256,
+    payer: AccountAddress,
+    agent_registry: ContractAddress,
+    agent_token: String,
+    uri: String,
+    max_total: u64,
+    valid_until: Timestamp,
+    recorders: Vec<AccountAddress>,
+}
+
+fn upd<P: concordium_std::Serial>(chain: &mut Chain, c: ContractAddress, from: AccountAddress, name: &str, p: &P, amount: Amount) -> Result<ContractInvokeSuccess, ContractInvokeError> {
+    chain.contract_update(SIGNER, from, Address::Account(from), Energy::from(100_000), UpdateContractPayload {
+        amount, address: c, receive_name: OwnedReceiveName::new_unchecked(name.into()), message: OwnedParameter::from_serial(p).unwrap(),
+    })
+}
+
+fn deploy(chain: &mut Chain, path: &str, init: &str, param: OwnedParameter) -> ContractAddress {
+    let m = chain.module_deploy_v1(SIGNER, ARBITER, module_load_v1(path).expect("build the module first")).unwrap();
+    chain.contract_init(SIGNER, ARBITER, Energy::from(10_000), InitContractPayload {
+        amount: Amount::zero(), mod_ref: m.module_reference, init_name: OwnedContractName::new_unchecked(init.into()), param,
+    }).unwrap().contract_address
+}
+
+/// The market plus a real insurer: registry, cover contract, the insurer registered with a 10 CCD bond,
+/// and an approved claim (id 0) filed by the agent payer CLAIMANT.
+fn market_with_approved_claim() -> (Chain, ContractAddress, ContractAddress) {
+    let (mut chain, market) = setup();
+    for a in [OWNER, OPERATOR] { chain.create_account(Account::new(a, Amount::from_ccd(1_000))); }
+    let registry = deploy(&mut chain, "../kuasa-registry/concordium-out/module.wasm.v1", "init_kuasa", OwnedParameter::empty());
+    let cover = deploy(&mut chain, "../kuasa-cover/concordium-out/module.wasm.v1", "init_kuasa_cover", OwnedParameter::from_serial(&kuasa_cover::InitParams {
+        operator: OPERATOR, registry, auto_pay_limit: 25 * EUR, objection_window_ms: 60_000, objection_bond: Amount::from_ccd(1), pool: POOL,
+    }).unwrap());
+    let mandate = HashSha2256([7; 32]);
+    upd(&mut chain, registry, OWNER, "kuasa.issue", &RegistryIssue { id: mandate, payer: CLAIMANT, agent_registry: ContractAddress::new(12802, 0), agent_token: "ee04".into(),
+        uri: "https://k.example/m".into(), max_total: 150 * EUR, valid_until: Timestamp::from_timestamp_millis(100 * DAY), recorders: vec![] }, Amount::zero()).unwrap();
+    upd(&mut chain, cover, OPERATOR, "kuasa_cover.issuePolicy", &IssuePolicy { holder: OWNER, agent_payer: CLAIMANT, agent_token: "ee04".into(), mandate: MandateKey { owner: OWNER, id: mandate },
+        kind: PolicyKind::Period, limit: 100 * EUR, deductible: EUR, premium: 2 * EUR, premium_tx: HashSha2256([9; 32]), valid_until: Timestamp::from_timestamp_millis(50 * DAY) }, Amount::zero()).unwrap();
+    upd(&mut chain, cover, CLAIMANT, "kuasa_cover.fileClaim", &FileClaim { policy_id: 0, kind: ClaimKind::AgentMistake, amount: 24 * EUR, evidence: HashSha2256([12; 32]), orders: vec![HashSha2256([10; 32]), HashSha2256([11; 32])] }, Amount::zero()).unwrap();
+    upd(&mut chain, cover, OPERATOR, "kuasa_cover.assessClaim", &AssessParams { claim_id: 0, ok: true, reason: HashSha2256([1; 32]) }, Amount::zero()).unwrap();
+    upd(&mut chain, cover, OPERATOR, "kuasa_cover.decideClaim", &DecideParams { claim_id: 0, approve: true }, Amount::zero()).unwrap();
+    let reg = RegisterParams { name: "Kuasa Cover".into(), cover, url: "http://localhost:4023".into(), price_bps: 10_000, evm: String::new() };
+    upd(&mut chain, market, POOL, "kuasa_market.register", &reg, Amount::from_ccd(10)).unwrap();
+    (chain, market, cover)
+}
+
+#[test]
+fn anyone_slashes_an_approved_claim_left_unpaid_after_the_grace_period() {
+    let (mut chain, market, _cover) = market_with_approved_claim();
+    let r = ClaimRef { pool: POOL, claim_id: 0 };
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).is_err(), "not flagged yet");
+    upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).unwrap();
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).is_err(), "grace period still running");
+    chain.tick_block_time(Duration::from_millis(DAY)).unwrap();
+    let before = chain.account_balance_available(CLAIMANT).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).unwrap(); // a stranger, no arbiter
+    assert_eq!(chain.account_balance_available(CLAIMANT).unwrap(), before + Amount::from_ccd(4), "the claimant is compensated");
+    assert_eq!(listed(&chain, market)[0].1.bond, Amount::from_ccd(6));
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).is_err(), "one unpaid claim costs the bond once");
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).is_err(), "and cannot be flagged again");
+}
+
+#[test]
+fn a_paid_claim_cannot_be_flagged_or_slashed() {
+    let (mut chain, market, cover) = market_with_approved_claim();
+    let r = ClaimRef { pool: POOL, claim_id: 0 };
+    upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).unwrap();
+    // the insurer pays inside the grace period: no slash
+    upd(&mut chain, cover, OPERATOR, "kuasa_cover.recordPayout", &PayoutParams { claim_id: 0, payout_tx: HashSha2256([2; 32]), amount: 23 * EUR }, Amount::zero()).unwrap();
+    chain.tick_block_time(Duration::from_millis(DAY)).unwrap();
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).is_err(), "paid in time");
+    assert_eq!(listed(&chain, market)[0].1.bond, Amount::from_ccd(10));
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &ClaimRef { pool: POOL, claim_id: 0 }, Amount::zero()).is_err(), "a paid claim is not unpaid");
 }

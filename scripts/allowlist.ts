@@ -16,7 +16,7 @@ const TOKEN = 'EUDemo';
 const EU = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK'];
 // agent payers, shop payTo, shop recorder (merchant-loss payouts), insurer treasury (premiums + payouts)
 // insurer2 #0: the second insurer's pool; teen #0: the appeals panel juror who stakes pool capital
-const targets: [string, number][] = [['alice', 1], ['teen', 1], ['merchant', 0], ['merchant', 1], ['insurer', 0], ['insurer2', 0], ['teen', 0], ['bob', 1], ['investor', 0], ['investor', 1]];
+const targets: [string, number][] = [['alice', 1], ['teen', 1], ['merchant', 0], ['merchant', 1], ['insurer', 0], ['insurer2', 0], ['teen', 0], ['bob', 1], ['investor', 0], ['investor', 1], ['carol', 1]];
 
 const grpc = connect();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

@@ -22,7 +22,7 @@ export function connect(host: string = TESTNET.grpc.host, port: number = TESTNET
 }
 
 /** A busy public node answers HTTP 429 / UNAVAILABLE: worth retrying (the request was not served). */
-export const isTransient = (e: unknown) => /\b429\b|UNAVAILABLE|RESOURCE_EXHAUSTED/i.test(`${(e as { code?: string })?.code ?? ''} ${(e as Error)?.message ?? ''}`);
+export const isTransient = (e: unknown) => /\b429\b|UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|Deadline exceeded/i.test(`${(e as { code?: string })?.code ?? ''} ${(e as Error)?.message ?? ''}`);
 
 /**
  * Every promise-returning client call is retried on a transient node error with exponential backoff
