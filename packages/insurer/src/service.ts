@@ -700,7 +700,8 @@ export class InsurerService {
   private settlePanel(votes: { by: string; approve: boolean }[], verdict: boolean) {
     const penalty = this.deps.jurorPenalty ?? 0n;
     const stake = this.deps.jurorStake;
-    const winners = votes.filter((v) => v.approve === verdict).map((v) => v.by);
+    // only staked jurors share the penalty (an unstaked juror, allowed when the minimum stake is 0, has nothing at risk)
+    const winners = votes.filter((v) => v.approve === verdict && !!stake && stake(v.by) > 0n).map((v) => v.by);
     if (penalty <= 0n || !stake || !this.deps.settlePanel || winners.length === 0) return [];
     const moves: { from: string; to: string; amount: bigint }[] = [];
     for (const l of votes.filter((v) => v.approve !== verdict)) {

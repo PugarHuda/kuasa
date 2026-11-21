@@ -992,6 +992,22 @@ test('staked panel: jurors stay locked until the settlement runs; a failed payou
   assert.equal(t.svc.jurorBusy(J1), false);
 });
 
+test('staked panel with minimum stake 0: an unstaked juror may vote but neither pays nor receives a penalty', async () => {
+  const [J1, J2, J3] = [addr(31), addr(32), addr(33)];
+  const stakes = new Map([[J2, 10n * EUR], [J3, 10n * EUR]]); // J1 holds no capital
+  const settled: { from: string; to: string; amount: bigint }[][] = [];
+  const t = harness({ jurors: [J1, J2, J3], jurorStake: (j) => stakes.get(j) ?? 0n, jurorMinStake: 0n, jurorPenalty: EUR, settlePanel: (m) => settled.push(m) });
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, false);
+  const ev = await wrongItemEvidence(h(10));
+  t.claims.set(1n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: ev.hash, orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(1n, ['r0'], ev.doc);
+  await t.svc.panelVote(1n, J2, false);
+  await t.svc.panelVote(1n, J1, true);
+  await t.svc.panelVote(1n, J3, true); // approved; J2 against
+  assert.deepEqual(settled, [[{ from: J2, to: J3, amount: EUR }]]);
+});
+
 test('appeals panel: a majority approves and the appeal is paid', async () => {
   const [J1, J2, J3] = [addr(31), addr(32), addr(33)];
   const t = harness({ jurors: [J1, J2, J3] });
