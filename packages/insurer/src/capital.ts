@@ -11,7 +11,13 @@
  */
 export type RiskClass = 'AM' | 'WI' | 'ML';
 export const RISK_CLASSES: RiskClass[] = ['AM', 'WI', 'ML'];
-type Account = { provider: string; deposited: bigint; premiums: bigint; losses: bigint; withdrawn: bigint; lots?: { amount: bigint; at: number }[]; class?: RiskClass };
+/**
+ * Tranches (Sherlock / Risk Harbor style): junior capital ("kuasa capital:junior", kept as 'JR') takes
+ * claim losses of every class after the class capital and before everyone else, and earns premiums at
+ * the same 1.5x weight. Everyone else is the senior tranche.
+ */
+export type CapitalClass = RiskClass | 'JR';
+type Account = { provider: string; deposited: bigint; premiums: bigint; losses: bigint; withdrawn: bigint; lots?: { amount: bigint; at: number }[]; class?: CapitalClass };
 
 const memoText = (hex: string | undefined) => {
   if (!hex || !/^[0-9a-f]*$/i.test(hex)) return null;
@@ -19,10 +25,11 @@ const memoText = (hex: string | undefined) => {
   const [len, start] = b[0] >= 0x60 && b[0] <= 0x77 ? [b[0] - 0x60, 1] : b[0] === 0x78 ? [b[1], 2] : [-1, 0];
   return len >= 0 && b.length === start + len ? b.subarray(start).toString('utf8') : null;
 };
-/** A capital deposit is an EUDemo transfer into the pool with the memo "kuasa capital" (general) or "kuasa capital:AM|WI|ML". */
-export function capitalClassOf(hex: string | undefined): RiskClass | 'general' | null {
+/** A capital deposit is an EUDemo transfer into the pool with the memo "kuasa capital" (general), "kuasa capital:AM|WI|ML" or "kuasa capital:junior". */
+export function capitalClassOf(hex: string | undefined): CapitalClass | 'general' | null {
   const t = memoText(hex);
   if (t === 'kuasa capital') return 'general';
+  if (t === 'kuasa capital:junior') return 'JR';
   const m = t?.match(/^kuasa capital:(AM|WI|ML)$/);
   return m ? (m[1] as RiskClass) : null;
 }
@@ -46,7 +53,7 @@ export class CapitalLedger {
   reserve(tx: string) { this.txs.add(tx); }
 
   /** A verified transfer into the pool (each transaction counts once). A provider backs one class (or none) for good. */
-  deposit(provider: string, amount: bigint, tx: string, at = 0, cls?: RiskClass) {
+  deposit(provider: string, amount: bigint, tx: string, at = 0, cls?: CapitalClass) {
     if (this.txs.has(tx)) throw new Error('deposit already recorded');
     if (amount <= 0n) throw new Error('deposit must be positive');
     const prev = this.accounts.get(provider);
@@ -76,17 +83,20 @@ export class CapitalLedger {
   onPremium(amount: bigint) { this.split(amount, 'premiums', undefined, (a) => (a.class ? 3n : 2n)); }
 
   /**
-   * A payout. With a class, that class's capital pays first, up to its balance; the rest (and any
-   * payout without a class, e.g. refunds) is shared by everyone pro rata.
+   * A payout. A claim (claim = true) is paid first by its class's capital, then by the junior tranche,
+   * each up to its balance; the rest (and refunds or givebacks, which are not losses) is shared by
+   * everyone pro rata.
    */
-  onPayout(amount: bigint, cls?: RiskClass) {
+  onPayout(amount: bigint, cls?: RiskClass, claim = false) {
     let rest = amount;
-    if (cls) {
-      const backers = [...this.accounts.values()].filter((a) => a.class === cls && balanceOf(a) > 0n);
+    const layer = (c: CapitalClass) => {
+      const backers = [...this.accounts.values()].filter((a) => a.class === c && balanceOf(a) > 0n);
       const room = backers.reduce((s, a) => s + balanceOf(a), 0n);
       const first = rest < room ? rest : room;
       if (first > 0n) { this.split(first, 'losses', backers); rest -= first; }
-    }
+    };
+    if (cls) layer(cls);
+    if (claim) layer('JR');
     if (rest > 0n) this.split(rest, 'losses');
   }
 

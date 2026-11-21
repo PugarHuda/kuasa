@@ -91,3 +91,13 @@ Card networks are adding their own agent identity: Visa's Trusted Agent Protocol
 | Dispute and chargeback after the fact | Kuasa claims with chargeback-style reason codes (AM10, AM20, WI10, ML10) and signed evidence | Kuasa pays the user within the published rules first; a card chargeback remains the merchant's route against the network |
 
 What it would take: a receipt recorder that reads card authorisations instead of x402 settlements, and the network's agent id stored with the policy. The cover contract, assessor and pool stay as they are.
+
+## Show cover on a shop page
+
+Embed the badge for the agent that is buying (its payer account):
+
+```html
+<iframe src="https://kuasa-explorer.vercel.app/?badge=4DRGyL6GkXQXs8CT7KovczM9SbwVgn8KsKAvQtFt4G4puhXKLc" width="360" height="48" style="border:0"></iframe>
+```
+
+It reads the cover contract and the insurer's circuit breaker in the visitor's browser and shows "Insured by Kuasa Cover · X of cover left", "agent paused by the insurer" or "Not insured by Kuasa Cover".

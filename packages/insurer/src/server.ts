@@ -461,7 +461,7 @@ function poolEvents() {
   const st = svc.state();
   return [
     ...st.policies.filter((p) => p.premium !== undefined).map((p) => ({ id: `premium:${p.premiumTx}`, book: () => capital.onPremium(p.premium!) })),
-    ...st.payouts.map((p) => ({ id: `payout:${p.tx}`, book: () => capital.onPayout(p.amount, classOf(String(p.claimId))) })),
+    ...st.payouts.map((p) => ({ id: `payout:${p.tx}`, book: () => capital.onPayout(p.amount, classOf(String(p.claimId)), true) })),
     ...st.refunds.filter((r) => r.tx).map((r) => ({ id: `refund:${r.tx}`, book: () => capital.onPayout(r.amount) })),
     ...st.policies.filter((p) => p.giveback?.tx).map((p) => ({ id: `giveback:${p.giveback!.tx}`, book: () => capital.onPayout(p.giveback!.amount) })),
   ];
@@ -560,7 +560,7 @@ app.post('/capital/deposit', async (req, res) => {
     if (sum.transactionType !== 'tokenUpdate' || transfers.length !== 1) return json(res, { error: 'not a single EUDemo transfer into the pool' }, 400);
     const memoHex = typeof transfers[0].memo === "string" ? transfers[0].memo : (JSON.parse(JSON.stringify(transfers[0].memo ?? null)) as string | null) ?? undefined; // CborMemo serialises to hex
     const cls = capitalClassOf(memoHex);
-    if (!cls) return json(res, { error: 'a capital deposit carries the memo "kuasa capital" (or "kuasa capital:AM|WI|ML" to back one risk class)' }, 400);
+    if (!cls) return json(res, { error: 'a capital deposit carries the memo "kuasa capital" (or "kuasa capital:AM|WI|ML" to back one risk class, or "kuasa capital:junior" for the junior tranche)' }, 400);
     if (isPremiumTx(tx)) return json(res, { error: 'this transfer is a premium payment, not capital' }, 400);
     const provider = String(transfers[0].from.address);
     await serialCapital(async () => {

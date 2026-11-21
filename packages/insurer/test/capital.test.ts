@@ -50,6 +50,31 @@ test('a transaction reserved as a premium can never become a capital deposit', (
   assert.equal(new CapitalLedger(l.snapshot()).snapshot().txs.includes('premium-tx'), true, 'persisted');
 });
 
+test('junior tranche: claim losses hit class capital, then junior, then senior; refunds are shared; junior earns 1.5x', async () => {
+  const { capitalClassOf } = await import('../src/capital.js');
+  const memo = (t: string) => Buffer.from([0x60 + t.length, ...Buffer.from(t)]).toString('hex');
+  assert.equal(capitalClassOf(memo('kuasa capital:junior')), 'JR');
+  const l = new CapitalLedger();
+  l.deposit('senior', 80n * EUR, 'a');
+  l.deposit('junior', 10n * EUR, 'b', 0, 'JR');
+  l.deposit('wi', 5n * EUR, 'c', 0, 'WI');
+  l.onPayout(12n * EUR, 'WI', true); // WI 5, then junior 7
+  let b = Object.fromEntries(l.balances().map((x) => [x.provider, x]));
+  assert.deepEqual([b.wi.losses, b.junior.losses, b.senior.losses], [5n * EUR, 7n * EUR, 0n]);
+  l.onPayout(6n * EUR, 'AM', true); // junior has 3 left, senior takes the other 3
+  b = Object.fromEntries(l.balances().map((x) => [x.provider, x]));
+  assert.deepEqual([b.junior.balance, b.senior.losses], [0n, 3n * EUR]);
+  l.onPayout(1n * EUR); // a refund: not a loss layer, shared by whoever has a balance
+  b = Object.fromEntries(l.balances().map((x) => [x.provider, x]));
+  assert.equal(b.senior.losses, 4n * EUR);
+  const p = new CapitalLedger();
+  p.deposit('senior', 20n * EUR, 'a');
+  p.deposit('junior', 20n * EUR, 'b', 0, 'JR');
+  p.onPremium(5n * EUR); // 2 : 3
+  const q = Object.fromEntries(p.balances().map((x) => [x.provider, x]));
+  assert.deepEqual([q.senior.premiums, q.junior.premiums], [2n * EUR, 3n * EUR]);
+});
+
 test('risk-specific staking: class capital pays its class first, earns 1.5x weight, and one provider backs one class', async () => {
   const { capitalClassOf } = await import('../src/capital.js');
   const memo = (t: string) => Buffer.from([0x60 + t.length, ...Buffer.from(t)]).toString('hex');

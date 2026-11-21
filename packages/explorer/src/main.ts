@@ -5,7 +5,7 @@
  */
 import { type Claim, type Policy } from '@kuasa/core';
 import { quote, solvency } from '@kuasa/cover';
-import { attestationOf, COVER_V1, decisionOf, holdOf, POOL, poolBalance, scan } from './chain.js';
+import { attestationOf, COVER_V1, coverOf, decisionOf, holdOf, POOL, poolBalance, scan } from './chain.js';
 
 const LABELS: Record<string, string> = {
   '4WmdhhLRPTk92STxiaXQFFNyJFLaM6k5kRq1ryFN8xjho1aq3s': 'Alice (owner)',
@@ -144,8 +144,6 @@ function calc() {
   const o = quote({ ...base, order: { amount: base.mandate.maxPerOrder } });
   if (!('refused' in o)) $('order-premium').textContent = `One order of ${eur(base.mandate.maxPerOrder)} instead: ${eur(o.premium)} (${o.factors.map((x) => `${x.name} ×${x.multiplier}`).join(', ')}).`;
 }
-$('calc').addEventListener('input', calc);
-calc();
 
 async function load() {
   try {
@@ -171,5 +169,29 @@ async function load() {
   }
 }
 
-void load();
-setInterval(load, 60_000);
+/**
+ * Embeddable "insured by Kuasa" badge for a shop page: ?badge=<agent payer account>. Read from the cover
+ * contract and the insurer's circuit breaker in the visitor's browser, so a shop cannot fake it.
+ */
+async function badge(payer: string) {
+  document.body.innerHTML = `<a id="b" class="pill warn" style="margin:8px;display:inline-block" href="https://kuasa-explorer.vercel.app/" target="_blank" rel="noopener">Kuasa Cover: checking…</a>`;
+  const b = document.getElementById('b')!;
+  try {
+    const [v, h] = await Promise.all([coverOf(payer), holdOf(payer).catch(() => null)]);
+    const live = v.policyId !== null && v.periodRemaining > 0n;
+    b.className = `pill ${h ? 'bad' : live ? 'ok' : 'warn'}`;
+    b.textContent = h ? 'Kuasa Cover: agent paused by the insurer' : live ? `Insured by Kuasa Cover · ${eur(v.periodRemaining)} of cover left` : 'Not insured by Kuasa Cover';
+    b.title = `${payer} · read from kuasa-cover on Concordium testnet`;
+  } catch {
+    b.textContent = 'Kuasa Cover: not a valid agent account';
+  }
+}
+
+const badgeFor = new URLSearchParams(location.search).get('badge');
+if (badgeFor) void badge(badgeFor);
+else {
+  $('calc').addEventListener('input', calc);
+  calc();
+  void load();
+  setInterval(load, 60_000);
+}

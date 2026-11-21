@@ -1,7 +1,7 @@
 /**
  * A capital provider joins the pool: sends EUDemo to the pool, registers the transfer (verified
  * on-chain by the insurer), then withdraws part of it with a signed request. Withdrawals that would
- * leave live cover uncovered are refused. Usage: tsx capital-demo.ts [name:n] [deposit] [withdraw] [AM|WI|ML]
+ * leave live cover uncovered are refused. Usage: tsx capital-demo.ts [name:n] [deposit] [withdraw] [AM|WI|ML|JR]
  * With a class the provider backs that risk class only, as first loss (e.g. a shop staking on wrong items).
  */
 import * as sdk from '@concordium/web-sdk';
@@ -18,7 +18,7 @@ const info = await (await fetch(`${INSURER}/info`)).json() as { treasury: string
 
 const token = await sdk.Token.fromId(grpc, sdk.TokenId.fromString('EUDemo'));
 const hash = await sdk.Token.transfer(token, sdk.AccountAddress.fromBase58(lp.address),
-  { recipient: sdk.AccountAddress.fromBase58(info.treasury), amount: sdk.TokenAmount.create(BigInt(dep) * 1_000_000n, 6), memo: sdk.CborMemo.fromString(cls ? `kuasa capital:${cls}` : 'kuasa capital') },
+  { recipient: sdk.AccountAddress.fromBase58(info.treasury), amount: sdk.TokenAmount.create(BigInt(dep) * 1_000_000n, 6), memo: sdk.CborMemo.fromString(cls ? `kuasa capital:${cls === 'JR' ? 'junior' : cls}` : 'kuasa capital') },
   sdk.buildBasicAccountSigner(lp.key), undefined, { autoScale: false, validate: true });
 await grpc.waitForTransactionFinalization(hash);
 const tx = sdk.TransactionHash.toHexString(hash);
