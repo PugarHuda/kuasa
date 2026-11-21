@@ -659,8 +659,9 @@ export class InsurerService {
     try {
       d = await this.decide(claimId, yes >= need);
     } catch (e) {
-      if (!rec.verdict) { rec.decidedBy = undefined; throw e; } // not decided: the panel can retry (no stakes moved)
-      rec.panelSettlement ??= this.settlePanel(rec.panel, yes >= need); // the verdict stands even if the payout failed
+      // settle only when the panel's own verdict stands (its payout failed); a verdict from elsewhere, or none, moves no stakes
+      if (rec.verdict !== (yes >= need ? 'approved' : 'rejected')) { rec.decidedBy = undefined; throw e; }
+      rec.panelSettlement ??= this.settlePanel(rec.panel, yes >= need);
       this.save();
       throw e;
     }
