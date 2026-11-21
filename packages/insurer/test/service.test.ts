@@ -84,6 +84,20 @@ test('quote refuses revoked mandates and limits above the mandate budget', async
   assert.ok('refused' in await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30 }));
 });
 
+test('underwriting capacity: no quote that leaves live limits unbacked by the pool (re-checked at purchase)', async () => {
+  let cap = { pool: 200n * EUR, exposure: 120n * EUR };
+  const t = harness({ capacity: async () => cap });
+  assert.match((await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30 }) as { refused: string }).refused, /no underwriting capacity/);
+  const ok = await t.svc.quote({ mandateUrl: 'x', limit: 80n * EUR, days: 30 }); // exactly backed
+  assert.ok(!('refused' in ok));
+  const order = await t.svc.quote({ mandateUrl: 'x', limit: 0n, days: 1, order: { ref: h(3), amount: 81n * EUR } });
+  assert.match((order as { refused: string }).refused, /no underwriting capacity/);
+  cap = { pool: 200n * EUR, exposure: 150n * EUR }; // another policy sold meanwhile
+  assert.match((await t.svc.checkPurchase((ok as { quoteId: string }).quoteId, PAYER, (ok as { premium: bigint }).premium))!, /no underwriting capacity/);
+  const down = harness({ capacity: async () => { throw new Error('rpc'); } });
+  assert.match((await down.svc.quote({ mandateUrl: 'x', limit: 10n * EUR, days: 30 }) as { refused: string }).refused, /capacity unavailable/);
+});
+
 test('no second period policy while one is live (re-checked at purchase); order cover still sold', async () => {
   let live: bigint | null = null;
   const t = harness({ coverOf: async () => ({ periodRemaining: live === null ? 0n : 100n * EUR, policyId: live }) });
@@ -869,6 +883,28 @@ test('appeals panel: independent jurors vote; a majority decides the appeal like
   const r = await t.svc.panelVote(1n, J3, true); // 3 of 4 jurors needed: J1, J3 yes ... not yet
   assert.equal(r.decided, false);
   assert.deepEqual(t.svc.openAppeals().map((a) => a.claimId), [1n]);
+});
+
+test('staked panel: jurors need capital in the pool; jurors against the verdict pay those with it; stakes locked while voting', async () => {
+  const [J1, J2, J3, J4, J5] = [addr(31), addr(32), addr(33), addr(34), addr(35)];
+  const stakes = new Map([[J1, 10n * EUR], [J2, 10n * EUR], [J3, 10n * EUR], [J4, 10n * EUR], [J5, 2n * EUR]]);
+  const settled: { from: string; to: string; amount: bigint }[][] = [];
+  const t = harness({ jurors: [J1, J2, J3, J4, J5], jurorStake: (j) => stakes.get(j) ?? 0n, jurorMinStake: 5n * EUR, jurorPenalty: EUR, settlePanel: (m) => settled.push(m) });
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, false);
+  const ev = await wrongItemEvidence(h(10));
+  t.claims.set(1n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: ev.hash, orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(1n, ['r0'], ev.doc);
+  await assert.rejects(t.svc.panelVote(1n, J5, true), /at least 5000000 of capital staked/);
+  await t.svc.panelVote(1n, J1, true);
+  await t.svc.panelVote(1n, J2, false);
+  assert.equal(t.svc.jurorBusy(J2), true);
+  await t.svc.panelVote(1n, J3, true);
+  const r = await t.svc.panelVote(1n, J4, true); // 3 of 5: approved
+  assert.equal(r.decided, true);
+  assert.deepEqual(settled, [[{ from: J2, to: J1, amount: 333_334n }, { from: J2, to: J3, amount: 333_333n }, { from: J2, to: J4, amount: 333_333n }]]);
+  assert.equal(t.svc.jurorBusy(J2), false);
+  assert.equal(t.svc.state().claims.find((c) => c.claimId === 1n)!.panelSettlement!.length, 3);
 });
 
 test('appeals panel: a majority approves and the appeal is paid', async () => {

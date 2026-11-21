@@ -26,6 +26,7 @@
   .scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 720px; }
   th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th.n { text-align: right; }
   td { padding: 8px 10px; border-bottom: 1px solid var(--line); } td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
   .agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
@@ -41,6 +42,16 @@
   .stack span { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; min-width: 22px; }
   .stack span:first-child { border-radius: 4px 0 0 4px; } .stack span:last-child { border-radius: 0 4px 4px 0; }
   .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .timeline { list-style: none; padding: 0; margin: 12px 0 0 6px; border-left: 2px solid var(--line); }
+  .timeline li { position: relative; padding: 0 0 14px 18px; margin: 0; }
+  .timeline li::before { content: ""; position: absolute; left: -7px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--s1); }
+  .timeline li.off::before { background: var(--line); }
+  .timeline b { display: block; font-size: 14px; } .timeline span.d { color: var(--muted); font-size: 14px; }
+  .calc { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 16px; }
+  .calc label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .calc label.chk { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
+  .calc input[type=number], .calc select, select#claim-pick { font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); max-width: 100%; }
+  .premium { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 16px 0 4px; }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
 </style>
 </head>
@@ -84,6 +95,38 @@
     <h2>Claims</h2>
     <div class="panel chart" id="claims-chart" style="margin:0 0 12px" aria-label="Claims by outcome"></div>
     <div class="panel scroll"><table><thead><tr><th>Claim</th><th>Policy</th><th>Kind</th><th>Filed by</th><th>Amount</th><th>Payout</th><th>Payout tx</th><th>Decided by</th><th>Merchant attests</th><th>Status</th></tr></thead><tbody id="claims"></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>Claim timeline</h2>
+    <div class="panel">
+      <label class="muted" for="claim-pick">Claim </label><select id="claim-pick"><option>Reading testnet…</option></select>
+      <ol class="timeline" id="timeline"></ol>
+    </div>
+  </section>
+
+  <section>
+    <h2>Premium calculator</h2>
+    <div class="panel">
+      <p class="muted" style="margin:0 0 12px">The insurer's own pricing function (<span class="mono">quote()</span> from <span class="mono">@kuasa/cover</span>), running in your browser. Change the inputs to see each factor.</p>
+      <form class="calc" id="calc" onsubmit="return false">
+        <label>Cover limit (EUDemo)<input type="number" name="limit" value="50" min="1" step="1"></label>
+        <label>Days<input type="number" name="days" value="30" min="1" max="365" step="1"></label>
+        <label>Mandate max per order (EUDemo)<input type="number" name="maxPerOrder" value="25" min="1" step="1"></label>
+        <label>Riskiest category<select name="category"><option>groceries</option><option>wine</option><option>vape</option></select></label>
+        <label>Incidents on the mandate<input type="number" name="incidents" value="0" min="0" step="1"></label>
+        <label>Paid claims on the agent<input type="number" name="paidClaims" value="0" min="0" step="1"></label>
+        <label>Receipts recorded<input type="number" name="receipts" value="0" min="0" step="1"></label>
+        <label>Orders in the last minutes<input type="number" name="recentOrders" value="0" min="0" step="1"></label>
+        <label class="chk"><input type="checkbox" name="merchants" checked> Merchant allowlist</label>
+        <label class="chk"><input type="checkbox" name="proven" checked> Age and residency proven (ZK)</label>
+        <label class="chk"><input type="checkbox" name="bonded"> Operator bond (10 CCD)</label>
+        <label class="chk"><input type="checkbox" name="business"> Business owner (LEI)</label>
+      </form>
+      <div class="premium" id="premium"></div>
+      <div class="scroll"><table style="min-width:0"><thead><tr><th>Factor</th><th class="n">x</th><th>Why</th></tr></thead><tbody id="factors"></tbody></table></div>
+      <p class="muted" id="order-premium" style="margin:12px 0 0"></p>
+    </div>
   </section>
 
   <section>

@@ -50,6 +50,11 @@ export type InsurerDeps = {
   /** Checks a merchant delivery note was signed by `signer` (the account that recorded the receipt). */
   verifyDelivery?(d: SignedDeliveryNote, signer: string): Promise<boolean>;
   treasuryBalance(): Promise<bigint>;
+  /**
+   * Underwriting capacity: the pool and the cover still owed on live policies (all cover contracts).
+   * A quote is refused when the new limit would leave live cover not fully backed by the pool.
+   */
+  capacity?(): Promise<{ pool: bigint; exposure: bigint }>;
   /** Claims already paid to this agent payer (on-chain), for experience rating. */
   paidClaims?(payer: string): Promise<number>;
   /** v3: the agent operator's CCD bond on the cover contract (null if none). */
@@ -78,6 +83,16 @@ export type InsurerDeps = {
   autoPayDelayMs?: number;
   /** Appeals panel (Kleros-style): independent juror accounts; a majority decides an appeal. */
   jurors?: string[];
+  /**
+   * Staked jurors (Nexus Mutual's assessors, Kleros coherence): a juror votes only with at least
+   * `jurorMinStake` of capital in the pool; when the panel decides, each juror who voted against the
+   * verdict forfeits `jurorPenalty` (at most its stake) to the jurors who voted with it.
+   */
+  jurorStake?(juror: string): bigint;
+  jurorMinStake?: bigint;
+  jurorPenalty?: bigint;
+  /** Moves capital between jurors' pool balances (the panel's settlement). */
+  settlePanel?(moves: { from: string; to: string; amount: bigint }[]): void;
   /** Share of the premium returned when a policy ends with no claim (basis points; unset = none). */
   givebackBps?: bigint;
 };
@@ -113,6 +128,8 @@ type ClaimRecord = {
   appealOf?: bigint;
   /** Appeals panel votes (juror account, verdict). */
   panel?: { by: string; approve: boolean; at: number }[];
+  /** Staked panel: capital moved from jurors who voted against the verdict to those who voted with it. */
+  panelSettlement?: { from: string; to: string; amount: bigint }[];
   /** Objections raised during the objection window (each holds the claim for a human). */
   objections?: { by: string; reason: string; at: number }[];
   /** Why an approved claim is not paid (e.g. insufficient pool); `final` when it never will be. */
@@ -240,6 +257,15 @@ export class InsurerService {
     if (!e || e.revoked || e.owner !== m.principal.account || e.payer !== m.agent.payer) return { refused: 'mandate not active on-chain' };
     if (Number(e.validUntilMs) < this.deps.now()) return { refused: 'mandate expired' };
     if (req.limit > e.maxTotal) return { refused: 'cover limit exceeds the mandate budget' };
+    if (this.deps.capacity) {
+      // Fully collateralised: every live limit is backed by the pool. Re-checked when the premium is paid
+      // (checkPurchase prices again). ponytail: two purchases settling in the same instant can both pass;
+      // reserve capacity per paying quote if that ever matters.
+      const c = await this.deps.capacity().catch(() => null);
+      if (!c) return { refused: 'underwriting capacity unavailable; try again' };
+      const want = req.order ? req.order.amount : req.limit;
+      if (c.exposure + want > c.pool) return { refused: `no underwriting capacity: the pool (${c.pool}) would not cover live limits (${c.exposure}) plus this one (${want}); capital providers can add capital` };
+    }
     if (!req.order && this.deps.coverOf) {
       // Issued policies only; checkPurchase also blocks a second period purchase in flight for the same payer.
       const v = await this.deps.coverOf(m.agent.payer).catch(() => null);
@@ -619,6 +645,8 @@ export class InsurerService {
     if ([rec.claimant, rec.holder, rec.recipient].includes(juror)) throw new Error('a party to the claim cannot judge it');
     rec.panel ??= [];
     if (rec.panel.some((v) => v.by === juror)) throw new Error('this juror already voted');
+    const min = this.deps.jurorMinStake ?? 0n;
+    if (this.deps.jurorStake && this.deps.jurorStake(juror) < min) throw new Error(`a juror needs at least ${min} of capital staked in the pool to vote`);
     rec.panel.push({ by: juror, approve, at: this.deps.now() });
     this.save();
     const need = Math.floor(jurors.length / 2) + 1;
@@ -626,8 +654,31 @@ export class InsurerService {
     const no = rec.panel.length - yes;
     if (yes < need && no < need) return { decided: false as const, yes, no, need };
     rec.decidedBy = 'panel';
+    rec.panelSettlement = this.settlePanel(rec.panel, yes >= need);
     const d = await this.decide(claimId, yes >= need);
-    return { ...d, by: 'panel' as const, approve: yes >= need, yes, no, need };
+    return { ...d, by: 'panel' as const, approve: yes >= need, yes, no, need, settlement: rec.panelSettlement };
+  }
+
+  /** Coherence: jurors against the verdict pay the penalty (capped by their stake), shared by the jurors with it. */
+  private settlePanel(votes: { by: string; approve: boolean }[], verdict: boolean) {
+    const penalty = this.deps.jurorPenalty ?? 0n;
+    const stake = this.deps.jurorStake;
+    const winners = votes.filter((v) => v.approve === verdict).map((v) => v.by);
+    if (penalty <= 0n || !stake || !this.deps.settlePanel || winners.length === 0) return [];
+    const moves: { from: string; to: string; amount: bigint }[] = [];
+    for (const l of votes.filter((v) => v.approve !== verdict)) {
+      const take = stake(l.by) < penalty ? stake(l.by) : penalty;
+      if (take <= 0n) continue;
+      const each = take / BigInt(winners.length);
+      winners.forEach((w, i) => moves.push({ from: l.by, to: w, amount: i === 0 ? take - each * BigInt(winners.length - 1) : each }));
+    }
+    if (moves.length) this.deps.settlePanel(moves);
+    return moves;
+  }
+
+  /** A juror with a vote on an undecided appeal: its stake stays in the pool until the appeal is decided. */
+  jurorBusy(account: string) {
+    return [...this.claims.values()].some((c) => c.appealOf !== undefined && !c.verdict && !c.paid && (c.panel ?? []).some((v) => v.by === account));
   }
 
   /** Appeals waiting for a decision, with the panel's votes so far. */

@@ -4,7 +4,7 @@
  * recomputed in the browser from the kuasa-cover contract and the pool account.
  */
 import { type Claim, type Policy } from '@kuasa/core';
-import { solvency } from '@kuasa/cover';
+import { quote, solvency } from '@kuasa/cover';
 import { attestationOf, COVER_V1, decisionOf, holdOf, POOL, poolBalance, scan } from './chain.js';
 
 const LABELS: Record<string, string> = {
@@ -82,8 +82,56 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
   $('claims-chart').innerHTML = decisions.length === 0 ? '<span class="muted">Reading claim decisions…</span>' : `<h3>Claims by outcome (${total})</h3>
     <div class="stack" role="img" aria-label="${cats.map((c) => `${c.label}: ${c.n}`).join(', ')}">${cats.filter((c) => c.n > 0).map((c) => `<span style="flex:${c.n};background:${c.color}" title="${c.label}: ${c.n}">${c.n}</span>`).join('')}</div>
     <div class="legend">${cats.map((c) => `<span><i style="background:${c.color}"></i>${c.label} (${c.n})</span>`).join('')}</div>`;
+  renderTimelines(claims, decisions, attests);
   $('updated').textContent = `Read from Concordium testnet at ${new Date().toLocaleTimeString()}`;
 }
+
+const OPERATOR = '4Tw9uzZZSQmbLytV8XqRYU5dCDyrhu8yWU2xwvXovaS54sTZzJ';
+const REASONS: Record<string, string> = { AM10: 'duplicate charge', AM20: 'outside the owner-signed intent', WI10: 'wrong item delivered', ML10: 'merchant loss' };
+/** One claim's life, from what the chain holds: filing, the shop's attestation, the decision, the payout. */
+function renderTimelines(claims: Claim[], decisions: (Awaited<ReturnType<typeof decisionOf>>)[], attests: (string | null)[]) {
+  const pick = $('claim-pick') as HTMLSelectElement;
+  const keep = pick.value;
+  pick.innerHTML = claims.map((c, i) => `<option value="${i}">Claim ${ref(claimRefs[i], i)}: ${esc(c.kind)}, ${eur(c.amount)} (${esc(c.status.tag)})</option>`).reverse().join('');
+  if (keep !== '' && Number(keep) < claims.length) pick.value = keep;
+  const draw = () => {
+    const i = Number(pick.value);
+    const c = claims[i], d = decisions[i], a = attests[i];
+    if (!c) return;
+    const decided = ['Approved', 'Rejected', 'Paid', 'Fraud'].includes(c.status.tag);
+    const step = (on: boolean, title: string, detail: string) => `<li class="${on ? '' : 'off'}"><b>${title}</b><span class="d">${detail}</span></li>`;
+    const why = d?.reason && REASONS[d.reason] ? ` · claimed as ${esc(REASONS[d.reason])}` : '';
+    $('timeline').innerHTML = [
+      step(true, c.claimant === OPERATOR ? 'Filed by the insurer for the agent (parametric)' : 'Filed', `${acct(c.claimant)} claimed ${eur(c.amount)} for ${c.orders.length} order(s); evidence hash <span class="mono">${esc(c.evidence.slice(0, 12))}…</span>`),
+      step(!!a, 'Shop attests', a ? attested(a) : 'no attestation from the shop'),
+      step(decided, 'Decided', d?.by ? `${decidedBy(d)} ${esc(d.verdict ?? '')}${why}` : decided ? statusPill(c.status.tag) : 'awaiting a decision (the objection window runs first)'),
+      step(c.status.tag === 'Paid', 'Paid', c.status.tag === 'Paid' ? `${eur(c.payout)} to the agent, tx ${tx((c.status as { payoutTx: string }).payoutTx)}` : c.status.tag === 'Rejected' || c.status.tag === 'Fraud' ? 'not paid' : '–'),
+    ].join('');
+  };
+  pick.onchange = draw;
+  draw();
+}
+
+/** Premium calculator: the insurer's quote() on the form's inputs. */
+function calc() {
+  const f = new FormData($('calc') as HTMLFormElement);
+  const n = (k: string) => Math.max(0, Math.floor(Number(f.get(k)) || 0));
+  const E = 1_000_000n;
+  const base = {
+    limit: BigInt(Math.max(1, n('limit'))) * E, days: Math.min(365, Math.max(1, n('days'))),
+    mandate: { maxPerOrder: BigInt(Math.max(1, n('maxPerOrder'))) * E, categories: [String(f.get('category'))], merchants: f.get('merchants') ? ['shop'] : undefined },
+    provenAgeAndResidency: !!f.get('proven'), ownerKind: (f.get('business') ? 'business' : 'person') as 'person' | 'business',
+    incidents: n('incidents'), receipts: n('receipts'), paidClaims: n('paidClaims'), bonded: !!f.get('bonded'), recentOrders: n('recentOrders'),
+  };
+  const q = quote(base);
+  if ('refused' in q) { $('premium').textContent = q.refused; $('factors').innerHTML = ''; return; }
+  $('premium').textContent = `${eur(q.premium)} for ${base.days} days`;
+  $('factors').innerHTML = q.factors.map((x) => `<tr><td>${esc(x.name)}</td><td class="n">×${x.multiplier}</td><td class="muted">${esc(x.reason)}</td></tr>`).join('');
+  const o = quote({ ...base, order: { amount: base.mandate.maxPerOrder } });
+  if (!('refused' in o)) $('order-premium').textContent = `One order of ${eur(base.mandate.maxPerOrder)} instead: ${eur(o.premium)} (${o.factors.map((x) => `${x.name} ×${x.multiplier}`).join(', ')}).`;
+}
+$('calc').addEventListener('input', calc);
+calc();
 
 async function load() {
   try {

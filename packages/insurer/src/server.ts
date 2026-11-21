@@ -156,6 +156,7 @@ const svc = new InsurerService({
   verifyAp2Owner: (intent, owner) => verifyAp2Intent(intent, owner, (a) => grpc.getAccountInfo(a)),
   verifyDelivery: (d, signer) => verifyDeliveryNote(d, signer, (a) => grpc.getAccountInfo(a)),
   treasuryBalance: () => eudemoBalance(treasury.address.address),
+  capacity: async () => { const s = await solvencyNow(); return { pool: s.pool - pendingOut(), exposure: s.exposure }; },
   ...(isV3 ? { bondOf: (payer: string) => cover.bondOf(payer) } : {}),
   paidClaims: async (payer) => {
     return paidClaimsOf(payer);
@@ -164,6 +165,15 @@ const svc = new InsurerService({
   autoPayLimit: AUTO_PAY_LIMIT, // smaller claims pay after the objection window (enforced by a v2 contract)
   // appeals panel: independent juror accounts (KUASA_JURORS, comma-separated)
   jurors: (process.env.KUASA_JURORS ?? '').split(',').map((x) => x.trim()).filter(Boolean),
+  // staked jurors: capital in the pool is the stake; jurors against the verdict pay the jurors with it
+  jurorStake: (juror) => capital.balances().find((b) => b.provider === juror)?.balance ?? 0n,
+  jurorMinStake: BigInt(process.env.KUASA_JUROR_MIN_STAKE ?? 5_000_000),
+  jurorPenalty: BigInt(process.env.KUASA_JUROR_PENALTY ?? 1_000_000),
+  settlePanel: (moves) => {
+    for (const m of moves) { capital.adjust(m.from, -m.amount); capital.adjust(m.to, m.amount); }
+    saveCapital();
+    audit.append({ kind: 'panel-settlement', moves: moves.map((m) => ({ ...m, amount: String(m.amount) })) });
+  },
   // giveback: share of the premium returned when a policy ends without a claim
   givebackBps: BigInt(process.env.KUASA_GIVEBACK_BPS ?? 1_000),
   autoPayDelayMs: AUTO_PAY_DELAY_MS,
@@ -568,6 +578,7 @@ app.post('/capital/withdraw', async (req, res) => {
   try {
     if (!(await verifyPayerProof({ header: (n) => req.header(n), payer: provider, audience: PUBLIC_URL, accountInfo: (a) => grpc.getAccountInfo(a) }))) return json(res, { error: 'provider proof required' }, 401);
     const amount = big(req.body?.amount);
+    if (svc.jurorBusy(provider)) return json(res, { error: 'this juror has a vote on an undecided appeal: its stake stays until the appeal is decided' }, 400);
     const paid = await serialCapital(async () => {
       reconcileCapital();
       const sv = await solvencyNow();
