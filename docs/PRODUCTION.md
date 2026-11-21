@@ -53,19 +53,21 @@ Kuasa Cover was built against interfaces, so each testnet stand-in has a named r
 6. Security review of both contracts and the guard. Bug bounty.
 7. Contract hardening deferred on testnet to keep the recorded evidence valid (enforced off-chain today by the assessor and service): distinct orders per duplicate claim, one policy per premium transaction, one claim per order across all policies of a mandate, `agent_token` checked against the mandate, and a bounded per-payer policy index.
 
-## 6. Next, adopted from elsewhere
+## 6. Adopted from elsewhere
 
-Ideas from other insurance, dispute and agent-trust systems, each with the Kuasa seam where it lands. None of them is needed for the testnet demo; all of them fit the existing design.
+Ideas from other insurance, dispute and agent-trust systems, built into Kuasa Cover. "Live" means it ran on testnet (see docs/TESTNET.md); "tested" means unit or contract tests only, because testnet time cannot reach it yet.
 
-| Idea | From | In Kuasa | Seam |
+| Idea | From | In Kuasa | Status |
 |---|---|---|---|
-| Bonded objections and assertions | UMA Optimistic Oracle | An objection posts a small EUDemo bond; a losing objection's bond goes to the pool. Ends free objections | `InsurerService.object`, `objectClaim` in kuasa-cover |
-| Decentralised appeal court | Kleros | Disputed appeals go to a juror pool instead of the insurer's own claims handler | `appealOf` on claim records |
-| Risk-specific staking | Nexus Mutual | Capital providers stake on a merchant category or an agent class, not one flat pool, and price that risk | `packages/insurer/src/capital.ts` |
-| Operator bonds and slashing | EigenLayer-style restaking | Agent operators post a bond that is cut when fraud is proven (`Fraud` status), on top of lawful disclosure | `markFraud` in kuasa-cover |
-| Portable reputation across chains | ERC-8004 Reputation Registry (Ethereum) | Claim outcomes of EVM-bound agents (CIS-8 key) posted as ERC-8004 feedback, so EVM merchants see them natively | `packages/explorer/src/evm.ts`, `verify-evm-agent` A2A skill |
-| Per-order risk scoring | Stripe Radar | The guard scores each order (velocity, basket, merchant) and prices per-order cover from it | `KuasaGuard.decide`, `RiskInput` |
-| Merchant-paid cover | "Free shipping" economics | The merchant pays the agent's per-order premium to win the sale; the policy still covers the agent | `checkPurchase` (premium payer), shop `/quote` |
-| Unused premium giveback | Lemonade | At policy end, an unused share of the premium is returned or donated | `refundCancelled` (pro-rata logic exists) |
+| Bonded objections | UMA Optimistic Oracle | `objectClaim` is payable: the objector locks 1 CCD; returned if the claim is rejected, forfeited to the pool if not | Live (contract v3) |
+| Operator bonds and slashing | EigenLayer-style restaking | `postBond` by the agent payer or a policy holder; slashed into the pool when a claim the agent side filed is marked fraud; locked until every policy of the agent is past its claims window; bonded agents get a 0.9 premium factor | Bond live; slashing tested |
+| Fully parametric claims | Etherisc | `fileClaimFor`: the insurer files the duplicate it detected for the agent and assesses it at once | Live |
+| Per-policy terms | – | `setTerms` stores a policy's auto-pay limit, window and the owner-signed AP2 intent hash; only stricter values apply; agents with incidents get half the automatic limit | Live |
+| Appeal panel | Kleros | Independent juror accounts (`KUASA_JURORS`, never a party to the claim) vote on appeals with a signed request; a majority decides like a human would. The demo panel is two testnet accounts; production uses a juror pool or a Kleros court | Tested (no appeal has been filed on v3 yet) |
+| Risk-specific staking | Nexus Mutual | Capital may back one class (`kuasa capital:AM|WI|ML`): first loss for that class, 1.5x premium weight | Live (the shop backs wrong items) |
+| Portable reputation | ERC-8004 Reputation Registry | `erc8004-feedback` A2A skill: claim outcomes as ERC-8004-shaped feedback with a pointer to the claim on Concordium. Posting on an Ethereum ERC-8004 registry needs the agent's ERC-8004 id and gas | Live (read-only) |
+| Per-order risk scoring | Stripe Radar | Order velocity from the insurer's on-chain watcher raises per-order premiums (x1.25 per order beyond two in the window, up to x2) | Tested |
+| Merchant-paid cover | "Free shipping" | The shop pays the per-order premium; only the sponsor may pay that quote, and refunds or givebacks go back to it | Live |
+| Premium giveback | Lemonade | 10% of the premium back when a policy ends with no claim | Tested (no v3 policy has ended yet) |
 
-Contract v3 candidates, deferred to keep the v2 evidence valid: the insurer may file a detected AM10 claim on the holder's behalf (fully parametric), per-policy auto-pay limit and objection window, and the hash of the owner-signed AP2 intent stored on the policy.
+Still open: posting ERC-8004 feedback on Ethereum, a real juror pool, per-policy terms chosen by the holder rather than the insurer, and moving forfeited bonds into the Protocol-Level Lock once the pool lives there.

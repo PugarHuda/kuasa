@@ -7719,7 +7719,7 @@ function solvency({ pool, now, policies, claims }) {
 
 // src/chain.ts
 var COVER_V1 = 13066n;
-var COVERS = [COVER_V1, 13100n];
+var COVERS = [COVER_V1, 13100n, 13105n];
 var CURRENT = COVERS[COVERS.length - 1];
 var POOL = "3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut";
 var grpc = new ConcordiumGRPCWebClient("https://grpc.testnet.concordium.com", 2e4);
@@ -7774,6 +7774,32 @@ async function coverOf(payer, cover = CURRENT) {
   return decodeCoverView(await viewCover("coverOf", encodeCoverQuery(payer), cover));
 }
 var REGISTRY = ContractAddress.create(12802n, 0n);
+
+// src/erc8004.ts
+var SCORE = {
+  AgentMistake: (c) => c.status.tag === "Paid" ? 60 : null,
+  WrongItem: () => null,
+  MerchantLoss: (c) => c.status.tag === "Paid" ? 30 : null
+};
+function feedbackFor(payer, books, now = Date.now()) {
+  const out = [];
+  for (const b of books) {
+    const contract = `<${b.cover},0>`;
+    b.policies.forEach((p, policyId) => {
+      if (p.agentPayer !== payer) return;
+      const claims = b.claims.map((c, id) => ({ c, id })).filter((x) => Number(x.c.policyId) === policyId);
+      for (const { c, id } of claims) {
+        const score = c.status.tag === "Fraud" ? 0 : SCORE[c.kind]?.(c);
+        if (score === null || score === void 0) continue;
+        out.push({ score, tag1: "kuasa-cover", tag2: c.status.tag === "Fraud" ? "fraud" : c.kind, createdAt: new Date(Number(p.validFromMs)).toISOString(), evidence: { network: "ccd:testnet", contract, claimId: String(id), policyId: String(policyId), status: c.status.tag } });
+      }
+      if (claims.length === 0 && Number(p.validUntilMs) < now && p.status === "Active") {
+        out.push({ score: 100, tag1: "kuasa-cover", tag2: "claim-free", createdAt: new Date(Number(p.validUntilMs)).toISOString(), evidence: { network: "ccd:testnet", contract, policyId: String(policyId), status: "Expired" } });
+      }
+    });
+  }
+  return out;
+}
 
 // ../../node_modules/.pnpm/viem@2.58.0_bufferutil@4.2._9ed11663e4866d25f8adc0bde90111ba/node_modules/viem/_esm/accounts/utils/publicKeyToAddress.js
 init_base();
@@ -7924,7 +7950,7 @@ async function verifyEvmAgent(d, now = Date.now()) {
     mcp("get_metadata", { network: "testnet", token_id: agent.token_id, key: "kuasa:cover" }).catch(() => null)
   ]);
   const policyId = coverMeta?.value_text?.match(/^policy=(\d+);/)?.[1];
-  const coverIdx = BigInt(coverMeta?.value_text?.match(/;cover=(d+)./)?.[1] ?? COVER_V1);
+  const coverIdx = BigInt(coverMeta?.value_text?.match(/;cover=(\d+)\./)?.[1] ?? COVER_V1);
   const found = policyId && COVERS.includes(coverIdx) ? decodePolicy(await viewCover("policy", encodeU64(BigInt(policyId)), coverIdx)) : null;
   const policy = found && coverBindsToAgent(found, agent) ? found : null;
   const cover = policy ? await coverOf(policy.agentPayer, coverIdx) : null;
@@ -7946,6 +7972,8 @@ var skills = {
   risk: async (d) => riskOf(String(d.payer ?? "")),
   // Cross-chain: an agent on an EVM chain proves its Ethereum key; we answer with its Concordium badge and cover.
   "verify-evm-agent": async (d) => verifyEvmAgent(d),
+  // Portable reputation: this agent's claim outcomes as ERC-8004 Reputation Registry feedback entries.
+  "erc8004-feedback": async (d) => ({ payer: String(d.payer ?? ""), standard: "ERC-8004 reputation feedback (score 0-100, tag1, tag2, evidence pointer)", feedback: feedbackFor(String(d.payer ?? ""), (await scan()).books) }),
   "cover-status": async (d) => ({ onChain: await coverOf(String(d.payer ?? "")) }),
   quote: async () => {
     throw new Error("quotes need the insurer service (payer proof, then x402 checkout); see github.com/PugarHuda/kuasa/blob/main/docs/INTEGRATIONS.md");

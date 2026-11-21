@@ -22,6 +22,8 @@ AI agents can pay on their own now. When one makes a mistake, nobody carries the
 
 **Evidence, not trust.** Claims carry chargeback-style reason codes. A wrong item is proven by the merchant's delivery note, signed by the same account that recorded the receipt on-chain. A purchase a prompt-injected agent made outside the owner's signed AP2 intent is covered as well.
 
+**The contract does more of the work (v3).** The insurer files a mistake it detected for the agent, and the contract pays it within its published rules, with nobody filing anything. Objections lock a CCD bond. Operators can bond their agents for a cheaper premium, and the bond is slashed into the pool if fraud is proven.
+
 **Prevention, not only payouts.** The insurer watches every finalized block. When an insured agent pays twice, it pauses that agent at every merchant guard until the owner resumes it, and the agent files the detected claim with one call. On testnet the shop refused the paused agent before any money moved, and the contract approved the automatic payout.
 
 **More integrations:**
@@ -40,7 +42,7 @@ https://github.com/PugarHuda/kuasa
 https://youtu.be/Tqe_CLniIl0
 
 ## Testnet link
-https://ccdexplorer.io/testnet/instance/13100/0 (kuasa-cover v2, automation rules on-chain; v1: https://ccdexplorer.io/testnet/instance/13066/0).
+https://ccdexplorer.io/testnet/instance/13105/0 (kuasa-cover v3; v2: https://ccdexplorer.io/testnet/instance/13100/0, v1: https://ccdexplorer.io/testnet/instance/13066/0).
 
 Every transaction is listed in https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md.
 

@@ -218,20 +218,24 @@ export class KuasaGuard {
     this.inFlight.set(key, { id: decision.mandateId!, owner: decision.owner!, payer, route, amount, orderRef, intent, coverHeld: c && !c.viaOrder ? amount : 0n });
   };
 
-  /** x402 `onSettleFailure`: release the reservation; no money moved, so the order reference is usable again. */
-  settleFailed = async (ctx: { paymentPayload: { payload: unknown } }) => {
-    const key = paymentKey(ctx.paymentPayload.payload).key;
+  private release(payload: unknown, restoreOrder: boolean) {
+    const key = paymentKey(payload).key;
     const f = this.inFlight.get(key);
-    if (f?.orderRef && f.intent && !this.orders.has(f.orderRef) && f.intent.expires > this.now()) this.orders.set(f.orderRef, f.intent);
+    if (restoreOrder && f?.orderRef && f.intent && !this.orders.has(f.orderRef) && f.intent.expires > this.now()) this.orders.set(f.orderRef, f.intent);
     this.inFlight.delete(key);
-  };
-  /** x402 `onVerifyFailure` (verification threw, e.g. the facilitator was unreachable): release. */
-  verifyFailed = this.settleFailed;
-  /** x402 `onVerifiedPaymentCanceled`: release. */
-  verifiedCanceled = this.settleFailed;
-  /** x402 `onAfterVerify`: release when the facilitator found the payment invalid. */
+  }
+  /**
+   * x402 `onSettleFailure`: release the reservation. The order reference stays used up: a settle
+   * failure can come after the transaction was broadcast, and one reference must back one payment.
+   */
+  settleFailed = async (ctx: { paymentPayload: { payload: unknown } }) => this.release(ctx.paymentPayload.payload, false);
+  /** x402 `onVerifyFailure` (verification threw, e.g. the facilitator was unreachable): nothing was broadcast, so the order reference is usable again. */
+  verifyFailed = async (ctx: { paymentPayload: { payload: unknown } }) => this.release(ctx.paymentPayload.payload, true);
+  /** x402 `onVerifiedPaymentCanceled`: canceled before settlement, so nothing was broadcast. */
+  verifiedCanceled = this.verifyFailed;
+  /** x402 `onAfterVerify`: release when the facilitator found the payment invalid (never broadcast). */
   afterVerify = async (ctx: { paymentPayload: { payload: unknown }; result: { isValid: boolean } }) => {
-    if (!ctx.result.isValid) await this.settleFailed(ctx);
+    if (!ctx.result.isValid) await this.verifyFailed(ctx);
   };
 
   /** x402 `onAfterSettle`: anchor the receipt and draw down the on-chain budget. */

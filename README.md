@@ -31,6 +31,8 @@ Kuasa Cover makes agent commerce insurable:
 - **AP2 interop.** An agent working under a user's Google AP2 Intent Mandate sends it with its quote. The insurer prices only if the Kuasa mandate sits inside it (merchants and expiry), and refuses otherwise.
 - **Claims backed by evidence, with chargeback-style reason codes.** `AM10` duplicate order, `AM20` outside the user's intent, `WI10` wrong item shipped, `ML10` merchant loss. The agent's evidence document travels with the filing, and only its sha256 goes on-chain as the claim's `evidence`, so it cannot be swapped later. For a wrong item, the shop signs a delivery note (ordered vs. shipped) with the same account that recorded the order's receipt on-chain, which ties the note to the chain.
 - **Cover against prompt injection (`AM20`).** The owner signs an AP2 Intent Mandate ("bread for the week"). Its SKUs become the policy's baseline only when the mandate's principal signed it. A purchase that is inside the Kuasa mandate but outside that intent (the agent was talked into buying wine) is covered. The goods were delivered, so a human decides.
+- **Contract v3: the chain does more of the work.** The insurer files the duplicates it detects for the agent (`fileClaimFor`), so a mistake is paid with nobody filing anything. Each policy can carry its own stricter terms and the hash of the owner-signed AP2 intent. Objections lock a CCD bond, and an agent's operator can bond the agent (slashed into the pool on proven fraud) for a cheaper premium.
+- **Ideas adopted from elsewhere, working:** a Kleros-style appeals panel of independent jurors, Nexus-style risk-class staking (a shop can stake first loss on its own wrong items), merchant-paid cover, an order-velocity factor in the style of Stripe Radar, Lemonade-style premium giveback, and claim outcomes as ERC-8004 reputation feedback on the public A2A endpoint. See [docs/PRODUCTION.md](docs/PRODUCTION.md#6-adopted-from-elsewhere).
 - **Parametric detection and a circuit breaker.** The insurer follows every finalized block. When an insured agent pays twice for the same thing, it records a detection the agent files with one call, and it publishes a purchase hold on its own CIS-8004 entry. Every merchant guard that honours it refuses the agent before money moves, until the owner resumes it. Insurance becomes prevention, not only compensation.
 - **Appeals and safer autonomy.** Re-filing the orders of a rejected claim is recognised as an appeal (`appeal_claim` MCP tool), and appeals are always decided by a human. Wrong-item and outside-intent claims are never paid automatically. Owners can sign their actions in their own wallet; the console only prepares them.
 - **Fraud has consequences, privacy has limits.** Claims with no on-chain evidence are rejected without a payout decision. Repeat offenders get a lawful-disclosure request, drafted automatically but anchored only after a human reviews it, for the Concordium identity provider / Privacy Guardians process. Nobody, insurer included, ever holds the person's identity data.
@@ -57,7 +59,7 @@ Escrow protects you from bad sellers (Concordium's Protocol-Enforced Escrow cove
 
 **Live explorer: [kuasa-explorer.vercel.app](https://kuasa-explorer.vercel.app).** It is a read-only page that reads policies, claims, the pool and proof of solvency straight from testnet in your browser over gRPC-web (no backend, no keys). Source: `packages/explorer`, built into `docs/explorer`.
 
-See **[docs/TESTNET.md](docs/TESTNET.md)**: contracts, accounts and every step of the flow with CCDExplorer links. In short: `kuasa-registry <13065,0>`, `kuasa-cover` v2 `<13100,0>` (automation rules on-chain; v1 `<13066,0>` kept for history), CIS-8004 `<12802,0>`.
+See **[docs/TESTNET.md](docs/TESTNET.md)**: contracts, accounts and every step of the flow with CCDExplorer links. In short: `kuasa-registry <13065,0>`, `kuasa-cover` v3 `<13105,0>` (v2 `<13100,0>` and v1 `<13066,0>` kept for history), CIS-8004 `<12802,0>`.
 
 ## Packages
 
@@ -101,6 +103,7 @@ node --import tsx src/cli.ts alice buy-covered /shop/wine/rioja   # per-order co
 node --import tsx src/cli.ts teen buy /shop/wine/rioja            # refused: age >= 18 not proven
 pnpm --filter @kuasa/scripts exec tsx fraud-demo.ts teen          # run twice: no-evidence claims -> disclosure draft
 pnpm --filter @kuasa/scripts exec tsx evidence-demo.ts            # WI10 delivery note, AM20 signed AP2 intent, AM10 detection + circuit breaker
+pnpm --filter @kuasa/scripts exec tsx v3-demo.ts                  # v3: terms, operator bond, insurer-filed claim, bonded objection, merchant-paid cover
 node --import tsx src/cli.ts alice claim-reason WI10 3 <paymentTx> # file with a reason code (AM20/WI10 attach the shop's signed delivery note)
 node --import tsx src/cli.ts alice detections                     # what the insurer spotted on-chain, and whether purchases are paused
 ```
@@ -126,7 +129,8 @@ See **[docs/PRODUCTION.md](docs/PRODUCTION.md)**. Kuasa Cover is built so the pi
 - **Testnet identities** were created headlessly on the self-service testnet identity provider with invented attributes. "Adult EU resident" proves the mechanism, not a real person.
 - **The pool is an account, not a lock.** Contracts cannot hold PLTs yet, so the treasury account holds EUDemo and the cover contract keeps the books and the authorisation (`claimsAuthorized`). Protocol-Level Locks are not live.
 - **Pricing is illustrative.** The risk engine is transparent rules, not actuarial data. Kuasa is not a licensed insurer; production needs a fronting carrier or MGA.
-- **Parametric, not fully automatic filing.** The insurer detects duplicates by itself, but the cover contract accepts a claim only when a party to the policy signs it, so the agent files the detection (one call). Letting the insurer file on the holder's behalf would need a contract change.
+- **Parametric filing needs v3.** On v2 the agent files a detected duplicate with one call; on v3 the insurer files it itself (`fileClaimFor`). Claims filed that way can never be used to slash the agent's bond.
+- **Capital ledger drift.** The capital providers' balances add up to about 9 EUDemo more than the pool holds (seen on 21 November); not yet traced. The pool itself and every payout are on-chain and correct.
 - **AP2 signature format.** AP2 leaves the user's authorisation format open; Kuasa's form is a Concordium account signature by the mandate's principal over the intent. The mis-pick is staged through a loopback-only demo endpoint on the shop.
 - **Disclosure is simulated.** The request document is real and anchored on the claim; the court / Privacy Guardians process is described, not executed.
 - **Demo keys.** The console holds the owners' testnet keys so it can revoke and publish cover status; in production the owner signs with their wallet. The shop, insurer and console bind to 127.0.0.1 (`HOST` overrides).
