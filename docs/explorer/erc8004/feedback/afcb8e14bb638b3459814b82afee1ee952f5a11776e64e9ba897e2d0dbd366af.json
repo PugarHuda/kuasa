@@ -1,0 +1,17 @@
+{
+  "agentRegistry": "eip155:11155111:0x8004A818BFB912233c491871b3d84c89A494BD9e",
+  "agentId": 11449,
+  "clientAddress": "eip155:11155111:0xC3D53e94e89f5763cf503c6928C09CcB8e7A4ece",
+  "createdAt": "2026-11-21T02:13:50.623Z",
+  "value": 60,
+  "tag1": "kuasa-cover",
+  "tag2": "AgentMistake",
+  "source": "Kuasa Cover claim outcome on Concordium testnet",
+  "evidence": {
+    "network": "ccd:testnet",
+    "contract": "<13100,0>",
+    "claimId": "6",
+    "policyId": "4",
+    "status": "Paid"
+  }
+}

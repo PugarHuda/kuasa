@@ -2,7 +2,8 @@
  * Portable reputation for EVM ecosystems: Kuasa Cover's claim outcomes for an agent, shaped as
  * ERC-8004 Reputation Registry feedback (score 0-100, two tags, a pointer to the evidence). Every
  * entry is recomputed from the Concordium cover contracts, so any reader can check it there.
- * Not posted to an Ethereum ERC-8004 registry from here: that needs the agent's ERC-8004 id and gas.
+ * scripts/erc8004-post.ts posts these entries to the official ERC-8004 Reputation Registry on Ethereum Sepolia
+ * (Alice's agent is ERC-8004 agentId 11449 there).
  */
 import type { Claim, Policy } from '@kuasa/core';
 
