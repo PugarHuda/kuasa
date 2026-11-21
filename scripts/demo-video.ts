@@ -16,10 +16,15 @@ const say = async (title: string, line: string) => { console.log(`\n=== ${title}
 type Q = { premium?: string; refused?: string; factors?: { name: string; multiplier: number }[] };
 const fmt = (q: Q) => q.refused ?? `${Number(q.premium) / 1e6} EUDemo  [${(q.factors ?? []).map((f) => `${f.name} x${f.multiplier}`).join(', ')}]`;
 
-await say('1. The insurance market', 'Bob\'s agent finds insurers on-chain (CIS-8004 directory, each entry owned by its pool) and keeps those its mandate allows.');
+await say('1. The insurance market', "Bob's agent finds insurers on-chain (the open registry kuasa-market <13110,0>: each one bonded) and keeps those its mandate allows.");
 const { agent: bob, market } = await KuasaAgent.fromDemoMarket('bob');
-for (const m of market) console.log(`   ${m.name}  <${m.cover},0>  pool ${m.pool.slice(0, 8)}…  price x${m.price / 10_000}`);
-for (const o of await bob.marketQuotes(5_000_000n, 30)) console.log(`   quote from ${o.at}: ${fmt(o.quote as Q)}`);
+for (const m of market) console.log(`   ${m.name}  <${m.cover},0>  price x${m.price / 10_000}  bond ${Number((m as { bond?: bigint }).bond ?? 0n) / 1e6} CCD`);
+const order = await bob.quote('/shop/wine/rioja') as { orderRef?: string; amount?: string };
+console.log(`   Bob's agent wants a 24 EUDemo bottle; the shop needs cover on the order. Quotes:`);
+for (const m of market) {
+  const q = await bob.coverQuote(0n, 1, { ref: order.orderRef!, amount: BigInt(order.amount!) }, undefined, false, m.url) as Q;
+  console.log(`   ${m.name}: ${fmt(q)}`);
+}
 
 await say('2. Portable reputation', 'Kuasa Re never insured Alice, but reads what other insurers reported about her agent on Ethereum\'s ERC-8004 registry.');
 const alice = KuasaAgent.fromDemo('alice');

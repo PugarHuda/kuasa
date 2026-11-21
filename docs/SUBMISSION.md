@@ -31,6 +31,12 @@ AI agents can pay on their own now. When one makes a mistake, nobody carries the
 - Agents on EVM chains are covered too. An Ethereum key bound through CIS-8 lets an EVM merchant verify an agent's badge and cover from a signature. AgentKit agents can do it with their own wallet.
 - Fraud has consequences: a lawful-disclosure request for the identity provider and Privacy Guardians, anchored only after human review.
 
+**A market, not a single insurer.** Insurers join an open registry contract (kuasa-market) with a CCD bond that an arbiter can slash to pay a claimant. Two insurers are live. An agent finds them on-chain, keeps only those its owner's mandate names, and buys the cheapest cover. A limit no insurer can carry alone is split across their free capacity: Bob's 90 EUDemo went 80.36 to Kuasa Re and 9.64 to Kuasa Cover. Each insurer pays only what the others have not paid of the verified loss, so one loss is paid once.
+
+**Reputation that travels between chains.** Every paid claim is posted to the agent's ERC-8004 reputation on Ethereum Sepolia by the insurer itself (Alice's agent is agentId 11449). Another insurer reads that reputation back to price cover, with a two-way identity binding and trusted peers only: Kuasa Re charged Alice ×1.17 without ever having insured her.
+
+**Owners set the rules.** An owner can sign a rule such as "pause my agent above 5 EUDemo an hour", and the insurer enforces it through the same circuit breaker every shop honours. On testnet, Bob's agent was paused after a 24 EUDemo bottle and the shop refused its next purchase.
+
 **Both sides of the market.** A merchant harmed by an insured agent claims on that agent's cover; this was paid automatically on testnet. Cancelled policies get the unused premium back pro rata.
 
 Escrow protects you from bad sellers. Kuasa Cover protects you from your agent.
@@ -42,9 +48,9 @@ https://github.com/PugarHuda/kuasa
 https://youtu.be/Tqe_CLniIl0
 
 ## Testnet link
-https://ccdexplorer.io/testnet/instance/13105/0 (kuasa-cover v3; v2: https://ccdexplorer.io/testnet/instance/13100/0, v1: https://ccdexplorer.io/testnet/instance/13066/0).
+https://ccdexplorer.io/testnet/instance/13105/0 (kuasa-cover v3; v2: https://ccdexplorer.io/testnet/instance/13100/0, v1: https://ccdexplorer.io/testnet/instance/13066/0). Second insurer Kuasa Re: https://ccdexplorer.io/testnet/instance/13108/0. Open insurer registry kuasa-market: https://ccdexplorer.io/testnet/instance/13110/0.
 
-Every transaction is listed in https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md.
+Every live step with its transactions, newest first: https://kuasa-explorer.vercel.app/evidence.html (source: https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md).
 
 ## Which Concordium components does your project use?
 - **Concordium ID and Verify & Access (V1):** ZK proof of 18+ and EU residency, bound to the agent.
@@ -55,15 +61,15 @@ Every transaction is listed in https://github.com/PugarHuda/kuasa/blob/main/docs
 - **x402:** purchases and premiums, with in-process facilitators.
 - **Sponsored transactions:** purchases and claim filings.
 - **Protocol-Level Token EUDemo:** allow-listed; prices, premiums and payouts.
-- **Smart contracts:** `kuasa-registry` and `kuasa-cover`, with cross-contract checks.
+- **Smart contracts:** `kuasa-registry`, `kuasa-cover` (two insurers run their own instance) and `kuasa-market` (open, bonded insurer registry), with cross-contract checks.
 - **registerData:** EU AI Act Art. 12 audit anchors.
 - **Privacy Guardians:** the disclosure process.
-- **MCP and A2A.**
+- **MCP and A2A**, and ERC-8004 on Ethereum Sepolia for portable reputation.
 
 ## Your path to mainnet
 See https://github.com/PugarHuda/kuasa/blob/main/docs/PRODUCTION.md.
 
-1. **Capital:** the pool moves into a Protocol-Level Lock (Enhanced), released only by the cover contract's `claimsAuthorized`.
+1. **Capital:** the pool moves into a Protocol-Level Lock (Enhanced), released only by the cover contract's `claimsAuthorized` (as of protocol 9 only accounts hold PLTs, so today each pool is an account with an audited ledger).
 2. **Underwriting inputs:** Agent IDP credentials replace the owner's mandate proof. KYCaaS, AML and liveness results become pricing factors.
 3. **Settlement asset:** EURQ replaces EUDemo.
 4. **Regulated risk carrier:** a fronting insurer carries the regulated risk, and Kuasa acts as the MGA and claims infrastructure.
@@ -74,6 +80,7 @@ See https://github.com/PugarHuda/kuasa/blob/main/docs/PRODUCTION.md.
 https://kuasa-explorer.vercel.app/slides
 
 ## Live demo
-- Explorer: https://kuasa-explorer.vercel.app
+- Explorer: https://kuasa-explorer.vercel.app (market table, claim timelines, premium calculator)
+- Evidence tour: https://kuasa-explorer.vercel.app/evidence.html
 - Public A2A: https://kuasa-explorer.vercel.app/a2a
 - Agent Cards: https://pugarhuda.github.io/kuasa/agents/insurer.json
