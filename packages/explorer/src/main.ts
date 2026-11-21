@@ -5,7 +5,7 @@
  */
 import { type Claim, type Policy } from '@kuasa/core';
 import { quote, solvency } from '@kuasa/cover';
-import { attestationOf, COVER_V1, coverOf, decisionOf, holdOf, POOL, poolBalance, scan } from './chain.js';
+import { attestationOf, COVER_V1, coverOf, CURRENT, decisionOf, holdOf, MARKET, POOL, poolBalance, scan } from './chain.js';
 
 const LABELS: Record<string, string> = {
   '4WmdhhLRPTk92STxiaXQFFNyJFLaM6k5kRq1ryFN8xjho1aq3s': 'Alice (owner)',
@@ -14,6 +14,8 @@ const LABELS: Record<string, string> = {
   '4Gw69UEYtxxE1EroXsp3AwAZWa38cKCuQZCgs9HYLc1Xys4oqg': "Teen's agent",
   '34BwTuaAu2EsgHNj3Us9TrYUNbKGo6Wnh3ixxUSanrca7KrPKv': 'Demo shop',
   [POOL]: 'Kuasa Cover pool',
+  '3QLQkD8ZK4NDKEgQmxrwXkESkw3wwztrtF1sjjbYkGpHEsFcLo': 'Kuasa Re pool',
+  '3EPeVYehgVZWPUCxtKSFtyKgUGKvqknxAjsECQbdve5CcbL1iC': 'Kuasa Re operator',
   '4Tw9uzZZSQmbLytV8XqRYU5dCDyrhu8yWU2xwvXovaS54sTZzJ': 'Kuasa Cover operator',
   '4HeXqTdciL1dVAaNZ6kiVRAH3syJcDnFtqLM3z3phWbAq32UNp': 'Demo shop (recorder)',
 };
@@ -44,7 +46,12 @@ function statusPill(tag: string) {
 
 type Ref = { cover: bigint; id: number };
 /** Row label: v1 ids are shown as before, later books carry their contract index. */
-const ref = (r: Ref | undefined, i: number) => (!r ? `#${i}` : r.cover === COVER_V1 ? `v1 #${r.id}` : `#${r.id}`);
+const ref = (r: Ref | undefined, i: number) => {
+  if (!r) return `#${i}`;
+  if (r.cover === COVER_V1) return `v1 #${r.id}`;
+  const m = MARKET.find((x) => x.cover === r.cover);
+  return m ? `${m.name.replace('Kuasa ', '')} #${r.id}` : `#${r.id}`;
+};
 let policyRefs: Ref[] = [], claimRefs: Ref[] = [];
 function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (Awaited<ReturnType<typeof decisionOf>>)[] = [], attests: (string | null)[] = []) {
   const now = Date.now();
@@ -177,7 +184,9 @@ async function badge(payer: string) {
   document.body.innerHTML = `<a id="b" class="pill warn" style="margin:8px;display:inline-block" href="https://kuasa-explorer.vercel.app/" target="_blank" rel="noopener">Kuasa Cover: checking…</a>`;
   const b = document.getElementById('b')!;
   try {
-    const [v, h] = await Promise.all([coverOf(payer), holdOf(payer).catch(() => null)]);
+    // every insurer on the market: period cover adds up, as the shop counts it
+    const [views, h] = await Promise.all([Promise.all([CURRENT, ...MARKET.map((m) => m.cover)].map((c) => coverOf(payer, c))), holdOf(payer).catch(() => null)]);
+    const v = { policyId: views.find((x) => x.policyId !== null)?.policyId ?? null, periodRemaining: views.reduce((a, x) => a + x.periodRemaining, 0n) };
     const live = v.policyId !== null && v.periodRemaining > 0n;
     b.className = `pill ${h ? 'bad' : live ? 'ok' : 'warn'}`;
     b.textContent = h ? 'Kuasa Cover: agent paused by the insurer' : live ? `Insured by Kuasa Cover · ${eur(v.periodRemaining)} of cover left` : 'Not insured by Kuasa Cover';

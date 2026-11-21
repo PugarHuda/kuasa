@@ -7729,8 +7729,9 @@ function solvency({ pool, now, policies, claims }) {
 
 // src/chain.ts
 var COVER_V1 = 13066n;
-var COVERS = [COVER_V1, 13100n, 13105n];
-var CURRENT = COVERS[COVERS.length - 1];
+var MARKET = [{ name: "Kuasa Re", cover: 13108n, pool: "3QLQkD8ZK4NDKEgQmxrwXkESkw3wwztrtF1sjjbYkGpHEsFcLo" }];
+var COVERS = [COVER_V1, 13100n, 13105n, ...MARKET.map((m) => m.cover)];
+var CURRENT = 13105n;
 var POOL = "3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut";
 var grpc = new ConcordiumGRPCWebClient("https://grpc.testnet.concordium.com", 2e4);
 async function viewCover(method, param, cover = CURRENT) {
@@ -7764,10 +7765,14 @@ async function scan() {
     claimRefs: books.flatMap((b) => b.claims.map((_, id) => ({ cover: b.cover, id })))
   };
 }
-async function poolBalance() {
-  const info = await grpc.getAccountInfo(AccountAddress2.fromBase58(POOL));
+async function eudemoOf(account) {
+  const info = await grpc.getAccountInfo(AccountAddress2.fromBase58(account));
   const t = info.accountTokens?.find((x) => String(x.id) === "EUDemo");
   return t ? BigInt(t.state.balance.value) : 0n;
+}
+async function poolBalance() {
+  const all2 = await Promise.all([POOL, ...MARKET.map((m) => m.pool)].map(eudemoOf));
+  return all2.reduce((a, b) => a + b, 0n);
 }
 async function solvencyNow(s) {
   const { policies, claims } = s ?? await scan();

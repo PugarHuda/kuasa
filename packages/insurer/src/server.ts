@@ -35,8 +35,16 @@ const SHOP_ORIGIN = process.env.KUASA_SHOP_URL ?? 'http://localhost:4021';
 const ASSET = process.env.KUASA_ASSET ?? 'EUDemo';
 const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover: string; coverV1?: string; coverV2?: string; insurerAgent?: string };
 // Serve an older book (e.g. to decide a claim left on v2 after the switch to v3): KUASA_COVER_INDEX + KUASA_STATE_FILE.
+const fileCover = state.cover; // the first insurer's book, whoever runs this process
 if (process.env.KUASA_COVER_INDEX) state.cover = process.env.KUASA_COVER_INDEX;
-const accounts = JSON.parse(readFileSync(new URL('accounts/insurer.json', ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
+/**
+ * Market: another insurer runs this same service with its own profile (accounts/<profile>.json: #0 pool,
+ * #1 operator), its own cover instance (KUASA_COVER_INDEX) and its own state and capital files. It reads
+ * only its own book and does not write to the first insurer's CIS-8004 entry.
+ */
+const PROFILE = process.env.KUASA_PROFILE ?? 'insurer';
+if (PROFILE !== 'insurer') { state.coverV1 = undefined; state.coverV2 = undefined; state.insurerAgent = undefined; }
+const accounts = JSON.parse(readFileSync(new URL(`accounts/${PROFILE}.json`, ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const treasuryAcc = accounts.find((a) => a.credNumber === 0)!;
 const operatorAcc = accounts.find((a) => a.credNumber === 1)!;
 const treasury = wallet(treasuryAcc.address, treasuryAcc.key);
@@ -52,10 +60,12 @@ async function treasuryPay(to: string, amount: bigint, memo: string) {
 /** Outcome of a submitted transfer: success, failed, or pending when finality is not confirmed within 30 s. */
 async function txOutcomeOf(hash: string): Promise<'success' | 'failed' | 'pending'> {
   const tx = sdk.TransactionHash.fromHexString(hash);
-  const done = await Promise.race([grpc.waitForTransactionFinalization(tx).then(() => true), new Promise<false>((r) => setTimeout(() => r(false), 30_000))]).catch(() => false);
+  // the waiter keeps polling after the timeout wins the race: it must handle its own failure (a node error
+  // there, e.g. HTTP 429, was an unhandled rejection that stopped the whole service)
+  const done = await Promise.race([grpc.waitForTransactionFinalization(tx).then(() => true, () => false), new Promise<false>((r) => setTimeout(() => r(false), 30_000))]);
   if (!done) return 'pending';
-  const st = await grpc.getBlockItemStatus(tx);
-  if (st.status !== 'finalized' || !st.outcome) return 'pending';
+  const st = await grpc.getBlockItemStatus(tx).catch(() => null);
+  if (!st || st.status !== 'finalized' || !st.outcome) return 'pending';
   return (st.outcome.summary as { transactionType?: string }).transactionType === 'failed' ? 'failed' : 'success';
 }
 const toJsonBig = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? { $big: x.toString() } : x));
@@ -176,6 +186,21 @@ const svc = new InsurerService({
   },
   // giveback: share of the premium returned when a policy ends without a claim
   givebackBps: BigInt(process.env.KUASA_GIVEBACK_BPS ?? 1_000),
+  // market: this insurer's own pricing on top of the shared risk model (basis points; 10000 = as modelled)
+  priceBps: BigInt(process.env.KUASA_PRICE_BPS ?? 10_000),
+  otherInsurersOrders: async () => {
+    const others = [fileCover, ...((state as { market?: { cover: string }[] }).market ?? []).map((m) => m.cover)].filter((c) => BigInt(c) !== coverIndex);
+    const orders: string[] = [];
+    for (const c of others) {
+      const book = new KuasaCover(grpc, BigInt(c));
+      for (let id = 0n; id < 10_000n; id++) {
+        const cl = await book.claim(id);
+        if (!cl) break;
+        if (cl.status.tag === 'Paid' || cl.status.tag === 'Approved') orders.push(...cl.orders);
+      }
+    }
+    return orders;
+  },
   autoPayDelayMs: AUTO_PAY_DELAY_MS,
   pay: (to, amount, memo) => treasuryPay(to, amount, memo), // submitted; txOutcome confirms it
   txOutcome: (hash) => txOutcomeOf(hash),
@@ -436,7 +461,8 @@ app.get('/solvency', async (_req, res) => {
  * Capital providers. The ledger is kept next to the insurer state; premiums, payouts and refunds are
  * reconciled into it every 15 s. Deposits are plain EUDemo transfers into the pool, verified on-chain.
  */
-const CAPITAL_FILE = new URL('capital.json', ROOT);
+const CAPITAL_NAME = process.env.KUASA_CAPITAL_FILE ?? 'capital.json';
+const CAPITAL_FILE = new URL(CAPITAL_NAME, ROOT);
 const capitalSnap = existsSync(CAPITAL_FILE) ? fromJsonBig(readFileSync(CAPITAL_FILE, 'utf8')) as { ledger: ReturnType<CapitalLedger['snapshot']>; pending?: { provider: string; amount: bigint; tx: string }[]; seen?: string[]; adjustments?: { at: string; amount: bigint; reason: string }[] } : undefined;
 /** Withdrawals submitted but not yet final (persisted; re-checked on startup). */
 const pendingWithdrawals: { provider: string; amount: bigint; tx: string }[] = capitalSnap?.pending ?? [];
@@ -466,7 +492,7 @@ function poolEvents() {
     ...st.policies.filter((p) => p.giveback?.tx).map((p) => ({ id: `giveback:${p.giveback!.tx}`, book: () => capital.onPayout(p.giveback!.amount) })),
   ];
 }
-const saveCapital = () => { const tmp = new URL('capital.json.tmp', ROOT); writeFileSync(tmp, toJsonBig({ ledger: capital.snapshot(), seen: [...seenEvents], adjustments, pending: pendingWithdrawals })); renameSync(tmp, CAPITAL_FILE); };
+const saveCapital = () => { const tmp = new URL(`${CAPITAL_NAME}.tmp`, ROOT); writeFileSync(tmp, toJsonBig({ ledger: capital.snapshot(), seen: [...seenEvents], adjustments, pending: pendingWithdrawals })); renameSync(tmp, CAPITAL_FILE); };
 function reconcileCapital() {
   for (const e of poolEvents()) {
     if (seenEvents.has(e.id)) continue;
@@ -694,7 +720,9 @@ async function watchBlocks() {
     watching = false;
   }
 }
-setInterval(() => { void watchBlocks(); }, 4_000);
+// one public node serves every insurer on the market: a second insurer can watch less often (KUASA_WATCH_MS; 0 = off)
+const WATCH_MS = Number(process.env.KUASA_WATCH_MS ?? 4_000);
+if (WATCH_MS > 0) setInterval(() => { void watchBlocks(); }, WATCH_MS);
 
 setInterval(() => { void svc.retryUnissued(); }, 60_000);
 setInterval(() => { void svc.givebackExpired().catch((e) => console.error('[insurer] giveback failed', (e as Error).message)); }, 300_000);

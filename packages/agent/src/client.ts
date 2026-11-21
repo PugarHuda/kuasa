@@ -54,7 +54,8 @@ export class KuasaAgent {
    * start-up and never fetched from a counterparty. Payments outside it are never signed.
    */
   private trustedShop?: { payTo: string; at: number };
-  private insurerTreasury?: string;
+  /** Each insurer's pool account, read from its /info (by origin). */
+  private insurerTreasury = new Map<string, string>();
   /** The payee verified for the payment currently being made (calls are sequential). */
   private expectPayTo?: string;
   /** When paying a quote, the exact amount quoted. */
@@ -63,6 +64,8 @@ export class KuasaAgent {
   private payQueue: Promise<unknown> = Promise.resolve();
   constructor(readonly opts: {
     shopUrl: string; insurerUrl?: string; mandateUrl: string; payer: string; payerKey: string; scope: Scope;
+    /** Market: further insurers this agent may buy cover from (the mandate must also list their pool accounts). */
+    insurers?: string[];
     /** CIS-8004 registry used to check the shop before paying it (two-way trust). */
     agents?: AgentRegistry;
     fetchJson?: (url: string) => Promise<unknown>;
@@ -80,10 +83,13 @@ export class KuasaAgent {
     const root = new URL('../../../.kuasa/', import.meta.url);
     const acc = JSON.parse(readFileSync(new URL(`accounts/${name}.json`, root), 'utf8')).accounts.find((a: { credNumber: number }) => a.credNumber === 1);
     const { scope } = JSON.parse(readFileSync(new URL(`public/mandate/${name}.json`, root), 'utf8')); // owner's local copy
-    return new KuasaAgent({ shopUrl, insurerUrl, mandateUrl: `${shopUrl}/kuasa/mandate/${name}.json`, payer: acc.address, payerKey: acc.key, scope, agents: new Cis8004Registry(connect()) });
+    // market: the other insurers set up on this testnet (state.market), if any
+    const market = (JSON.parse(readFileSync(new URL('state.json', root), 'utf8')) as { market?: { url: string }[] }).market ?? [];
+    return new KuasaAgent({ shopUrl, insurerUrl, mandateUrl: `${shopUrl}/kuasa/mandate/${name}.json`, payer: acc.address, payerKey: acc.key, scope, agents: new Cis8004Registry(connect()), insurers: market.map((m) => m.url) });
   }
 
   private get insurerUrl() { return this.opts.insurerUrl ?? 'http://localhost:4023'; }
+  private get insurerUrls() { return [this.insurerUrl, ...(this.opts.insurers ?? [])]; }
 
   /** Never trust a 402: payee must be the verified counterparty; amount, asset and network must fit the mandate. */
   private withinMandate(r: PayReq) {
@@ -129,9 +135,12 @@ export class KuasaAgent {
         if (why) return { ok: false, reasons: [why] };
       }
       this.expectPayTo = this.trustedShop!.payTo;
-    } else if (url.origin === new URL(this.insurerUrl).origin) {
-      this.insurerTreasury ??= ((await this.fetchJson(new URL('/info', this.insurerUrl).toString())) as { treasury?: string }).treasury;
-      this.expectPayTo = this.insurerTreasury;
+    } else if (this.insurerUrls.some((u) => new URL(u).origin === url.origin)) {
+      if (!this.insurerTreasury.has(url.origin)) {
+        const t = ((await this.fetchJson(new URL('/info', url.origin).toString())) as { treasury?: string }).treasury;
+        if (t) this.insurerTreasury.set(url.origin, t);
+      }
+      this.expectPayTo = this.insurerTreasury.get(url.origin);
     } else {
       return { ok: false, reasons: ['refusing to pay outside the configured shop and insurer'] };
     }
@@ -190,8 +199,8 @@ export class KuasaAgent {
 
   /** ap2: the user's AP2 Intent Mandate, if this agent works under one (the insurer checks the mandate sits inside it). */
   /** sponsor: this client's payer pays the premium for the mandate's agent (merchant-paid cover). */
-  async coverQuote(limit: bigint, days = 30, order?: { ref: string; amount: bigint }, ap2?: object, sponsor = false) {
-    const u = new URL('/cover/quote', this.insurerUrl);
+  async coverQuote(limit: bigint, days = 30, order?: { ref: string; amount: bigint }, ap2?: object, sponsor = false, at = this.insurerUrl) {
+    const u = new URL('/cover/quote', at);
     if (sponsor) u.searchParams.set('sponsor', this.opts.payer);
     if (order) {
       u.searchParams.set('order', order.ref);
@@ -201,34 +210,34 @@ export class KuasaAgent {
       u.searchParams.set('days', String(days));
     }
     const ap2Header: Record<string, string> = ap2 ? { 'x-ap2-intent-mandate': Buffer.from(JSON.stringify(ap2)).toString('base64url') } : {};
-    return (await fetch(u, { headers: { ...this.headers(), ...(await this.proof(this.insurerUrl)), ...ap2Header } })).json() as Promise<{ quoteId?: string; premium?: string; factors?: { name: string }[]; refused?: string; payer?: string }>;
+    return (await fetch(u, { headers: { ...this.headers(), ...(await this.proof(at)), ...ap2Header } })).json() as Promise<{ quoteId?: string; premium?: string; factors?: { name: string }[]; refused?: string; payer?: string }>;
   }
 
   /** payer: whose cover (defaults to this agent; a sponsor checks the agent it insured). */
-  async coverStatus(payer = this.opts.payer) {
-    const u = new URL('/cover/status', this.insurerUrl);
+  async coverStatus(payer = this.opts.payer, at = this.insurerUrl) {
+    const u = new URL('/cover/status', at);
     u.searchParams.set('payer', payer);
     return (await fetch(u)).json() as Promise<{ onChain: { periodRemaining: string; orderLimit: string; policyId: string | null }; policies: { policyId: string; kind: string; limit: string; until: number }[] }>;
   }
 
   /** Waits until the insurer has issued the policy on-chain after the premium settled. */
-  private async waitForPolicy(before: number, timeoutMs = 90_000, insured = this.opts.payer) {
+  private async waitForPolicy(before: number, timeoutMs = 90_000, insured = this.opts.payer, at = this.insurerUrl) {
     for (const end = Date.now() + timeoutMs; Date.now() < end; await sleep(3000)) {
-      const s = await this.coverStatus(insured);
+      const s = await this.coverStatus(insured, at);
       if (s.policies.length > before) return s.policies.at(-1)!;
     }
     return null;
   }
 
-  private async buyQuote(q: { quoteId?: string; premium?: string; refused?: string; factors?: unknown[]; payer?: string }) {
+  private async buyQuote(q: { quoteId?: string; premium?: string; refused?: string; factors?: unknown[]; payer?: string }, at = this.insurerUrl) {
     if (!q.quoteId) return { ok: false as const, reasons: [q.refused ?? 'no quote'] };
     const insured = q.payer ?? this.opts.payer; // a sponsor pays, the quote's agent is insured
-    const before = (await this.coverStatus(insured)).policies.length;
-    const u = new URL('/cover/buy', this.insurerUrl);
+    const before = (await this.coverStatus(insured, at)).policies.length;
+    const u = new URL('/cover/buy', at);
     u.searchParams.set('quoteId', q.quoteId);
     const paid = await this.payAt(u, {}, q.premium !== undefined ? BigInt(q.premium) : undefined);
     if (!paid.ok) return paid;
-    const policy = await this.waitForPolicy(before, 90_000, insured);
+    const policy = await this.waitForPolicy(before, 90_000, insured, at);
     return policy
       ? { ok: true as const, premium: q.premium, factors: q.factors, paymentTx: paid.paymentTx, policy }
       : { ok: false as const, reasons: ['premium paid but the policy is not issued yet; the insurer retries, check cover-status'], paymentTx: paid.paymentTx };
@@ -243,6 +252,22 @@ export class KuasaAgent {
   /** Period cover (option A): insure this agent for `days` up to `limit`. */
   async coverBuy(limit: bigint, days = 30, ap2?: object) {
     return this.buyQuote(await this.coverQuote(limit, days, undefined, ap2));
+  }
+
+  /**
+   * Market (Etherisc GIF / Nexus Mutual pattern): ask every insurer this agent may use for the same cover
+   * and compare. Each answer is that insurer's own quote, priced over the shared risk model.
+   */
+  async marketQuotes(limit: bigint, days = 30) {
+    return Promise.all(this.insurerUrls.map(async (at) => ({ at, quote: await this.coverQuote(limit, days, undefined, undefined, false, at).catch((e) => ({ refused: (e as Error).message } as { refused: string; premium?: string; quoteId?: string })) })));
+  }
+
+  /** Buys period cover from the cheapest insurer that offers it (refusals, e.g. no capacity, are skipped). */
+  async coverBuyBest(limit: bigint, days = 30) {
+    const offers = await this.marketQuotes(limit, days);
+    const best = offers.filter((o) => o.quote.quoteId && o.quote.premium !== undefined).sort((a, b) => (BigInt(a.quote.premium!) < BigInt(b.quote.premium!) ? -1 : 1))[0];
+    if (!best) return { ok: false as const, reasons: offers.map((o) => `${o.at}: ${o.quote.refused ?? 'no quote'}`), offers };
+    return { ...(await this.buyQuote(best.quote, best.at)), insurer: best.at, offers };
   }
 
   /** Merchant-paid cover: buy per-order cover for another agent's order (this client pays, that agent is insured). */

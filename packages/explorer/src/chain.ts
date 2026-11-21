@@ -6,8 +6,11 @@ import { experienceBps, solvency } from '@kuasa/cover';
 /** kuasa-cover instances, oldest first: v1 (history) and v2 (current, automation rules on-chain). */
 export const COVER_V1 = 13066n;
 /** Every kuasa-cover book, oldest first; the last is the current one: v1 (history), v2, v3. */
-export const COVERS = [COVER_V1, 13100n, 13105n];
-export const CURRENT = COVERS[COVERS.length - 1];
+/** The market: other insurers, each its own instance of the same kuasa-cover v3 module with its own pool. */
+export const MARKET = [{ name: 'Kuasa Re', cover: 13108n, pool: '3QLQkD8ZK4NDKEgQmxrwXkESkw3wwztrtF1sjjbYkGpHEsFcLo' }];
+export const COVERS = [COVER_V1, 13100n, 13105n, ...MARKET.map((m) => m.cover)];
+/** Kuasa Cover's current book (its claim decisions are published on its CIS-8004 entry). */
+export const CURRENT = 13105n;
 /** v1 claim records keep un-namespaced CIS-8004 keys; later contracts namespace them (same rule as @kuasa/chain claimKey). */
 export const claimKey = (kind: 'decision' | 'attest', cover: bigint, id: number | bigint) =>
   cover === COVER_V1 ? `kuasa:${kind}:${id}` : `kuasa:${kind}:${cover}:${id}`;
@@ -46,10 +49,15 @@ export async function scan() {
   };
 }
 
-export async function poolBalance() {
-  const info = await grpc.getAccountInfo(AccountAddress.fromBase58(POOL));
+async function eudemoOf(account: string) {
+  const info = await grpc.getAccountInfo(AccountAddress.fromBase58(account));
   const t = (info as unknown as { accountTokens?: { id: unknown; state: { balance: { value: bigint | string } } }[] }).accountTokens?.find((x) => String(x.id) === 'EUDemo');
   return t ? BigInt(t.state.balance.value) : 0n;
+}
+/** Every insurer's pool on the market together: the exposure read from all books is owed by all of them. */
+export async function poolBalance() {
+  const all = await Promise.all([POOL, ...MARKET.map((m) => m.pool)].map(eudemoOf));
+  return all.reduce((a, b) => a + b, 0n);
 }
 
 export async function solvencyNow(s?: Awaited<ReturnType<typeof scan>>) {

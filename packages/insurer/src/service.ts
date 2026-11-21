@@ -95,6 +95,13 @@ export type InsurerDeps = {
   settlePanel?(moves: { from: string; to: string; amount: bigint }[]): void;
   /** Share of the premium returned when a policy ends with no claim (basis points; unset = none). */
   givebackBps?: bigint;
+  /** Market: this insurer's pricing over the shared risk model (basis points, e.g. 9000 = 10% cheaper). */
+  priceBps?: bigint;
+  /**
+   * Market, "other insurance" clause: orders that another insurer on the market has paid or approved a
+   * claim for (read from their cover contracts). They count as already covered, so one loss is paid once.
+   */
+  otherInsurersOrders?(): Promise<string[]>;
 };
 
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
@@ -304,6 +311,11 @@ export class InsurerService {
     };
     const q = quote(input);
     if ('refused' in q) return q;
+    const bps = this.deps.priceBps ?? 10_000n;
+    if (bps !== 10_000n) {
+      q.premium = (q.premium * bps + 5_000n) / 10_000n;
+      q.factors.push({ name: 'insurer pricing', multiplier: Number(bps) / 10_000, reason: "this insurer's own price over the shared risk model (the market compares insurers)" });
+    }
     const ownerSigned = !!req.ap2 && !!this.deps.verifyAp2Owner && await this.deps.verifyAp2Owner(req.ap2, m.principal.account).catch(() => false);
     if (req.ap2) q.factors.push({ name: 'AP2 intent', multiplier: 1, reason: `Kuasa mandate sits inside the user’s AP2 Intent Mandate (merchants and expiry)${ownerSigned ? '; signed by the owner, so its SKUs define outside-intent (AM20) cover' : '; not signed by the owner, so no outside-intent (AM20) cover'}` });
     return { ...q, mandateId: id, owner: m.principal.account, payer: m.agent.payer, token: m.agent.registry.tokenId, ownerSignedIntent: ownerSigned };
@@ -475,6 +487,8 @@ export class InsurerService {
     }
     // No double cover: orders paid, approved or still open under ANY policy of the same mandate.
     const paidOrders = [...this.claims.values()].filter((x) => x.mandateId === p.mandate.id && x.verdict !== 'rejected' && (x.paid || x.verdict === 'approved' || x.assessment.ok)).flatMap((x) => x.orders);
+    // fails closed: if another insurer's book cannot be read, the claim is not assessed now (retried later)
+    if (this.deps.otherInsurersOrders) paidOrders.push(...await this.deps.otherInsurersOrders());
     // The off-chain evidence counts only if it is exactly what the claimant committed to on-chain.
     const knownCode = !!evidence && Object.hasOwn(REASON_CODES, evidence.reason);
     const ev = evidence && knownCode && (await evidenceHash(evidence).catch(() => '')) === c.evidence ? evidence : undefined;

@@ -22,7 +22,7 @@ import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer, signDeliveryNo
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4021);
-const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string; shopAgent?: string; insurerAgent?: string };
+const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string; shopAgent?: string; insurerAgent?: string; market?: { name: string; cover: string }[] };
 const merchant = JSON.parse(readFileSync(new URL('accounts/merchant.json', ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const payTo = merchant.find((a) => a.credNumber === 0)!.address;
 const sponsor = merchant.find((a) => a.credNumber === 1)!;
@@ -48,13 +48,30 @@ const recorderWallet = wallet(sponsor.address, sponsor.key);
 
 const grpc = connect();
 const registry = new KuasaRegistry(grpc, BigInt(state.registry));
+/**
+ * Cover from every insurer on the market counts: period cover adds up (co-insurance: each insurer pays
+ * its own policy), order cover is the largest single order policy. One unreadable insurer fails closed.
+ */
+function marketCover(indexes: string[]) {
+  const books = indexes.map((i) => new KuasaCover(grpc, BigInt(i)));
+  return {
+    coverOf: async (payer: string, order?: string) => {
+      const vs = await Promise.all(books.map((b) => b.coverOf(payer, order)));
+      return {
+        periodRemaining: vs.reduce((a, v) => a + v.periodRemaining, 0n),
+        orderLimit: vs.reduce((a, v) => (v.orderLimit > a ? v.orderLimit : a), 0n),
+        policyId: vs.find((v) => v.policyId !== null)?.policyId ?? null,
+      };
+    },
+  };
+}
 const guard = new KuasaGuard({
   grpc, network: 'Testnet', registry,
   offers: Object.fromEntries(Object.entries(catalog).map(([p, o]) => [p, { category: o.category, requirements: o.requirements }])),
   recorder: wallet(sponsor.address, sponsor.key),
   localOrigin: `http://localhost:${PORT}`, // demo: documents are served by this same process
   agents: new Cis8004Registry(grpc),
-  cover: state.cover ? new KuasaCover(grpc, BigInt(state.cover)) : undefined,
+  cover: state.cover ? marketCover([state.cover, ...(state.market ?? []).map((m) => m.cover)]) : undefined,
   // the insurer's circuit breaker, read from its CIS-8004 entry
   holdOf: state.insurerAgent ? (payer) => cis8004GetMetadata(grpc, state.insurerAgent!, `kuasa:hold:${payer}`) : undefined,
 });

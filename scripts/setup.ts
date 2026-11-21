@@ -160,7 +160,7 @@ async function mandate(name: string, want: { minAge?: number; euResidency?: bool
     scope: {
       // premiums to the insurer are spending under the mandate like any other purchase
       asset: ASSET, maxPerOrder: String(50n * UNIT), maxTotal: String(150n * UNIT),
-      categories: ['groceries', 'wine', 'insurance'], merchants: [merchantPayTo, insurerTreasury],
+      categories: ['groceries', 'wine', 'insurance'], merchants: [merchantPayTo, insurerTreasury, ...((state as { market?: { treasury: string }[] }).market ?? []).map((m) => m.treasury)], // the owner names every insurer the agent may pay
       validFrom: now - 60, validUntil: now + 30 * 86400,
     },
     proof: { auditRecordUri: publish(`proof/${name}.json`, proof.json), auditRecordSha256: await sha256Hex(proof.json) },
@@ -170,7 +170,7 @@ async function mandate(name: string, want: { minAge?: number; euResidency?: bool
   const id = await mandateId(m);
   const r = await registry.issue({
     id, payer: payer.address.address, agentRegistry: AGENT_REGISTRY, agentToken: tokenId, uri,
-    maxTotal: BigInt(m.scope.maxTotal), validUntilMs: BigInt(m.scope.validUntil) * 1000n, recorders: [merchantFacilitator.address.address, insurerOperator.address.address],
+    maxTotal: BigInt(m.scope.maxTotal), validUntilMs: BigInt(m.scope.validUntil) * 1000n, recorders: [merchantFacilitator.address.address, insurerOperator.address.address, ...((state as { market?: { operator: string }[] }).market ?? []).map((m) => m.operator)], // each insurer records the premiums it is paid against the budget
   }, owner);
   state.mandates[name] = { id, owner: owner.address.address, payer: payer.address.address, issueTx: r.hash, proofAnchorTx: proof.anchorTx }; save();
   log(name, 'mandate', id, r.hash);

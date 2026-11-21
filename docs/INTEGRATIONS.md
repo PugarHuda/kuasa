@@ -101,3 +101,18 @@ Embed the badge for the agent that is buying (its payer account):
 ```
 
 It reads the cover contract and the insurer's circuit breaker in the visitor's browser and shows "Insured by Kuasa Cover · X of cover left", "agent paused by the insurer" or "Not insured by Kuasa Cover".
+
+## Run another insurer on the market
+
+Any operator can join with the same contract module and service:
+
+```sh
+pnpm --filter @kuasa/scripts exec tsx provision.ts insurer2     # identity + accounts (#0 pool, #1 operator)
+pnpm --filter @kuasa/scripts exec tsx allowlist.ts               # pool on the EUDemo allow list
+pnpm --filter @kuasa/scripts exec tsx market-insurer.ts          # its own kuasa-cover v3 instance
+PORT=4024 KUASA_PROFILE=insurer2 KUASA_COVER_INDEX=<index> KUASA_STATE_FILE=insurer2-state.json \
+  KUASA_CAPITAL_FILE=capital2.json KUASA_INSURER_URL=http://localhost:4024 KUASA_PRICE_BPS=8500 \
+  KUASA_WATCH_MS=30000 pnpm --filter @kuasa/insurer start
+```
+
+Agents only buy from insurers their owner allowed: the mandate's `merchants` must list the insurer's pool and its `recorders` the insurer's operator (`setup.ts --reissue <name>` after `market-insurer.ts`).

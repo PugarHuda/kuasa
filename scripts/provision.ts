@@ -14,6 +14,7 @@ const cast: Record<string, [Attributes, number]> = {
   teen: [{ dob: '20100301', countryOfResidence: 'DK', nationality: 'DK' }, 2],
   merchant: [{ dob: '19800101', countryOfResidence: 'NL', nationality: 'NL' }, 2],
   insurer: [{ dob: '19750101', countryOfResidence: 'NL', nationality: 'NL' }, 2], // #0 treasury (EUDemo pool), #1 operator
+  insurer2: [{ dob: '19700101', countryOfResidence: 'DE', nationality: 'DE' }, 2], // a second insurer on the market ("Kuasa Re"): #0 pool, #1 operator
 };
 
 const grpc = connect();

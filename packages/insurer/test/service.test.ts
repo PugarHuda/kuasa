@@ -77,6 +77,15 @@ test('buy aborts when amount != fresh quote', async () => {
   assert.match((await t.svc.checkPurchase('nope', PAYER, q.premium))!, /quote/);
 });
 
+test('market: an insurer prices over the shared risk model (priceBps), shown as a factor and re-checked at purchase', async () => {
+  const base = await quoteOk(harness().svc);
+  const t = harness({ priceBps: 9_000n });
+  const q = await quoteOk(t.svc);
+  assert.equal(q.premium, (base.premium * 9_000n + 5_000n) / 10_000n);
+  assert.ok(q.factors.some((f) => f.name === 'insurer pricing' && f.multiplier === 0.9));
+  assert.equal(await t.svc.checkPurchase(q.quoteId, PAYER, q.premium), null);
+});
+
 test('quote refuses revoked mandates and limits above the mandate budget', async () => {
   const t = harness();
   assert.ok('refused' in await t.svc.quote({ mandateUrl: 'x', limit: 151n * EUR, days: 30 }));
@@ -149,6 +158,15 @@ async function filedClaim(t: ReturnType<typeof harness>, withEvidence: boolean, 
   if (withEvidence) t.events.set(`r${id}`, receiptEvent(h(10 + Number(id))));
   return t.svc.assessClaim(id, [`r${id}`], ev?.doc);
 }
+
+test('market, other insurance: an order another insurer already paid or approved is not paid again', async () => {
+  const fresh = await filedClaim(harness({ otherInsurersOrders: async () => [] }), true, 0n);
+  assert.equal(fresh.ok, true, fresh.reason);
+  const dup = await filedClaim(harness({ otherInsurersOrders: async () => [h(10)] }), true, 0n);
+  assert.equal(dup.ok, false);
+  const down = harness({ otherInsurersOrders: async () => { throw new Error('node busy'); } });
+  await assert.rejects(filedClaim(down, true, 0n), /node busy/, 'fails closed when another book is unreadable');
+});
 
 test('approve pays the agent payer and records the payout', async () => {
   const t = harness();
