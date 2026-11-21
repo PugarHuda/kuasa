@@ -925,6 +925,29 @@ test('staked panel: a vote arriving while the majority decision is in flight nei
   assert.equal(t.calls.filter((c) => c.startsWith('pay:')).length, 1);
 });
 
+test('staked panel: jurors stay locked until the settlement runs; a failed payout still settles the standing verdict', async () => {
+  const [J1, J2, J3] = [addr(31), addr(32), addr(33)];
+  const settled: unknown[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const t = harness({ jurors: [J1, J2, J3], jurorStake: () => 10n * EUR, jurorMinStake: 5n * EUR, jurorPenalty: EUR, settlePanel: (m) => settled.push(m),
+    pay: async () => { await gate; throw new Error('node down'); } });
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, false);
+  const ev = await wrongItemEvidence(h(10));
+  t.claims.set(1n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: ev.hash, orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(1n, ['r0'], ev.doc);
+  await t.svc.panelVote(1n, J1, false);
+  await t.svc.panelVote(1n, J2, true);
+  const deciding = t.svc.panelVote(1n, J3, true).catch((e) => e);
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  assert.equal(t.svc.jurorBusy(J1), true, 'the verdict is set but J1 has not paid its penalty yet');
+  release();
+  await deciding;
+  assert.equal(settled.length, 1);
+  assert.equal(t.svc.jurorBusy(J1), false);
+});
+
 test('appeals panel: a majority approves and the appeal is paid', async () => {
   const [J1, J2, J3] = [addr(31), addr(32), addr(33)];
   const t = harness({ jurors: [J1, J2, J3] });

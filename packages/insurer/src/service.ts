@@ -659,7 +659,9 @@ export class InsurerService {
     try {
       d = await this.decide(claimId, yes >= need);
     } catch (e) {
-      rec.decidedBy = undefined; // not decided: the panel can retry (no stakes moved)
+      if (!rec.verdict) { rec.decidedBy = undefined; throw e; } // not decided: the panel can retry (no stakes moved)
+      rec.panelSettlement ??= this.settlePanel(rec.panel, yes >= need); // the verdict stands even if the payout failed
+      this.save();
       throw e;
     }
     rec.panelSettlement ??= this.settlePanel(rec.panel, yes >= need); // once, after the decision stands
@@ -684,9 +686,10 @@ export class InsurerService {
     return moves;
   }
 
-  /** A juror with a vote on an undecided appeal: its stake stays in the pool until the appeal is decided. */
+  /** A juror with a vote on an appeal not yet settled: its stake stays in the pool until the panel's settlement has run. */
   jurorBusy(account: string) {
-    return [...this.claims.values()].some((c) => c.appealOf !== undefined && !c.verdict && !c.paid && (c.panel ?? []).some((v) => v.by === account));
+    return [...this.claims.values()].some((c) => c.appealOf !== undefined && (c.panel ?? []).some((v) => v.by === account)
+      && (c.decidedBy === 'panel' ? c.panelSettlement === undefined : !c.verdict && !c.paid));
   }
 
   /** Appeals waiting for a decision, with the panel's votes so far. */
