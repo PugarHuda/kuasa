@@ -42,9 +42,11 @@ export async function submit(grpc: ConcordiumGRPCClient, tx: Transaction.Builder
   // Several processes sign for the same account (e.g. shop attester + console incident): a nonce
   // taken by a concurrent sender is retried with a fresh one. Rejected => nothing was submitted.
   let hash: Awaited<ReturnType<ConcordiumGRPCClient['sendTransaction']>>;
+  const header = { ...tx.header };
   for (let attempt = 0; ; attempt++) {
     const { nonce } = await grpc.getNextAccountNonce(from.address);
-    const configured = tx.addMetadata({ sender: from.address, nonce, expiry: TransactionExpiry.futureMinutes(10) });
+    // a builder takes metadata (and a sponsor) once: every attempt starts from the unconfigured transaction
+    const configured = new Transaction.Builder({ ...header }, tx.payload).addMetadata({ sender: from.address, nonce, expiry: TransactionExpiry.futureMinutes(10) });
     const signable = sponsor
       ? await Transaction.sponsor(await Transaction.sign(configured.addSponsor(sponsor.address).build(), from.signer) as Parameters<typeof Transaction.sponsor>[0], sponsor.signer)
       : await Transaction.sign(configured.build(), from.signer);

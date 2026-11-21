@@ -115,6 +115,8 @@ export class InsurerService {
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
   /** Paid premiums that can never become a policy (e.g. mandate revoked meanwhile): refund manually. */
   private needsRefund: { quoteId: string; premiumTx: string; reason: string }[] = [];
+  /** Unissued premiums taken off the list by a retry in progress. */
+  private issuing: { quoteId: string; premiumTx: string; quote?: StoredQuote }[] = [];
   /** Unused premium returned when a holder cancels (pro rata, only if no claim was paid). */
   private refunds: { policyId: bigint; to: string; amount: bigint; tx?: string }[] = [];
   private refunding = false;
@@ -228,7 +230,7 @@ export class InsurerService {
     if (this.paying.has(quoteId)) return 'this quote is already being paid';
     // coverOf only sees issued policies: a period premium in flight or paid-but-unissued for this payer blocks another one.
     const isPeriod = (o?: StoredQuote) => !!o && o.payer === q.payer && !o.request.order;
-    if (isPeriod(q) && ([...this.paying.keys()].some((id) => isPeriod(this.quotes.get(id))) || this.unissued.some((u) => isPeriod(u.quote)))) {
+    if (isPeriod(q) && ([...this.paying.keys()].some((id) => isPeriod(this.quotes.get(id))) || [...this.unissued, ...this.issuing].some((u) => isPeriod(u.quote)))) {
       return 'a period policy for this agent is already being bought';
     }
     this.paying.set(quoteId, this.deps.now()); // reserve before any await: one quote, one payment (and one period purchase per payer)
@@ -343,10 +345,12 @@ export class InsurerService {
 
   private async retryOnce() {
     const pending = this.unissued.splice(0);
+    this.issuing = pending; // still visible to checkPurchase while each one is issued
     for (const u of pending) {
       if (u.quote) await this.issue(u.quoteId, u.premiumTx, u.quote);
       else this.unissued.push(u); // needs a human: keep it
     }
+    this.issuing = [];
     this.save();
   }
 
