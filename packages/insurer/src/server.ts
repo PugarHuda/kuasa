@@ -188,16 +188,20 @@ const svc = new InsurerService({
   givebackBps: BigInt(process.env.KUASA_GIVEBACK_BPS ?? 1_000),
   // market: this insurer's own pricing on top of the shared risk model (basis points; 10000 = as modelled)
   priceBps: BigInt(process.env.KUASA_PRICE_BPS ?? 10_000),
-  otherInsurersOrders: async () => {
+  // only claims for the same agent count: double recovery needs the same insured, and anyone else listing
+  // these orders at another insurer (order squatting) must not block this agent's payout
+  otherInsurersOrders: async (agentPayer) => {
     const others = [fileCover, ...((state as { market?: { cover: string }[] }).market ?? []).map((m) => m.cover)].filter((c) => BigInt(c) !== coverIndex);
     const orders: string[] = [];
     for (const c of others) {
       const book = new KuasaCover(grpc, BigInt(c));
+      const payerOf = new Map<bigint, string | undefined>();
       for (let id = 0n; id < 10_000n; id++) {
         const cl = await book.claim(id);
         if (!cl) break;
-        // anything the other insurer has not turned down: filed, assessed, approved or paid (first claim wins)
-        if (cl.status.tag !== 'Rejected' && cl.status.tag !== 'Fraud') orders.push(...cl.orders);
+        if (cl.status.tag === 'Rejected' || cl.status.tag === 'Fraud') continue; // turned down there
+        if (!payerOf.has(cl.policyId)) payerOf.set(cl.policyId, (await book.policy(cl.policyId))?.agentPayer);
+        if (payerOf.get(cl.policyId) === agentPayer) orders.push(...cl.orders); // filed, assessed, approved or paid there
       }
     }
     return orders;

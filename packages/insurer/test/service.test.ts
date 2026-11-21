@@ -162,7 +162,7 @@ async function filedClaim(t: ReturnType<typeof harness>, withEvidence: boolean, 
 test('market, other insurance: an order another insurer already paid or approved is not paid again', async () => {
   const fresh = await filedClaim(harness({ otherInsurersOrders: async () => [] }), true, 0n);
   assert.equal(fresh.ok, true, fresh.reason);
-  const dup = await filedClaim(harness({ otherInsurersOrders: async () => [h(10)] }), true, 0n);
+  const dup = await filedClaim(harness({ otherInsurersOrders: async (payer) => (payer === PAYER ? [h(10)] : []) }), true, 0n);
   assert.equal(dup.ok, false);
   const down = harness({ otherInsurersOrders: async () => { throw new Error('node busy'); } });
   await assert.rejects(filedClaim(down, true, 0n), /node busy/, 'fails closed when another book is unreadable');

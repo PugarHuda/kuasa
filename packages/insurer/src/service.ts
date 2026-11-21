@@ -101,7 +101,7 @@ export type InsurerDeps = {
    * Market, "other insurance" clause: orders that another insurer on the market has paid or approved a
    * claim for (read from their cover contracts). They count as already covered, so one loss is paid once.
    */
-  otherInsurersOrders?(): Promise<string[]>;
+  otherInsurersOrders?(agentPayer: string): Promise<string[]>;
 };
 
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
@@ -488,7 +488,7 @@ export class InsurerService {
     // No double cover: orders paid, approved or still open under ANY policy of the same mandate.
     const paidOrders = [...this.claims.values()].filter((x) => x.mandateId === p.mandate.id && x.verdict !== 'rejected' && (x.paid || x.verdict === 'approved' || x.assessment.ok)).flatMap((x) => x.orders);
     // fails closed: if another insurer's book cannot be read, the claim is not assessed now (retried later)
-    if (this.deps.otherInsurersOrders) paidOrders.push(...await this.deps.otherInsurersOrders());
+    if (this.deps.otherInsurersOrders) paidOrders.push(...await this.deps.otherInsurersOrders(p.agentPayer));
     // The off-chain evidence counts only if it is exactly what the claimant committed to on-chain.
     const knownCode = !!evidence && Object.hasOwn(REASON_CODES, evidence.reason);
     const ev = evidence && knownCode && (await evidenceHash(evidence).catch(() => '')) === c.evidence ? evidence : undefined;
@@ -876,8 +876,8 @@ export class InsurerService {
         }
         // other insurance, checked again right before money moves: another insurer may have taken a claim
         // on these orders since the assessment; an unreadable book means wait, never pay blind
-        if (this.deps.otherInsurersOrders) {
-          const other = await this.deps.otherInsurersOrders().catch(() => null);
+        if (this.deps.otherInsurersOrders && policy) {
+          const other = await this.deps.otherInsurersOrders(policy.agentPayer).catch(() => null);
           if (!other) return { decided: true, reason: "another insurer's book is unreadable: payout waits (approve again to retry)" };
           if (rec.orders.some((o) => other.includes(o))) {
             rec.payoutBlocked = 'another insurer has a claim on these orders (other insurance): a human decides';
