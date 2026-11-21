@@ -7,13 +7,13 @@
  * insurer) and file claims, signed by its own payer account and sponsored by the insurer.
  */
 import { readFileSync } from 'node:fs';
-import { AccountAddress, buildBasicAccountSigner, CcdAmount, ContractAddress, Energy, Parameter, ReceiveName, TransactionExpiry } from '@concordium/web-sdk';
+import { AccountAddress, buildBasicAccountSigner, CcdAmount, ContractAddress, Energy, Parameter, ReceiveName, ReturnValue, TransactionExpiry } from '@concordium/web-sdk';
 import { Transaction } from '@concordium/web-sdk/transactions';
 import { CONCORDIUM_TESTNET_CAIP2 } from '@x402/concordium';
 import { ExactConcordiumScheme } from '@x402/concordium/exact/client';
 import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from '@x402/fetch';
 import { cis8004GetMetadata, connect } from '@kuasa/chain';
-import { type ClaimEvidence, type ClaimKind, defaultReason, encodeFileClaim, evidenceHash, REASON_CODES, type ReasonCode, type SignedDeliveryNote } from '@kuasa/core';
+import { type ClaimEvidence, type ClaimKind, decodeMarketInsurers, defaultReason, encodeFileClaim, evidenceHash, REASON_CODES, type ReasonCode, type SignedDeliveryNote } from '@kuasa/core';
 import { type AgentRegistry, Cis8004Registry, makePayerProof } from '@kuasa/merchant';
 
 export const MANDATE_HEADER = 'x-kuasa-mandate';
@@ -108,12 +108,26 @@ export class KuasaAgent {
     return out;
   }
 
-  /** A demo agent whose insurers come from the on-chain market directory (filtered by its mandate). */
+  /**
+   * The market from the open registry contract (kuasa-market): every insurer that registered itself with a
+   * bond, minus those leaving, and only pools this agent's mandate names.
+   */
+  static async discoverRegistry(marketIndex: bigint, allowedPools: string[], grpc = connect()) {
+    const r = await grpc.invokeContract({ contract: ContractAddress.create(marketIndex, 0n), method: ReceiveName.fromString('kuasa_market.insurers'), parameter: Parameter.empty() });
+    if (r.tag !== 'success' || !r.returnValue) throw new Error('kuasa-market insurers view failed');
+    return decodeMarketInsurers(new Uint8Array(ReturnValue.toBuffer(r.returnValue)))
+      .filter((i) => i.exitAt === null && allowedPools.includes(i.pool))
+      .map((i) => ({ token: '', name: i.name, cover: String(i.cover), pool: i.pool, url: i.url, price: i.priceBps, bond: i.bond }));
+  }
+
+  /** A demo agent whose insurers come from the chain: the open registry contract if deployed, else the CIS-8004 directory. */
   static async fromDemoMarket(name: string, shopUrl?: string) {
     const root = new URL('../../../.kuasa/', import.meta.url);
-    const st = JSON.parse(readFileSync(new URL('state.json', root), 'utf8')) as { insurerAgent: string };
+    const st = JSON.parse(readFileSync(new URL('state.json', root), 'utf8')) as { insurerAgent: string; marketContract?: string };
     const base = KuasaAgent.fromDemo(name, shopUrl);
-    const market = await KuasaAgent.discoverMarket(st.insurerAgent, base.opts.scope.merchants ?? []);
+    const market = st.marketContract
+      ? await KuasaAgent.discoverRegistry(BigInt(st.marketContract), base.opts.scope.merchants ?? [])
+      : await KuasaAgent.discoverMarket(st.insurerAgent, base.opts.scope.merchants ?? []);
     const [first, ...rest] = market.map((m) => m.url);
     return { agent: new KuasaAgent({ ...base.opts, ...(first ? { insurerUrl: first } : {}), insurers: rest }), market };
   }

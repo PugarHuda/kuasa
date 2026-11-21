@@ -1,6 +1,6 @@
 /** Read-only Kuasa Cover data straight from Concordium testnet over gRPC-web (browser and Node). */
 import { AccountAddress, ConcordiumGRPCWebClient, ContractAddress, Parameter, ReceiveName, ReturnValue } from '@concordium/web-sdk';
-import { decodeClaim, decodeCoverView, decodePolicy, encodeCoverQuery, encodeU64, type Claim, type Policy } from '@kuasa/core';
+import { decodeClaim, decodeCoverView, decodeMarketInsurers, decodePolicy, encodeCoverQuery, encodeU64, type Claim, type Policy } from '@kuasa/core';
 import { experienceBps, solvency } from '@kuasa/cover';
 
 /** kuasa-cover instances, oldest first: v1 (history) and v2 (current, automation rules on-chain). */
@@ -120,6 +120,13 @@ async function metadata(token: number[], key: string) {
 const fields = (v: string | null) => (v ? Object.fromEntries(v.split(';').map((kv) => kv.split('=') as [string, string])) : null);
 
 /** The insurer publishes each claim decision on its CIS-8004 entry: by=auto|human;verdict=...;paid=... */
+/** The open, bonded registry of insurers (kuasa-market). */
+export const MARKET_REGISTRY = 13110n;
+export async function marketInsurers() {
+  const r = await grpc.invokeContract({ contract: ContractAddress.create(MARKET_REGISTRY, 0n), method: ReceiveName.fromString('kuasa_market.insurers'), parameter: Parameter.empty() });
+  if (r.tag !== 'success' || !r.returnValue) return [];
+  return decodeMarketInsurers(new Uint8Array(ReturnValue.toBuffer(r.returnValue)));
+}
 /** Each insurer publishes on its own CIS-8004 entry. */
 const tokenOf = (cover: bigint) => MARKET.find((m) => m.cover === cover)?.token ?? INSURER_TOKEN;
 /** An insurer's self-description on its own entry (kuasa:insurer: cover, pool, operator, price, url). */

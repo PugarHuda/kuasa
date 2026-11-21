@@ -5,7 +5,7 @@
  */
 import { type Claim, type Policy } from '@kuasa/core';
 import { quote, solvency } from '@kuasa/cover';
-import { attestationOf, COVER_V1, coverOf, CURRENT, decisionOf, eudemoOf, holdOf, insurerInfo, MARKET, POOL, poolBalance, scan } from './chain.js';
+import { attestationOf, COVER_V1, coverOf, CURRENT, decisionOf, eudemoOf, holdOf, insurerInfo, MARKET, marketInsurers, POOL, poolBalance, scan } from './chain.js';
 
 const LABELS: Record<string, string> = {
   '4WmdhhLRPTk92STxiaXQFFNyJFLaM6k5kRq1ryFN8xjho1aq3s': 'Alice (owner)',
@@ -102,6 +102,7 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
 /** The market table: one row per insurer, from its own book, its pool and its self-description. */
 async function renderMarket(books: Awaited<ReturnType<typeof scan>>['books']) {
   const rows = [{ name: 'Kuasa Cover', cover: CURRENT, pool: POOL }, ...MARKET];
+  const listed = await marketInsurers().catch(() => []);
   const html: string[] = [];
   for (const r of rows) {
     const b = books.find((x) => x.cover === r.cover);
@@ -112,9 +113,11 @@ async function renderMarket(books: Awaited<ReturnType<typeof scan>>['books']) {
     const s = solvency({ pool: bal, now: Date.now(), policies: own.flatMap((x) => x.policies), claims: own.flatMap((x) => x.claims).map((c) => ({ status: c.status.tag })) });
     const free = s.pool > s.exposure ? s.pool - s.exposure : 0n;
     const lb = solvency({ pool: 0n, now: Date.now(), policies: b.policies, claims: b.claims.map((c) => ({ status: c.status.tag })) });
-    html.push(`<tr><td>${esc(r.name)}</td><td class="mono"><a href="https://ccdexplorer.io/testnet/instance/${r.cover}/0" target="_blank" rel="noopener">&lt;${r.cover},0&gt;</a></td><td>${info?.price ? `×${Number(info.price) / 10_000}` : '–'}</td><td class="n">${eur(s.pool)}</td><td class="n">${eur(s.exposure)}</td><td class="n">${eur(free)}</td><td class="n">${b.policies.length}</td><td class="n">${ratio(lb.paidOut, lb.premiums)}</td></tr>`);
+    const reg = listed.find((x) => x.pool === r.pool);
+    const bond = reg ? `${(Number(reg.bond) / 1e6).toLocaleString('en')} CCD${reg.exitAt !== null ? ' (leaving)' : ''}` : 'not listed';
+    html.push(`<tr><td>${esc(r.name)}</td><td class="n">${esc(bond)}</td><td class="mono"><a href="https://ccdexplorer.io/testnet/instance/${r.cover}/0" target="_blank" rel="noopener">&lt;${r.cover},0&gt;</a></td><td>${info?.price ? `×${Number(info.price) / 10_000}` : '–'}</td><td class="n">${eur(s.pool)}</td><td class="n">${eur(s.exposure)}</td><td class="n">${eur(free)}</td><td class="n">${b.policies.length}</td><td class="n">${ratio(lb.paidOut, lb.premiums)}</td></tr>`);
   }
-  $('market').innerHTML = html.join('') || '<tr><td colspan="8" class="muted">–</td></tr>';
+  $('market').innerHTML = html.join('') || '<tr><td colspan="9" class="muted">–</td></tr>';
 }
 
 /** Paid out per risk class (reason-code family from the published decision): what each class of capital carries. */

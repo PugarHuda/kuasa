@@ -25,7 +25,7 @@ import { sepolia } from 'viem/chains';
 import { handleA2a } from './a2a.js';
 import { CapitalLedger, capitalClassOf, type RiskClass } from './capital.js';
 import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, claimKey, COVER_V1, connect, finalizedHeight, registryReceiptsAt, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
-import { canonicalJson, type ClaimEvidence, evidenceHash, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
+import { canonicalJson, type ClaimEvidence, decodeMarketInsurers, evidenceHash, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyAp2Intent, verifyDeliveryNote, verifyPayerProof } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
 import { checkSponsorable, jsonSafe, SponsorBudget } from './sponsor.js';
@@ -84,6 +84,14 @@ const ownEvm = PROFILE === 'insurer' && existsSync(ownEvmKey) ? privateKeyToAcco
 const repCache = new Map<string, { at: number; v: { count: number; average: number } | null }>();
 /** EVM addresses the market's insurers advertise (evm= in kuasa:insurer, written by each entry's owning pool). */
 async function trustedRaters(): Promise<`0x${string}`[]> {
+  const registryIndex = (state as { marketContract?: string }).marketContract;
+  if (registryIndex) {
+    // the open registry: every bonded insurer that is not leaving, with the EVM address it registered
+    const r = await grpc.invokeContract({ contract: sdk.ContractAddress.create(BigInt(registryIndex), 0n), method: sdk.ReceiveName.fromString('kuasa_market.insurers'), parameter: sdk.Parameter.empty() });
+    if (r.tag !== 'success' || !r.returnValue) return [];
+    return decodeMarketInsurers(new Uint8Array(sdk.ReturnValue.toBuffer(r.returnValue)))
+      .filter((i) => i.exitAt === null && /^0x[0-9a-fA-F]{40}$/.test(i.evm)).map((i) => i.evm.toLowerCase() as `0x${string}`);
+  }
   if (!marketRoot) return [];
   const registry = new Cis8004Registry(grpc);
   const out: `0x${string}`[] = [];

@@ -166,3 +166,25 @@ export function decodeBond(bytes: Uint8Array): OperatorBond | null {
   r.end();
   return b;
 }
+
+/** An insurer on the open market registry (kuasa-market `insurers` view). */
+export type MarketInsurer = { pool: string; name: string; cover: bigint; url: string; priceBps: number; evm: string; bond: bigint; exitAt: bigint | null };
+/** Decodes `Vec<(AccountAddress, Insurer)>` exactly as kuasa-market's `insurers` view returns it. */
+export function decodeMarketInsurers(bytes: Uint8Array): MarketInsurer[] {
+  const r = new R(bytes);
+  const n = r.u32();
+  const out: MarketInsurer[] = [];
+  for (let i = 0; i < n; i++) {
+    const pool = r.account();
+    const name = r.str();
+    const cover = r.u64(); r.u64(); // subindex
+    const url = r.str();
+    const priceBps = r.u32();
+    const evm = r.str();
+    const bond = r.u64();
+    const exitAt = r.u8() === 1 ? r.u64() : null;
+    out.push({ pool, name, cover, url, priceBps, evm, bond, exitAt });
+  }
+  r.end();
+  return out;
+}
