@@ -73,3 +73,13 @@ test('risk-specific staking: class capital pays its class first, earns 1.5x weig
   assert.equal(b3.wi.balance, 0n, 'first loss exhausted');
   assert.equal(b3.general.balance + b3.wi.balance, 80n * EUR + 9n * EUR - 49n * EUR);
 });
+
+test('a booking error is carried by one provider alone', () => {
+  const l = new CapitalLedger();
+  l.deposit('insurer', 90n * EUR, 'a');
+  l.deposit('lp', 10n * EUR, 'b');
+  l.adjust('insurer', -8n * EUR);
+  const b = Object.fromEntries(l.balances().map((x) => [x.provider, x.balance]));
+  assert.deepEqual(b, { insurer: 82n * EUR, lp: 10n * EUR });
+  assert.throws(() => l.adjust('nobody', 1n), /unknown/);
+});

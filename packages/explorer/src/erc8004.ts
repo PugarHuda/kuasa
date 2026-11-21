@@ -19,6 +19,9 @@ const SCORE: Record<string, (c: Claim) => number | null> = {
   MerchantLoss: (c) => (c.status.tag === 'Paid' ? 30 : null),
 };
 
+const MIN_LIMIT = 10_000_000n; // 10 EUDemo
+const MIN_DAYS_MS = 7n * 86_400_000n;
+
 export function feedbackFor(payer: string, books: Book[], now = Date.now()): Feedback[] {
   const out: Feedback[] = [];
   for (const b of books) {
@@ -31,8 +34,10 @@ export function feedbackFor(payer: string, books: Book[], now = Date.now()): Fee
         if (score === null || score === undefined) continue;
         out.push({ score, tag1: 'kuasa-cover', tag2: c.status.tag === 'Fraud' ? 'fraud' : c.kind, createdAt: new Date(Number(p.validFromMs)).toISOString(), evidence: { network: 'ccd:testnet', contract, claimId: String(id), policyId: String(policyId), status: c.status.tag } });
       }
-      // a policy that ran its course without any claim is the best signal an insurer can give
-      if (claims.length === 0 && Number(p.validUntilMs) < now && p.status === 'Active') {
+      // a policy that ran its course without any claim is the best signal an insurer can give, but only
+      // for real cover: many tiny or short policies must not farm a perfect score
+      const real = p.limit >= MIN_LIMIT && p.validUntilMs - p.validFromMs >= MIN_DAYS_MS;
+      if (claims.length === 0 && real && Number(p.validUntilMs) < now && p.status === 'Active') {
         out.push({ score: 100, tag1: 'kuasa-cover', tag2: 'claim-free', createdAt: new Date(Number(p.validUntilMs)).toISOString(), evidence: { network: 'ccd:testnet', contract, policyId: String(policyId), status: 'Expired' } });
       }
     });

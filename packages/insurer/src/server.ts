@@ -9,7 +9,7 @@
  * DEMO: the operator and treasury keys come from .kuasa (testnet only). Signing endpoints are
  * localhost-only and require the console header.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import * as sdk from '@concordium/web-sdk';
 import express from 'express';
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from '@x402/extensions/bazaar';
@@ -425,52 +425,89 @@ app.get('/solvency', async (_req, res) => {
  * reconciled into it every 15 s. Deposits are plain EUDemo transfers into the pool, verified on-chain.
  */
 const CAPITAL_FILE = new URL('capital.json', ROOT);
-const capitalSnap = existsSync(CAPITAL_FILE) ? fromJsonBig(readFileSync(CAPITAL_FILE, 'utf8')) as { ledger: ReturnType<CapitalLedger['snapshot']>; premiumsSeen: bigint; outSeen: bigint; pending?: { provider: string; amount: bigint; tx: string }[]; cover?: string; seenPayouts?: string[] } : undefined;
+const capitalSnap = existsSync(CAPITAL_FILE) ? fromJsonBig(readFileSync(CAPITAL_FILE, 'utf8')) as { ledger: ReturnType<CapitalLedger['snapshot']>; pending?: { provider: string; amount: bigint; tx: string }[]; seen?: string[]; adjustments?: { at: string; amount: bigint; reason: string }[] } : undefined;
 /** Withdrawals submitted but not yet final (persisted; re-checked on startup). */
 const pendingWithdrawals: { provider: string; amount: bigint; tx: string }[] = capitalSnap?.pending ?? [];
 const capital = new CapitalLedger(capitalSnap?.ledger);
-// The seen-counters follow the insurer state of one cover contract; a new contract starts them at zero
-// (provider balances are about the pool and carry over). A snapshot without `cover` predates v2: it is v1's.
-const sameCover = (capitalSnap?.cover ?? String(COVER_V1)) === state.cover;
-let premiumsSeen = sameCover ? capitalSnap?.premiumsSeen ?? 0n : 0n;
-let outSeen = sameCover ? capitalSnap?.outSeen ?? 0n : 0n;
-/** Payouts already charged to capital, by claim (so each is charged to its risk class exactly once). */
-const seenPayouts = new Set<string>(sameCover ? capitalSnap?.seenPayouts ?? svc.state().payouts.map((p) => p.claimId) : []);
-const classOf = (claimId: string): RiskClass | undefined => {
-  const r = svc.state().claims.find((c) => String(c.claimId) === claimId)?.reason;
-  return r?.startsWith('AM') ? 'AM' : r?.startsWith('WI') ? 'WI' : r?.startsWith('ML') ? 'ML' : undefined;
-};
-const saveCapital = () => { const tmp = new URL('capital.json.tmp', ROOT); writeFileSync(tmp, toJsonBig({ ledger: capital.snapshot(), premiumsSeen, outSeen, seenPayouts: [...seenPayouts], pending: pendingWithdrawals, cover: state.cover })); renameSync(tmp, CAPITAL_FILE); };
-function reconcileCapital() {
-  const st = svc.state();
-  if (st.premiumsIn > premiumsSeen) { capital.onPremium(st.premiumsIn - premiumsSeen); premiumsSeen = st.premiumsIn; }
-  // claim payouts: each charged once, to its risk class first (refunds and givebacks are general)
-  for (const p of st.payouts) {
-    if (seenPayouts.has(String(p.claimId))) continue;
-    seenPayouts.add(String(p.claimId));
-    capital.onPayout(p.amount, classOf(String(p.claimId)));
-    outSeen += p.amount;
-  }
-  const general = st.payouts.reduce((a, p) => a + p.amount, 0n) + st.refunds.reduce((a, r) => a + (r.tx ? r.amount : 0n), 0n)
-    + st.policies.reduce((a, p) => a + (p.giveback?.tx ? p.giveback.amount : 0n), 0n);
-  if (general > outSeen) { capital.onPayout(general - outSeen); outSeen = general; }
-  saveCapital();
-}
-void (async () => {
-  if (capital.balances().length === 0) { // first run: the pool as it stands is the insurer's own capital
-    capital.deposit(treasury.address.address, await eudemoBalance(treasury.address.address), 'genesis');
-    const st = svc.state();
-    premiumsSeen = st.premiumsIn;
-    outSeen = st.payouts.reduce((a, p) => a + p.amount, 0n) + st.refunds.reduce((a, r) => a + (r.tx ? r.amount : 0n), 0n);
-    saveCapital();
-  }
-  setInterval(reconcileCapital, 15_000);
-})();
-
 /** Capital operations run one at a time (deposits, withdrawals and their reconciliation). */
 let capitalLock: Promise<unknown> = Promise.resolve();
 const serialCapital = <T>(fn: () => Promise<T>) => { const r = capitalLock.then(fn); capitalLock = r.catch(() => undefined); return r; };
 const pendingOut = () => pendingWithdrawals.reduce((a, p) => a + p.amount, 0n); // withdrawals submitted but not yet final
+/**
+ * Pool events already booked to capital, by transaction (premium:<tx>, payout:<tx>, refund:<tx>,
+ * giveback:<tx>). Transaction hashes are unique on-chain, so a demo reset of the insurer state or a
+ * switch to a new cover contract can neither skip nor double-count an event (cumulative counters could).
+ */
+const seenEvents = new Set<string>(capitalSnap?.seen ?? []);
+const adjustments = capitalSnap?.adjustments ?? [];
+const classOf = (claimId: string): RiskClass | undefined => {
+  const r = svc.state().claims.find((c) => String(c.claimId) === claimId)?.reason;
+  return r?.startsWith('AM') ? 'AM' : r?.startsWith('WI') ? 'WI' : r?.startsWith('ML') ? 'ML' : undefined;
+};
+/** Every pool event the insurer knows about now, with its booking. */
+function poolEvents() {
+  const st = svc.state();
+  return [
+    ...st.policies.filter((p) => p.premium !== undefined).map((p) => ({ id: `premium:${p.premiumTx}`, book: () => capital.onPremium(p.premium!) })),
+    ...st.payouts.map((p) => ({ id: `payout:${p.tx}`, book: () => capital.onPayout(p.amount, classOf(String(p.claimId))) })),
+    ...st.refunds.filter((r) => r.tx).map((r) => ({ id: `refund:${r.tx}`, book: () => capital.onPayout(r.amount) })),
+    ...st.policies.filter((p) => p.giveback?.tx).map((p) => ({ id: `giveback:${p.giveback!.tx}`, book: () => capital.onPayout(p.giveback!.amount) })),
+  ];
+}
+const saveCapital = () => { const tmp = new URL('capital.json.tmp', ROOT); writeFileSync(tmp, toJsonBig({ ledger: capital.snapshot(), seen: [...seenEvents], adjustments, pending: pendingWithdrawals })); renameSync(tmp, CAPITAL_FILE); };
+function reconcileCapital() {
+  for (const e of poolEvents()) {
+    if (seenEvents.has(e.id)) continue;
+    seenEvents.add(e.id);
+    e.book();
+  }
+  saveCapital();
+}
+/** Event ids in every insurer state file on disk (.kuasa/insurer-state*.json and archive/<run>/insurer-state.json). */
+function eventsInStateFiles(): string[] {
+  const files: URL[] = readdirSync(ROOT).filter((f) => /^insurer-state.*\.json$/.test(f)).map((f) => new URL(f, ROOT));
+  const arch = new URL('archive/', ROOT);
+  if (existsSync(arch)) for (const d of readdirSync(arch)) { const f = new URL(`archive/${d}/insurer-state.json`, ROOT); if (existsSync(f)) files.push(f); }
+  const ids: string[] = [];
+  for (const f of files) {
+    try {
+      const st = JSON.parse(readFileSync(f, 'utf8')) as { policies?: { premiumTx?: string; giveback?: { tx?: string } }[]; payouts?: { tx?: string }[]; refunds?: { tx?: string }[] };
+      for (const p of st.policies ?? []) { if (p.premiumTx) ids.push(`premium:${p.premiumTx}`); if (p.giveback?.tx) ids.push(`giveback:${p.giveback.tx}`); }
+      for (const p of st.payouts ?? []) if (p.tx) ids.push(`payout:${p.tx}`);
+      for (const r of st.refunds ?? []) if (r.tx) ids.push(`refund:${r.tx}`);
+    } catch { /* unreadable file: skip */ }
+  }
+  return ids;
+}
+const ledgerTotal = () => capital.balances().reduce((a, b) => a + b.balance, 0n);
+/**
+ * One-time true-up against the chain: what the providers' balances add up to must equal the pool
+ * (minus withdrawals still settling). A difference is a booking error of the insurer, so the insurer's
+ * own capital carries it, never outside providers; it is recorded with its reason.
+ */
+async function trueUp(reason: string) {
+  const diff = ledgerTotal() - (await eudemoBalance(treasury.address.address) - pendingOut());
+  if (diff === 0n) return;
+  capital.adjust(treasury.address.address, -diff);
+  adjustments.push({ at: new Date().toISOString(), amount: -diff, reason });
+  audit.append({ kind: 'capital-true-up', amount: String(-diff), reason });
+}
+void (async () => {
+  if (capital.balances().length === 0) { // first run: the pool as it stands is the insurer's own capital
+    capital.deposit(treasury.address.address, await eudemoBalance(treasury.address.address), 'genesis');
+    for (const e of poolEvents()) seenEvents.add(e.id);
+    saveCapital();
+  } else if (!capitalSnap?.seen) {
+    // migration from cumulative counters: everything so far is booked, in every insurer state there
+    // is (this one, other cover contracts, archived demo resets); the drift the counters left (state
+    // resets made payouts go uncharged) is trued up once against the pool, on the record
+    for (const e of poolEvents()) seenEvents.add(e.id);
+    for (const id of eventsInStateFiles()) seenEvents.add(id);
+    await serialCapital(async () => { await trueUp('migration from cumulative counters: payouts after an insurer state reset had gone uncharged'); saveCapital(); });
+  }
+  setInterval(reconcileCapital, 15_000);
+})();
+
 /** Settle a pending withdrawal once final: drop it, and roll it back if it failed. Retries on any error. */
 function watchWithdrawal(p: { provider: string; amount: bigint; tx: string }) {
   const settle = async () => {

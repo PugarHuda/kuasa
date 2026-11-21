@@ -144,7 +144,8 @@ export class InsurerService {
   private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string; /** SKUs of the AP2 intent it was bought under */ skus?: string[];
     /** v3 terms set on-chain for this policy, or why they could not be */ terms?: { autoPayLimit: bigint; objectionWindowMs: bigint; intent: string | null; tx?: string; error?: string };
     /** premium share returned at the end of a claim-free policy */ giveback?: { amount: bigint; tx?: string };
-    /** merchant-paid cover: who paid the premium (refunds and givebacks go back there) */ sponsor?: string }[] = [];
+    /** merchant-paid cover: who paid the premium (refunds and givebacks go back there) */ sponsor?: string;
+    /** the premium paid into the pool (capital accounting counts it once, by premiumTx) */ premium?: bigint }[] = [];
   /** Premiums that settled but whose policy is not on-chain yet; the quote travels with them. */
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
   /** Paid premiums that can never become a policy (e.g. mandate revoked meanwhile): refund manually. */
@@ -316,7 +317,7 @@ export class InsurerService {
       deductible: DEDUCTIBLE, premium: q.premium, premiumTx, validUntilMs: BigInt(this.deps.now() + days * DAY_MS),
     };
     const record = (id: bigint) => {
-      this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period', ...(q.request.sponsor ? { sponsor: q.request.sponsor } : {}), ...(q.ownerSignedIntent && q.request.ap2?.skus?.length ? { skus: q.request.ap2.skus } : {}) });
+      this.policies.push({ policyId: id, quoteId, premiumTx, premium: q.premium, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period', ...(q.request.sponsor ? { sponsor: q.request.sponsor } : {}), ...(q.ownerSignedIntent && q.request.ap2?.skus?.length ? { skus: q.request.ap2.skus } : {}) });
       this.premiumsIn += q.premium;
       this.consume(quoteId);
       this.save();

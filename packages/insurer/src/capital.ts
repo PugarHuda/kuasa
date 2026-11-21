@@ -90,6 +90,13 @@ export class CapitalLedger {
     if (rest > 0n) this.split(rest, 'losses');
   }
 
+  /** A booking error found against the chain, carried by one provider alone (the insurer, whose books they are). */
+  adjust(provider: string, amount: bigint) {
+    const a = this.accounts.get(provider);
+    if (!a) throw new Error('unknown provider');
+    if (amount < 0n) a.losses += -amount; else a.premiums += amount;
+  }
+
   /** lockupMs: capital deposited more recently than this cannot leave (no just-in-time premium capture). */
   withdraw(provider: string, amount: bigint, pool: { pool: bigint; exposure: bigint }, now = Date.now(), lockupMs = 0) {
     const a = this.accounts.get(provider);
