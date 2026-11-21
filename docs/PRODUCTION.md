@@ -60,13 +60,13 @@ Ideas from other insurance, dispute and agent-trust systems, built into Kuasa Co
 | Idea | From | In Kuasa | Status |
 |---|---|---|---|
 | Bonded objections | UMA Optimistic Oracle | `objectClaim` is payable: the objector locks 1 CCD; returned if the claim is rejected, forfeited to the pool if not | Live (contract v3) |
-| Operator bonds and slashing | EigenLayer-style restaking | `postBond` by the agent payer or a policy holder; slashed into the pool when a claim the agent side filed is marked fraud; locked until every policy of the agent is past its claims window; bonded agents get a 0.9 premium factor | Bond live; slashing tested |
+| Operator bonds and slashing | EigenLayer-style restaking | `postBond` by the agent payer or a policy holder; slashed into the pool when a claim the agent side filed is marked fraud; locked until every policy of the agent is past its claims window; bonded agents get a 0.9 premium factor | Bond and discount live; slashing tested |
 | Fully parametric claims | Etherisc | `fileClaimFor`: the insurer files the duplicate it detected for the agent and assesses it at once | Live |
 | Per-policy terms | – | `setTerms` stores a policy's auto-pay limit, window and the owner-signed AP2 intent hash; only stricter values apply; agents with incidents get half the automatic limit | Live |
 | Appeal panel | Kleros | Independent juror accounts (`KUASA_JURORS`, never a party to the claim) vote on appeals with a signed request; a majority decides like a human would. The demo panel is two testnet accounts; production uses a juror pool or a Kleros court | Live (v3 claim #2: an appeal the two jurors rejected) |
 | Risk-specific staking | Nexus Mutual | Capital may back one class (`kuasa capital:AM|WI|ML`): first loss for that class, 1.5x premium weight | Live (the shop backs wrong items) |
 | Portable reputation | ERC-8004 Reputation Registry | `erc8004-feedback` A2A skill: claim outcomes as ERC-8004-shaped feedback with a pointer to the claim on Concordium. Posting on an Ethereum ERC-8004 registry needs the agent's ERC-8004 id and gas | Live (read-only) |
-| Per-order risk scoring | Stripe Radar | Order velocity from the insurer's on-chain watcher raises per-order premiums (x1.25 per order beyond two in the window, up to x2) | Tested |
+| Per-order risk scoring | Stripe Radar | Order velocity from the insurer's on-chain watcher raises per-order premiums (x1.25 per order beyond two in the window, up to x2) | Live |
 | Merchant-paid cover | "Free shipping" | The shop pays the per-order premium; only the sponsor may pay that quote, and refunds or givebacks go back to it | Live |
 | Premium giveback | Lemonade | 10% of the premium back when a policy ends with no claim | Tested (no v3 policy has ended yet) |
 

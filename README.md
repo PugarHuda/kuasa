@@ -104,6 +104,8 @@ node --import tsx src/cli.ts teen buy /shop/wine/rioja            # refused: age
 pnpm --filter @kuasa/scripts exec tsx fraud-demo.ts teen          # run twice: no-evidence claims -> disclosure draft
 pnpm --filter @kuasa/scripts exec tsx evidence-demo.ts            # WI10 delivery note, AM20 signed AP2 intent, AM10 detection + circuit breaker
 pnpm --filter @kuasa/scripts exec tsx v3-demo.ts                  # v3: terms, operator bond, insurer-filed claim, bonded objection, merchant-paid cover
+pnpm --filter @kuasa/scripts exec tsx bond-discount-demo.ts     # operator bond: the same quote with and without a 10 CCD bond (x0.9)
+pnpm --filter @kuasa/scripts exec tsx velocity-demo.ts            # three quick orders, then the per-order quote carries the velocity factor
 node --import tsx src/cli.ts alice claim-reason WI10 3 <paymentTx> # file with a reason code (AM20/WI10 attach the shop's signed delivery note)
 node --import tsx src/cli.ts alice detections                     # what the insurer spotted on-chain, and whether purchases are paused
 ```
