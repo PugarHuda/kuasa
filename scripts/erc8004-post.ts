@@ -14,6 +14,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createPublicClient, createWalletClient, http, keccak256, parseEther, parseEventLogs, toBytes, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
+import { cis8004GetMetadata, cis8004SetMetadata, connect, wallet as cwallet } from '@kuasa/chain';
+import { loadProfile } from './lib/identity.js';
 
 const IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 const REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
@@ -66,6 +68,17 @@ writeFileSync(new URL('alice-agent.json', out), JSON.stringify({
   registrations: [{ agentId: Number(state.agentId), agentRegistry: `eip155:11155111:${IDENTITY}` }],
   supportedTrust: ['reputation'],
 }, null, 2));
+// link it from the agent's Concordium identity: its owner writes kuasa:erc8004 on the agent's CIS-8004 entry,
+// so insurers can read its ERC-8004 reputation (written by the owner: nobody else can claim it)
+{
+  const link = `eip155:11155111:${IDENTITY}:${state.agentId}`;
+  const grpc = connect();
+  if ((await cis8004GetMetadata(grpc, ALICE_TOKEN, 'kuasa:erc8004')) !== link) {
+    const o = loadProfile('alice').accounts.find((a) => a.credNumber === 0)!;
+    const r = await cis8004SetMetadata(grpc, ALICE_TOKEN, 'kuasa:erc8004', link, cwallet(o.address, o.key));
+    console.log('   linked on the CIS-8004 entry: kuasa:erc8004 =', link, r.hash);
+  }
+}
 if (process.argv.includes('--register-only')) process.exit(0);
 
 // 3. the insurer posts each claim outcome it has not posted yet

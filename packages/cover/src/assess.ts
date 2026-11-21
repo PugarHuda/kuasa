@@ -36,7 +36,8 @@ export type AssessInput = {
   intentSkus?: string[];
 };
 
-export type Assessment = { ok: boolean; reason: string; payout: bigint; noEvidence: boolean };
+/** loss: the verified loss (claim capped by the matched receipt), before the deductible and the limit. */
+export type Assessment = { ok: boolean; reason: string; payout: bigint; noEvidence: boolean; loss?: bigint };
 
 export const DUPLICATE_WINDOW_MS = 10 * 60_000;
 const no = (reason: string, noEvidence = false): Assessment => ({ ok: false, reason, payout: 0n, noEvidence });
@@ -102,5 +103,5 @@ export function assess(i: AssessInput): Assessment {
   const payout = due < remaining ? due : remaining;
   if (payout <= 0n) return no('policy limit exhausted');
   const why = reason === 'AM10' || reason === 'ML10' ? 'receipt matched on-chain' : `${reason} ${REASON_CODES[reason].label}: receipt matched on-chain, merchant-signed delivery note verified`;
-  return { ok: true, reason: why, payout, noEvidence: false };
+  return { ok: true, reason: why, payout, noEvidence: false, loss };
 }

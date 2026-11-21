@@ -27,6 +27,8 @@ export type RiskInput = {
   recentOrders?: number;
   /** What this mandate spent in that window (spend surge: amount, not only count). */
   recentSpend?: bigint;
+  /** Portable reputation: ERC-8004 feedback from other insurers (count, average score 0-100). */
+  externalReputation?: { count: number; average: number };
 };
 
 export type Factor = { name: string; multiplier: number; reason: string };
@@ -95,6 +97,13 @@ export function quote(input: RiskInput): Quote | { refused: string } {
 
   if (input.provenAgeAndResidency) applied.push({ name: 'proven attributes', bps: 9_000n, reason: 'owner proved age and residency with a ZK proof bound to the agent' });
   if (input.bonded) applied.push({ name: 'operator bond', bps: 9_000n, reason: 'the agent operator bonded the agent with CCD, slashed on proven fraud' });
+  const ext = input.externalReputation;
+  if (ext && ext.count >= 3) {
+    // 70 is neutral; every point below costs 1%, every point above saves 1% (x0.85 to x1.3)
+    const raw = 10_000 + Math.round((70 - ext.average) * 100);
+    const r = BigInt(Math.min(13_000, Math.max(8_500, raw)));
+    if (r !== BPS) applied.push({ name: 'portable reputation (ERC-8004)', bps: r, reason: `${ext.count} claim outcomes from other insurers on Ethereum's ERC-8004 registry, average ${ext.average}/100` });
+  }
   if (input.ownerKind === 'business') applied.push({ name: 'business owner', bps: 8_500n, reason: 'LEI-verified business principal' });
   if (input.incidents > 0) applied.push({ name: 'incidents', bps: BPS + 2_500n * BigInt(input.incidents), reason: `${input.incidents} incident(s) on the mandate` });
   const paid = input.paidClaims ?? 0;

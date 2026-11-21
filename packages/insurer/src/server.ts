@@ -19,6 +19,9 @@ import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/c
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
 import { experienceBps, solvency } from '@kuasa/cover';
+import { createPublicClient, http as evmHttp } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { sepolia } from 'viem/chains';
 import { handleA2a } from './a2a.js';
 import { CapitalLedger, capitalClassOf, type RiskClass } from './capital.js';
 import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, claimKey, COVER_V1, connect, finalizedHeight, registryReceiptsAt, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
@@ -63,6 +66,39 @@ async function treasuryPay(to: string, amount: bigint, memo: string) {
     treasury.signer, undefined, { autoScale: false, validate: true });
   return sdk.TransactionHash.toHexString(hash);
 }
+/**
+ * Portable reputation: an agent links its ERC-8004 identity on its own CIS-8004 entry (kuasa:erc8004 =
+ * eip155:11155111:<IdentityRegistry>:<agentId>, written by the agent's owner). We read the feedback other
+ * clients (other insurers) posted on Ethereum Sepolia, never our own (that is experience rating already).
+ */
+const ERC8004_IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
+const ERC8004_REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
+const REPUTATION_ABI = [
+  { type: 'function', name: 'getClients', stateMutability: 'view', inputs: [{ name: 'agentId', type: 'uint256' }], outputs: [{ name: '', type: 'address[]' }] },
+  { type: 'function', name: 'getSummary', stateMutability: 'view', inputs: [{ name: 'agentId', type: 'uint256' }, { name: 'clientAddresses', type: 'address[]' }, { name: 'tag1', type: 'string' }, { name: 'tag2', type: 'string' }], outputs: [{ name: 'count', type: 'uint64' }, { name: 'summaryValue', type: 'int128' }, { name: 'summaryValueDecimals', type: 'uint8' }] },
+] as const;
+const evm = createPublicClient({ chain: sepolia, transport: evmHttp(process.env.SEPOLIA_RPC ?? 'https://ethereum-sepolia-rpc.publicnode.com') });
+const ownEvmKey = new URL('eth-insurer.json', ROOT);
+const ownEvm = PROFILE === 'insurer' && existsSync(ownEvmKey) ? privateKeyToAccount(JSON.parse(readFileSync(ownEvmKey, 'utf8')).privateKey).address.toLowerCase() : undefined;
+const repCache = new Map<string, { at: number; v: { count: number; average: number } | null }>();
+async function externalReputation(token: string) {
+  const hit = repCache.get(token);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.v;
+  const link = await cis8004GetMetadata(grpc, token, 'kuasa:erc8004');
+  const m = link?.match(/^eip155:11155111:(0x[0-9a-fA-F]{40}):(\d+)$/);
+  let v: { count: number; average: number } | null = null;
+  if (m && m[1].toLowerCase() === ERC8004_IDENTITY.toLowerCase()) {
+    const id = BigInt(m[2]);
+    const others = (await evm.readContract({ address: ERC8004_REPUTATION, abi: REPUTATION_ABI, functionName: 'getClients', args: [id] })).filter((c) => c.toLowerCase() !== ownEvm);
+    if (others.length) {
+      const [count, value, dec] = await evm.readContract({ address: ERC8004_REPUTATION, abi: REPUTATION_ABI, functionName: 'getSummary', args: [id, others, '', ''] });
+      v = { count: Number(count), average: Number(value) / 10 ** dec };
+    }
+  }
+  repCache.set(token, { at: Date.now(), v });
+  return v;
+}
+
 /** Outcome of a submitted transfer: success, failed, or pending when finality is not confirmed within 30 s. */
 async function txOutcomeOf(hash: string): Promise<'success' | 'failed' | 'pending'> {
   const tx = sdk.TransactionHash.fromHexString(hash);
@@ -196,6 +232,7 @@ const svc = new InsurerService({
   priceBps: BigInt(process.env.KUASA_PRICE_BPS ?? 10_000),
   // contribution: only the same agent's claims count (double recovery needs the same insured; anyone else
   // listing these orders elsewhere cannot reduce this agent's payout), and only what was paid or approved
+  externalReputation: (token) => externalReputation(token),
   otherInsurersPaid: async (agentPayer, mine) => {
     const others = [fileCover, ...((state as { market?: { cover: string }[] }).market ?? []).map((m) => m.cover)].filter((c) => BigInt(c) !== coverIndex);
     let paid = 0n;

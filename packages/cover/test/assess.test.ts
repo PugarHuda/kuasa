@@ -18,7 +18,7 @@ const run = (over: Omit<Partial<AssessInput>, 'claim'> & { claim?: Partial<Asses
   assess({ ...base, ...over, claim: { ...base.claim, ...over.claim } });
 
 test('WI10 wrong item: receipt + merchant-signed note showing another item, payout = amount - deductible', () => {
-  assert.deepEqual(run(), { ok: true, reason: 'WI10 wrong item shipped: receipt matched on-chain, merchant-signed delivery note verified', payout: 23n * EUR, noEvidence: false });
+  assert.deepEqual(run(), { ok: true, reason: 'WI10 wrong item shipped: receipt matched on-chain, merchant-signed delivery note verified', payout: 23n * EUR, noEvidence: false, loss: 24n * EUR });
   assert.match(run({ delivery: undefined }).reason, /delivery note/);
   assert.match(run({ delivery: [{ order: 'o1', paymentTx: 'p1', ordered: '/shop/wine/rioja', shipped: '/shop/wine/rioja' }] }).reason, /ordered item .* was shipped/);
   assert.match(run({ delivery: [{ order: 'other', paymentTx: 'p1', ordered: 'a', shipped: 'b' }] }).reason, /delivery note/, 'note must be for the claimed order');

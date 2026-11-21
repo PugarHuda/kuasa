@@ -104,6 +104,8 @@ export type InsurerDeps = {
    * once in total, and every share of a syndicated policy still pays its part.
    */
   otherInsurersPaid?(agentPayer: string, orders: string[]): Promise<bigint>;
+  /** Portable reputation: ERC-8004 feedback on this agent from clients other than this insurer (null if none or unknown). */
+  externalReputation?(agentToken: string): Promise<{ count: number; average: number } | null>;
 };
 
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
@@ -310,6 +312,8 @@ export class InsurerService {
       bonded: !!(this.deps.bondOf && ((await this.deps.bondOf(m.agent.payer).catch(() => null))?.amount ?? 0n) >= 10_000_000n),
       recentOrders: this.recent.filter((r) => r.mandateId === id).length,
       recentSpend: this.recent.filter((r) => r.mandateId === id).reduce((a, r) => a + r.amount, 0n),
+      // a lookup failure prices as unknown (no factor): reputation is a signal, not a gate
+      externalReputation: (this.deps.externalReputation ? await this.deps.externalReputation(m.agent.registry.tokenId).catch(() => null) : null) ?? undefined,
     };
     const q = quote(input);
     if ('refused' in q) return q;
@@ -507,7 +511,7 @@ export class InsurerService {
     // contribution; fails closed: if another insurer's book cannot be read, the claim is not assessed now
     if (a.ok && this.deps.otherInsurersPaid) {
       const elsewhere = await this.deps.otherInsurersPaid(p.agentPayer, c.orders);
-      const room = c.amount - elsewhere;
+      const room = (a.loss ?? c.amount) - elsewhere; // the verified loss, never the amount claimed
       if (room <= 0n) a = { ok: false, reason: 'already paid in full by another insurer on the market (contribution)', payout: 0n, noEvidence: false };
       else if (elsewhere > 0n && a.payout > room) a = { ...a, payout: room, reason: `${a.reason}; ${elsewhere} already paid by another insurer on the market (contribution)` };
     }
@@ -887,7 +891,7 @@ export class InsurerService {
         if (this.deps.otherInsurersPaid && policy && onChain) {
           const elsewhere = await this.deps.otherInsurersPaid(policy.agentPayer, rec.orders).catch(() => null);
           if (elsewhere === null) return { decided: true, reason: "another insurer's book is unreadable: payout waits (approve again to retry)" };
-          const room = onChain.amount - elsewhere;
+          const room = (rec.assessment.loss ?? onChain.amount) - elsewhere; // the verified loss, never the amount claimed
           if (room <= 0n) {
             rec.payoutBlocked = 'paid in full by another insurer on the market (contribution)';
             rec.final = true;

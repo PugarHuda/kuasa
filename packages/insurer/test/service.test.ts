@@ -178,6 +178,19 @@ test('market, contribution: each insurer pays only what other insurers have not 
   assert.deepEqual(late.calls.filter((c) => c.startsWith('pay:')), [`pay:${PAYER}:${4n * EUR}`]);
 });
 
+test('market, contribution is bounded by the verified loss, not the amount claimed (no double recovery by overclaiming)', async () => {
+  const t = harness({ otherInsurersPaid: async () => 20n * EUR });
+  await quoteOk(t.svc);
+  const q = await quoteOk(t.svc);
+  const pid = await t.svc.issue(q.quoteId, h(9));
+  const ev = await wrongItemEvidence(h(10));
+  // receipt says 24 (receiptEvent default); the agent claims 30
+  t.claims.set(0n, { policyId: pid!, claimant: PAYER, kind: 'WrongItem', amount: 30n * EUR, evidence: ev.hash, orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  t.events.set('r0', receiptEvent(h(10)));
+  const a = await t.svc.assessClaim(0n, ['r0'], ev.doc);
+  assert.ok(!a.ok || a.payout <= 4n * EUR, `payout ${a.payout} must not exceed loss 24 minus 20 paid elsewhere`);
+});
+
 test('approve pays the agent payer and records the payout', async () => {
   const t = harness();
   const a = await filedClaim(t, true, 0n);

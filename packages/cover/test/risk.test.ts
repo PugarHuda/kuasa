@@ -68,6 +68,15 @@ test('spend surge: the window spend plus this order above twice the per-order ca
   assert.equal(premium({ ...o, recentSpend: 81_000_000n, recentOrders: 12 }), 600_000n, 'velocity x2 and surge: capped at x2');
 });
 
+test('portable reputation (ERC-8004): other insurers\' outcomes price the cover once there are 3 or more (70 neutral, x0.85..x1.3)', () => {
+  const f = (count: number, average: number) => { const q = quote({ ...base, externalReputation: { count, average } }); return 'refused' in q ? null : q.factors.find((x) => x.name === 'portable reputation (ERC-8004)')?.multiplier; };
+  assert.equal(f(2, 10), undefined, 'too few outcomes');
+  assert.equal(f(13, 53), 1.17);
+  assert.equal(f(5, 100), 0.85);
+  assert.equal(f(5, 0), 1.3);
+  assert.equal(f(5, 70), undefined, 'neutral');
+});
+
 test('experience rating (Buhlmann credibility): 50*(1+claims)/(orders+50), x0.7..x2', () => {
   assert.equal(experienceBps(0, 0), 10_000n, 'new agent: neutral');
   assert.equal(experienceBps(50, 1), 10_000n, 'a claim on 2% of orders is the prior');
