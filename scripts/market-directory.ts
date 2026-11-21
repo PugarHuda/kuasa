@@ -7,7 +7,8 @@
  * An agent reads the list, checks each entry is owned by the pool it advertises, and uses an insurer only
  * if its owner's mandate names that pool. Usage: tsx market-directory.ts (idempotent).
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { privateKeyToAccount } from 'viem/accounts';
 import * as sdk from '@concordium/web-sdk';
 import { Transaction } from '@concordium/web-sdk/transactions';
 import { AGENT_REGISTRY, bigintJson, cis8004GetMetadata, cis8004SetMetadata, connect, submit, wallet, type Wallet } from '@kuasa/chain';
@@ -46,7 +47,9 @@ async function advertise(token: string, owner: Wallet, value: string) {
 for (const m of state.market) {
   if (!m.agent) { m.agent = await register(pool('insurer2'), 'https://kuasa-explorer.vercel.app/?insurer=kuasa-re'); save(); }
 }
-await advertise(state.insurerAgent, pool('insurer'), `name=Kuasa Cover;cover=${state.cover};pool=${pool('insurer').address.address};operator=${op('insurer')};price=10000;url=http://localhost:4023`);
+// evm: the address this insurer posts ERC-8004 feedback from (other insurers trust ratings from listed addresses only)
+const evmOf = (f: string) => { const u = new URL(`../.kuasa/${f}`, import.meta.url); return existsSync(u) ? `;evm=${privateKeyToAccount(JSON.parse(readFileSync(u, 'utf8')).privateKey).address}` : ''; };
+await advertise(state.insurerAgent, pool('insurer'), `name=Kuasa Cover;cover=${state.cover};pool=${pool('insurer').address.address};operator=${op('insurer')};price=10000;url=http://localhost:4023${evmOf('eth-insurer.json')}`);
 for (const m of state.market) await advertise(m.agent!, pool('insurer2'), `name=${m.name};cover=${m.cover};pool=${m.treasury};operator=${m.operator};price=${m.price ?? 8500};url=${m.url}`);
 const list = [state.insurerAgent, ...state.market.map((m) => m.agent!)].join(',');
 if ((await cis8004GetMetadata(grpc, state.insurerAgent, 'kuasa:market')) !== list) {

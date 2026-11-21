@@ -19,14 +19,14 @@ import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/c
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
 import { experienceBps, solvency } from '@kuasa/cover';
-import { createPublicClient, http as evmHttp } from 'viem';
+import { createPublicClient, createWalletClient, http as evmHttp, keccak256, toBytes } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import { handleA2a } from './a2a.js';
 import { CapitalLedger, capitalClassOf, type RiskClass } from './capital.js';
 import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, claimKey, COVER_V1, connect, finalizedHeight, registryReceiptsAt, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, type ClaimEvidence, evidenceHash, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
-import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyAp2Intent, verifyDeliveryNote, verifyPayerProof } from '@kuasa/merchant';
+import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyAp2Intent, verifyDeliveryNote, verifyPayerProof } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
 import { checkSponsorable, jsonSafe, SponsorBudget } from './sponsor.js';
 import { Transaction } from '@concordium/web-sdk/transactions';
@@ -48,6 +48,7 @@ if (process.env.KUASA_COVER_INDEX) state.cover = process.env.KUASA_COVER_INDEX;
  * only its own book and does not write to the first insurer's CIS-8004 entry.
  */
 const PROFILE = process.env.KUASA_PROFILE ?? 'insurer';
+const marketRoot = state.insurerAgent; // the market directory (kuasa:market) lives on the first insurer's entry
 if (PROFILE !== 'insurer') {
   state.coverV1 = undefined; state.coverV2 = undefined;
   // its own CIS-8004 entry (owned by its pool): decisions and holds are published there (scripts/market-directory.ts)
@@ -74,13 +75,26 @@ async function treasuryPay(to: string, amount: bigint, memo: string) {
 const ERC8004_IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 const ERC8004_REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 const REPUTATION_ABI = [
-  { type: 'function', name: 'getClients', stateMutability: 'view', inputs: [{ name: 'agentId', type: 'uint256' }], outputs: [{ name: '', type: 'address[]' }] },
+  { type: 'function', name: 'getMetadata', stateMutability: 'view', inputs: [{ name: 'agentId', type: 'uint256' }, { name: 'metadataKey', type: 'string' }], outputs: [{ name: '', type: 'bytes' }] },
   { type: 'function', name: 'getSummary', stateMutability: 'view', inputs: [{ name: 'agentId', type: 'uint256' }, { name: 'clientAddresses', type: 'address[]' }, { name: 'tag1', type: 'string' }, { name: 'tag2', type: 'string' }], outputs: [{ name: 'count', type: 'uint64' }, { name: 'summaryValue', type: 'int128' }, { name: 'summaryValueDecimals', type: 'uint8' }] },
 ] as const;
 const evm = createPublicClient({ chain: sepolia, transport: evmHttp(process.env.SEPOLIA_RPC ?? 'https://ethereum-sepolia-rpc.publicnode.com') });
 const ownEvmKey = new URL('eth-insurer.json', ROOT);
 const ownEvm = PROFILE === 'insurer' && existsSync(ownEvmKey) ? privateKeyToAccount(JSON.parse(readFileSync(ownEvmKey, 'utf8')).privateKey).address.toLowerCase() : undefined;
 const repCache = new Map<string, { at: number; v: { count: number; average: number } | null }>();
+/** EVM addresses the market's insurers advertise (evm= in kuasa:insurer, written by each entry's owning pool). */
+async function trustedRaters(): Promise<`0x${string}`[]> {
+  if (!marketRoot) return [];
+  const registry = new Cis8004Registry(grpc);
+  const out: `0x${string}`[] = [];
+  for (const token of (await cis8004GetMetadata(grpc, marketRoot, 'kuasa:market'))?.split(',').filter(Boolean) ?? []) {
+    const f = Object.fromEntries((await cis8004GetMetadata(grpc, token, 'kuasa:insurer') ?? '').split(';').map((kv) => kv.split('=') as [string, string]));
+    if (!f.evm || !/^0x[0-9a-fA-F]{40}$/.test(f.evm)) continue;
+    if ((await registry.agentOf(token).catch(() => null))?.owner !== f.pool) continue; // self-attested by its pool only
+    out.push(f.evm.toLowerCase() as `0x${string}`);
+  }
+  return out;
+}
 async function externalReputation(token: string) {
   const hit = repCache.get(token);
   if (hit && Date.now() - hit.at < 10 * 60_000) return hit.v;
@@ -89,7 +103,11 @@ async function externalReputation(token: string) {
   let v: { count: number; average: number } | null = null;
   if (m && m[1].toLowerCase() === ERC8004_IDENTITY.toLowerCase()) {
     const id = BigInt(m[2]);
-    const others = (await evm.readContract({ address: ERC8004_REPUTATION, abi: REPUTATION_ABI, functionName: 'getClients', args: [id] })).filter((c) => c.toLowerCase() !== ownEvm);
+    // two-way binding: the ERC-8004 owner must name this CIS-8004 entry on Ethereum too (no borrowed reputation)
+    const back = await evm.readContract({ address: ERC8004_IDENTITY, abi: REPUTATION_ABI, functionName: 'getMetadata', args: [id, 'kuasa:cis8004'] });
+    const bound = Buffer.from(back.slice(2), 'hex').toString('utf8') === `ccd:testnet:<12802,0>:${token}`;
+    // only insurers on the market directory rate (no Sybil raters), and never this insurer itself
+    const others = bound ? (await trustedRaters()).filter((c) => c !== ownEvm) : [];
     if (others.length) {
       const [count, value, dec] = await evm.readContract({ address: ERC8004_REPUTATION, abi: REPUTATION_ABI, functionName: 'getSummary', args: [id, others, '', ''] });
       v = { count: Number(count), average: Number(value) / 10 ** dec };
@@ -134,6 +152,38 @@ function publishDecision(claimId: bigint | string, by: 'auto' | 'human' | 'panel
   void cis8004GetMetadata(grpc, state.insurerAgent, key)
     .then((existing) => (existing?.includes(`verdict=${verdict};`) ? undefined : cis8004SetMetadata(grpc, state.insurerAgent!, key, value, treasury)))
     .catch((e) => console.error('[insurer] publishing decision failed', String(claimId), (e as Error).message));
+  if (paid) void postReputation(BigInt(claimId)).catch((e) => console.error('[insurer] ERC-8004 feedback failed', String(claimId), (e as Error).message));
+}
+
+/**
+ * Portable reputation, automatically: when a claim is paid, the outcome goes to the agent's ERC-8004
+ * Reputation Registry entry on Ethereum Sepolia, if the agent linked one (kuasa:erc8004) and this insurer
+ * has an EVM key. Same entries and the same progress file as scripts/erc8004-post.ts (never posted twice).
+ * feedbackURI points at the claim on Concordium; feedbackHash is keccak256 of the feedback body, which is
+ * kept in the audit log (anyone can rebuild it from the claim).
+ */
+const GIVE_FEEDBACK_ABI = [{ type: 'function', name: 'giveFeedback', stateMutability: 'nonpayable', inputs: [{ name: 'agentId', type: 'uint256' }, { name: 'value', type: 'int128' }, { name: 'valueDecimals', type: 'uint8' }, { name: 'tag1', type: 'string' }, { name: 'tag2', type: 'string' }, { name: 'endpoint', type: 'string' }, { name: 'feedbackURI', type: 'string' }, { name: 'feedbackHash', type: 'bytes32' }], outputs: [] }] as const;
+async function postReputation(claimId: bigint) {
+  if (!ownEvm) return;
+  const progressFile = new URL('erc8004.json', ROOT);
+  const progress = (existsSync(progressFile) ? JSON.parse(readFileSync(progressFile, 'utf8')) : { posted: {} }) as { posted: Record<string, { tx: string; uri: string }> };
+  const id = `<${state.cover},0>:${claimId}`;
+  if (progress.posted[id]) return;
+  const c = await cover.claim(claimId);
+  const p = c && await cover.policy(c.policyId);
+  if (!c || !p || c.status.tag !== 'Paid') return;
+  const score = c.kind === 'AgentMistake' ? 60 : c.kind === 'MerchantLoss' ? 30 : null; // a wrong item is the merchant's fault
+  if (score === null) return;
+  const link = (await cis8004GetMetadata(grpc, p.agentToken, 'kuasa:erc8004'))?.match(/^eip155:11155111:(0x[0-9a-fA-F]{40}):(\d+)$/);
+  if (!link || link[1].toLowerCase() !== ERC8004_IDENTITY.toLowerCase()) return;
+  const uri = `ccd:testnet:kuasa-cover:<${state.cover},0>:claim:${claimId}`;
+  const body = JSON.stringify({ agentRegistry: `eip155:11155111:${ERC8004_IDENTITY}`, agentId: Number(link[2]), value: score, tag1: 'kuasa-cover', tag2: c.kind, evidence: { network: 'ccd:testnet', contract: `<${state.cover},0>`, claimId: String(claimId), status: 'Paid' } });
+  const account = privateKeyToAccount(JSON.parse(readFileSync(ownEvmKey, 'utf8')).privateKey);
+  const tx = await createWalletClient({ account, chain: sepolia, transport: evmHttp(process.env.SEPOLIA_RPC ?? 'https://ethereum-sepolia-rpc.publicnode.com') })
+    .writeContract({ address: ERC8004_REPUTATION, abi: GIVE_FEEDBACK_ABI, functionName: 'giveFeedback', args: [BigInt(link[2]), BigInt(score), 0, 'kuasa-cover', c.kind, PUBLIC_URL, uri, keccak256(toBytes(body))] });
+  progress.posted[id] = { tx, uri };
+  writeFileSync(progressFile, JSON.stringify(progress, null, 2));
+  audit.append({ kind: 'erc8004-feedback', claimId: String(claimId), tx, body });
 }
 
 const grpc = connect();

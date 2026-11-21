@@ -11,7 +11,7 @@
  * Usage: tsx erc8004-post.ts [--register-only]. Redeploy the explorer after it writes files.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createPublicClient, createWalletClient, http, keccak256, parseEther, parseEventLogs, toBytes, type Hex } from 'viem';
+import { createPublicClient, createWalletClient, http, keccak256, parseEther, parseEventLogs, toBytes, toHex, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import { cis8004GetMetadata, cis8004SetMetadata, connect, wallet as cwallet } from '@kuasa/chain';
@@ -77,6 +77,16 @@ writeFileSync(new URL('alice-agent.json', out), JSON.stringify({
     const o = loadProfile('alice').accounts.find((a) => a.credNumber === 0)!;
     const r = await cis8004SetMetadata(grpc, ALICE_TOKEN, 'kuasa:erc8004', link, cwallet(o.address, o.key));
     console.log('   linked on the CIS-8004 entry: kuasa:erc8004 =', link, r.hash);
+  }
+}
+// ...and the other way round: the ERC-8004 owner names the CIS-8004 entry on Ethereum (a two-way binding)
+{
+  const back = `ccd:testnet:<12802,0>:${ALICE_TOKEN}`;
+  const cur = await pub.readContract({ address: IDENTITY, abi: abi('IdentityRegistry'), functionName: 'getMetadata', args: [BigInt(state.agentId!), 'kuasa:cis8004'] }) as Hex;
+  if (Buffer.from(cur.slice(2), 'hex').toString('utf8') !== back) {
+    const tx = await wallet(agentKey).writeContract({ address: IDENTITY, abi: abi('IdentityRegistry'), functionName: 'setMetadata', args: [BigInt(state.agentId!), 'kuasa:cis8004', toHex(back)] });
+    await wait(tx);
+    console.log('   bound on Ethereum: kuasa:cis8004 =', back, tx);
   }
 }
 if (process.argv.includes('--register-only')) process.exit(0);
