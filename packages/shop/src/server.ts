@@ -48,11 +48,11 @@ const recorderWallet = wallet(sponsor.address, sponsor.key);
 
 const grpc = connect();
 /** Signed requests may be addressed to the shop locally or at its public URL (e.g. a tunnel). */
-const AUDIENCES = [`http://localhost:${PORT}`, ...(process.env.KUASA_PUBLIC_URL ? [process.env.KUASA_PUBLIC_URL.replace(/\/$/, '')] : [])];
+const AUDIENCES = [`http://localhost:${PORT}`, ...(process.env.KUASA_SHOP_PUBLIC_URL ? [process.env.KUASA_SHOP_PUBLIC_URL.replace(/\/$/, '')] : [])];
 const registry = new KuasaRegistry(grpc, BigInt(state.registry));
 /**
- * Cover from every insurer on the market counts: period cover adds up (co-insurance: each insurer pays
- * its own policy), order cover is the largest single order policy. One unreadable insurer fails closed.
+ * Cover from every insurer on the market counts and adds up (co-insurance or a syndicated policy: each
+ * insurer pays its own share). One unreadable insurer fails closed.
  */
 function marketCover(indexes: string[]) {
   const books = indexes.map((i) => new KuasaCover(grpc, BigInt(i)));
@@ -61,7 +61,7 @@ function marketCover(indexes: string[]) {
       const vs = await Promise.all(books.map((b) => b.coverOf(payer, order)));
       return {
         periodRemaining: vs.reduce((a, v) => a + v.periodRemaining, 0n),
-        orderLimit: vs.reduce((a, v) => (v.orderLimit > a ? v.orderLimit : a), 0n),
+        orderLimit: vs.reduce((a, v) => a + v.orderLimit, 0n), // a syndicated order: each insurer's share adds up
         policyId: vs.find((v) => v.policyId !== null)?.policyId ?? null,
       };
     },

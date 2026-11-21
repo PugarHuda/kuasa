@@ -12,6 +12,8 @@ const LABELS: Record<string, string> = {
   '4DRGyL6GkXQXs8CT7KovczM9SbwVgn8KsKAvQtFt4G4puhXKLc': "Alice's agent",
   '4j733XjURhA9UFkxfNbZHsKpRSMvnbQjJyjbbMHUKuzMu8huDH': 'Teen (owner)',
   '4Gw69UEYtxxE1EroXsp3AwAZWa38cKCuQZCgs9HYLc1Xys4oqg': "Teen's agent",
+  '48gu4xmZFUdXDqGtZCAyL1FhsacGGbd4DR2EqxjQNkggDy7xT6': 'Bob (owner)',
+  '44eHEQ2L14PfzVn3UDYLZq2injuFMegoVFHshFyxgYNnhW1965': "Bob's agent",
   '34BwTuaAu2EsgHNj3Us9TrYUNbKGo6Wnh3ixxUSanrca7KrPKv': 'Demo shop',
   [POOL]: 'Kuasa Cover pool',
   '3QLQkD8ZK4NDKEgQmxrwXkESkw3wwztrtF1sjjbYkGpHEsFcLo': 'Kuasa Re pool',

@@ -33,7 +33,7 @@ const PORT = Number(process.env.PORT ?? 4023);
 const PUBLIC_URL = process.env.KUASA_INSURER_URL ?? `http://localhost:${PORT}`;
 const SHOP_ORIGIN = process.env.KUASA_SHOP_URL ?? 'http://localhost:4021';
 /** Signed requests may be addressed to this service locally or at its public URL (e.g. a tunnel). */
-const AUDIENCES = [PUBLIC_URL, ...(process.env.KUASA_PUBLIC_URL ? [process.env.KUASA_PUBLIC_URL.replace(/\/$/, '')] : [])];
+const AUDIENCES = [PUBLIC_URL, ...(process.env.KUASA_INSURER_PUBLIC_URL ? [process.env.KUASA_INSURER_PUBLIC_URL.replace(/\/$/, '')] : [])];
 const ASSET = process.env.KUASA_ASSET ?? 'EUDemo';
 const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover: string; coverV1?: string; coverV2?: string; insurerAgent?: string };
 // Serve an older book (e.g. to decide a claim left on v2 after the switch to v3): KUASA_COVER_INDEX + KUASA_STATE_FILE.

@@ -270,6 +270,37 @@ export class KuasaAgent {
     return { ...(await this.buyQuote(best.quote, best.at)), insurer: best.at, offers };
   }
 
+  /**
+   * Syndicated cover (Nexus Mutual v2 capacity allocation, Lloyd's following market): when no single
+   * insurer can carry the whole limit, split it. Each insurer's free capacity (pool minus live limits,
+   * from its public /solvency) is filled cheapest first, per unit of cover; each share is that insurer's
+   * own policy, and the shop adds them up. Stops at the first failed purchase (shares bought stay bought).
+   */
+  async coverBuySyndicated(limit: bigint, days = 30) {
+    const offers: { at: string; free: bigint; unit: number }[] = [];
+    for (const at of this.insurerUrls) {
+      const s = await (await fetch(new URL('/solvency', at))).json().catch(() => null) as { pool?: string; exposure?: string } | null;
+      if (!s?.pool || !s.exposure) continue;
+      const free = BigInt(s.pool) - BigInt(s.exposure);
+      if (free <= 0n) continue;
+      const probe = free < limit ? free : limit;
+      const q = await this.coverQuote(probe, days, undefined, undefined, false, at).catch(() => null);
+      if (q?.premium) offers.push({ at, free, unit: Number(q.premium) / Number(probe) });
+    }
+    offers.sort((a, b) => a.unit - b.unit);
+    let rest = limit;
+    const legs: { at: string; limit: bigint; ok: boolean; premium?: string; policyId?: string; paymentTx?: string; reasons?: string[] }[] = [];
+    for (const o of offers) {
+      if (rest <= 0n) break;
+      const take = o.free < rest ? o.free : rest;
+      const r = await this.buyQuote(await this.coverQuote(take, days, undefined, undefined, false, o.at), o.at);
+      legs.push({ at: o.at, limit: take, ok: r.ok, premium: (r as { premium?: string }).premium, policyId: (r as { policy?: { policyId: string } }).policy?.policyId, paymentTx: (r as { paymentTx?: string }).paymentTx, reasons: (r as { reasons?: string[] }).reasons });
+      if (!r.ok) break;
+      rest -= take;
+    }
+    return { ok: rest === 0n, covered: limit - rest, legs };
+  }
+
   /** Merchant-paid cover: buy per-order cover for another agent's order (this client pays, that agent is insured). */
   async sponsorOrderCover(order: { ref: string; amount: bigint }) {
     return this.buyQuote(await this.coverQuote(0n, 1, order, undefined, true));

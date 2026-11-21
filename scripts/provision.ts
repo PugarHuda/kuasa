@@ -12,6 +12,7 @@ import { provision, type Attributes } from './lib/identity.js';
 const cast: Record<string, [Attributes, number]> = {
   alice: [{ dob: '19900415', countryOfResidence: 'DK', nationality: 'DK' }, 2],
   teen: [{ dob: '20100301', countryOfResidence: 'DK', nationality: 'DK' }, 2],
+  bob: [{ dob: '19880612', countryOfResidence: 'NL', nationality: 'NL' }, 2], // adult; his agent buys syndicated cover on the market
   merchant: [{ dob: '19800101', countryOfResidence: 'NL', nationality: 'NL' }, 2],
   insurer: [{ dob: '19750101', countryOfResidence: 'NL', nationality: 'NL' }, 2], // #0 treasury (EUDemo pool), #1 operator
   insurer2: [{ dob: '19700101', countryOfResidence: 'DE', nationality: 'DE' }, 2], // a second insurer on the market ("Kuasa Re"): #0 pool, #1 operator
