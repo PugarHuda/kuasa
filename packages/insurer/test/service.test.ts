@@ -584,11 +584,13 @@ test('AM20 (outside the AP2 intent) uses the SKUs the policy was bought under an
   const doc: ClaimEvidence = { v: 2, reason: 'AM20', paymentTxs: [h(9)], note: 'a page told the agent to buy wine', delivery: [{ note: { v: 1, order: h(10), paymentTx: h(9), ordered: '/shop/wine/rioja', shipped: '/shop/wine/rioja', at: 1 }, signer: SHOP, sig: 'ok' }] };
   t.events.set('r0', receiptEvent(h(10)));
   t.claims.set(0n, { policyId: pid, claimant: PAYER, kind: 'AgentMistake', amount: 24n * EUR, evidence: await evidenceHash(doc), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  t.setEntry(entry({ receipts: 5n })); // four earlier orders nobody disputed
   const a = await t.svc.assessClaim(0n, ['r0'], doc);
   assert.equal(a.ok, true, a.reason);
   assert.match(a.reason, /^AM20/);
   assert.equal(t.svc.state().claims[0].autoPayAt, undefined);
   assert.equal(t.svc.state().claims[0].reason, 'AM20');
+  assert.deepEqual(t.svc.state().claims[0].compelling, { priorUndisputed: 4, qualifies: true }, 'Stripe CE 3.0: habitual purchases, shown to the human');
 });
 
 test('wrong-item claims are never paid automatically (a receipt cannot prove the item was wrong)', async () => {
@@ -830,6 +832,42 @@ test('v3 terms: the owner-signed intent is anchored on the policy; incidents hal
   await t2.svc.issue((await quoteOk(t2.svc)).quoteId, h(9));
   for (let i = 0; i < 50 && !seen2.length; i++) await new Promise((r) => setTimeout(r, 5));
   assert.equal(seen2[0].autoPayLimit, 5n * EUR);
+});
+
+test('buyer-chosen terms: maxAutoPay only tightens the automatic limit (0 = every claim to a human), and the insurer honours it off-chain too', async () => {
+  const run = async (maxAutoPay: bigint) => {
+    const t = harness({ autoPayLimit: 10n * EUR });
+    const seen: { autoPayLimit: bigint }[] = [];
+    t.svc['deps'].cover.setTerms = async (_id, y) => { seen.push(y); return { hash: 'x' }; };
+    const q = await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30, maxAutoPay });
+    assert.ok(!('refused' in q));
+    await t.svc.issue(q.quoteId, h(9));
+    for (let i = 0; i < 50 && !t.svc.state().policies[0].terms; i++) await new Promise((r) => setTimeout(r, 5));
+    return { t, limit: seen[0]?.autoPayLimit };
+  };
+  assert.equal((await run(0n)).limit, 0n);
+  assert.equal((await run(4n * EUR)).limit, 4n * EUR);
+  assert.equal((await run(50n * EUR)).limit, 10n * EUR, 'cannot loosen the insurer rule');
+  const { t } = await run(0n);
+  await filedClaim(t, true, 0n);
+  assert.equal(t.svc.state().claims[0].autoPayAt, undefined, 'the buyer asked for a human on every claim');
+});
+
+test('escalation: an appeal of a panel decision goes to a human at the insurer, not to the panel again', async () => {
+  const [J1, J2, J3] = [addr(31), addr(32), addr(33)];
+  const t = harness({ jurors: [J1, J2, J3] });
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, false);
+  const ev = await wrongItemEvidence(h(10));
+  t.claims.set(1n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: ev.hash, orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(1n, ['r0'], ev.doc);
+  await t.svc.panelVote(1n, J1, false);
+  await t.svc.panelVote(1n, J2, false); // the panel rejects the appeal
+  t.claims.set(2n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: ev.hash, orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(2n, ['r0'], ev.doc);
+  assert.notEqual(t.svc.state().claims.find((c) => c.claimId === 2n)!.appealOf, undefined);
+  await assert.rejects(t.svc.panelVote(2n, J3, true), /escalated/);
+  assert.equal(t.svc.openAppeals().find((a) => a.claimId === 2n)!.escalated, true);
 });
 
 test('merchant-paid cover: the sponsor signs and pays; the policy covers the agent; nobody else may pay', async () => {

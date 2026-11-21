@@ -108,14 +108,24 @@ export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; or
   /** Merchant-paid cover: this account (e.g. the shop) pays the premium; the policy still covers the agent. */
   sponsor?: string;
   /** The user's AP2 Intent Mandate, when the agent works under one: the Kuasa mandate must sit inside it. */
-  ap2?: Ap2IntentMandate };
+  ap2?: Ap2IntentMandate;
+  /** Chosen by the buyer: claims above this always go to a human (0 = never automatic). Can only tighten the insurer's rule. */
+  maxAutoPay?: bigint };
 export type StoredQuote = Quote & {
   /** The AP2 intent carried the principal's signature (checked at quote time). */
   ownerSignedIntent?: boolean;
   quoteId: string; request: QuoteRequest; mandateId: string; owner: string; payer: string; token: string; expires: number;
 };
 type ClaimRecord = {
-  claimId: bigint; policyId: bigint; /** chargeback-style reason code from the verified evidence */ reason?: string; holder: string; claimant: string; recipient: string; assessment: Assessment; receiptTxs: string[]; orders: string[];
+  claimId: bigint; policyId: bigint; /** chargeback-style reason code from the verified evidence */ reason?: string;
+  /** The evidence document, kept only when its hash matched the claim's on-chain evidence (publishable: anyone can re-hash it). */
+  evidenceDoc?: ClaimEvidence;
+  /**
+   * Compelling evidence (Stripe CE 3.0): orders recorded on this mandate before the claim that no claim
+   * disputes. For an AM20 claim ("the agent did not mean to buy this"), two or more undisputed orders
+   * qualify as evidence that the purchases were habitual: the human deciding sees it.
+   */
+  compelling?: { priorUndisputed: number; qualifies: boolean }; holder: string; claimant: string; recipient: string; assessment: Assessment; receiptTxs: string[]; orders: string[];
   mandateId?: string;
   /** The human decision (or the automatic no-evidence rejection). */
   verdict?: 'approved' | 'rejected';
@@ -233,7 +243,7 @@ export class InsurerService {
     const signer = req.sponsor ?? fresh.payer;
     if (!(await this.deps.verifyPayer(signer, req.proof).catch(() => false))) return { refused: req.sponsor ? 'sponsor proof required: sign the request with the sponsor account key' : 'payer proof required: sign the request with the agent payer key' };
     req = { ...req, proof: undefined }; // not kept
-    const quoteId = await sha256Hex(canonicalJson({ ...req, limit: String(req.limit), order: req.order && { ...req.order, amount: String(req.order.amount) }, at: this.deps.now(), n: Math.random() }));
+    const quoteId = await sha256Hex(canonicalJson({ ...req, limit: String(req.limit), order: req.order && { ...req.order, amount: String(req.order.amount) }, maxAutoPay: req.maxAutoPay === undefined ? undefined : String(req.maxAutoPay), at: this.deps.now(), n: Math.random() }));
     const stored: StoredQuote = { ...fresh, quoteId, request: req, expires: this.deps.now() + QUOTE_TTL_MS };
     this.dropStaleReservations();
     for (const [id, q] of this.quotes) if (q.expires < this.deps.now() && !this.paying.has(id)) this.quotes.delete(id);
@@ -289,6 +299,7 @@ export class InsurerService {
       order: req.order && { amount: req.order.amount },
       bonded: !!(this.deps.bondOf && ((await this.deps.bondOf(m.agent.payer).catch(() => null))?.amount ?? 0n) >= 10_000_000n),
       recentOrders: this.recent.filter((r) => r.mandateId === id).length,
+      recentSpend: this.recent.filter((r) => r.mandateId === id).reduce((a, r) => a + r.amount, 0n),
     };
     const q = quote(input);
     if ('refused' in q) return q;
@@ -480,7 +491,7 @@ export class InsurerService {
     });
     await this.deps.cover.assess(claimId, a.ok, await sha256Hex(a.reason), this.deps.operator);
     const rec: ClaimRecord = {
-      claimId, policyId: c.policyId, reason: ev?.reason, holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
+      claimId, policyId: c.policyId, reason: ev?.reason, ...(ev ? { evidenceDoc: ev } : {}), compelling: this.compellingEvidence(e, p.mandate.id, c.orders, ev?.reason), holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
       assessment: a, receiptTxs, orders: c.orders, mandateId: p.mandate.id,
       // any earlier claim on these orders that was not approved (rejected, failed or still undecided) makes this a re-filing: a human decides
       appealOf: [...this.claims.values()].find((x) => x.verdict !== 'approved' && !x.paid && x.mandateId === p.mandate.id && x.orders.some((o) => c.orders.includes(o)))?.claimId,
@@ -488,7 +499,8 @@ export class InsurerService {
     const limit = this.deps.autoPayLimit;
     // Automatic only where the chain proves the loss: not for appeals, not for wrong items, not for
     // outside-intent orders (the goods were delivered: a human checks they are returned).
-    if (a.ok && limit !== undefined && a.payout <= limit && !this.flagged(rec) && rec.appealOf === undefined && c.kind !== 'WrongItem' && ev?.reason !== 'AM20') rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
+    const own = this.policies.find((x) => x.policyId === c.policyId)?.terms?.autoPayLimit;
+    if (a.ok && limit !== undefined && a.payout <= limit && (own === undefined || a.payout <= own) && !this.flagged(rec) && rec.appealOf === undefined && c.kind !== 'WrongItem' && ev?.reason !== 'AM20') rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
     this.claims.set(claimId, rec);
     for (const d of this.detections) if (d.status === 'open' && d.orders.every((o) => c.orders.includes(o))) Object.assign(d, { status: 'filed', claimId });
     this.save();
@@ -578,8 +590,11 @@ export class InsurerService {
     const limit = this.deps.autoPayLimit ?? 0n;
     const risky = q.factors.some((f) => f.name === 'incidents');
     const intent = q.ownerSignedIntent && q.request.ap2 ? await sha256Hex(canonicalJson(q.request.ap2)) : null;
-    if (!rec || (!intent && !risky)) return;
-    const t = { autoPayLimit: risky ? limit / 2n : limit, objectionWindowMs: BigInt(this.deps.autoPayDelayMs ?? 120_000), intent };
+    const chosen = q.request.maxAutoPay;
+    if (!rec || (!intent && !risky && chosen === undefined)) return;
+    let auto = risky ? limit / 2n : limit;
+    if (chosen !== undefined && chosen < auto) auto = chosen; // the buyer's choice only ever tightens
+    const t = { autoPayLimit: auto, objectionWindowMs: BigInt(this.deps.autoPayDelayMs ?? 120_000), intent };
     try {
       rec.terms = { ...t, tx: (await this.deps.cover.setTerms(policyId, t)).hash };
     } catch (e) {
@@ -641,6 +656,8 @@ export class InsurerService {
     if (!jurors.includes(juror)) throw new Error('not a juror on the appeals panel');
     if (!rec) throw new Error('unknown claim');
     if (rec.appealOf === undefined) throw new Error('only appeals go to the panel');
+    // escalation (UMA's DVM pattern): the panel decides an appeal once; appealing its decision goes to the insurer's human
+    if (this.panelDecided(rec)) throw new Error('escalated: the panel already decided these orders; a human at the insurer decides this appeal');
     // decidedBy is set before the decision's await: a vote arriving meanwhile cannot decide (or settle) twice
     if (rec.verdict || rec.paid || rec.decidedBy) throw new Error('already decided');
     if ([rec.claimant, rec.holder, rec.recipient].includes(juror)) throw new Error('a party to the claim cannot judge it');
@@ -670,6 +687,13 @@ export class InsurerService {
     return { ...d, by: 'panel' as const, approve: yes >= need, yes, no, need, settlement: rec.panelSettlement };
   }
 
+  private compellingEvidence(e: MandateEntry | null, mandateId: string, orders: string[], reason?: string) {
+    const disputed = new Set([...this.claims.values()].filter((x) => x.mandateId === mandateId).flatMap((x) => x.orders));
+    for (const o of orders) disputed.add(o);
+    const priorUndisputed = Math.max(0, Number(e?.receipts ?? 0n) - disputed.size);
+    return { priorUndisputed, qualifies: reason === 'AM20' && priorUndisputed >= 2 };
+  }
+
   /** Coherence: jurors against the verdict pay the penalty (capped by their stake), shared by the jurors with it. */
   private settlePanel(votes: { by: string; approve: boolean }[], verdict: boolean) {
     const penalty = this.deps.jurorPenalty ?? 0n;
@@ -693,10 +717,15 @@ export class InsurerService {
       && (c.decidedBy === 'panel' ? c.panelSettlement === undefined : !c.verdict && !c.paid));
   }
 
+  /** Some earlier claim on these orders was decided by the panel: a further appeal escalates to a human. */
+  private panelDecided(rec: ClaimRecord) {
+    return [...this.claims.values()].some((x) => x.claimId !== rec.claimId && x.decidedBy === 'panel' && x.orders.some((o) => rec.orders.includes(o)));
+  }
+
   /** Appeals waiting for a decision, with the panel's votes so far. */
   openAppeals() {
     return [...this.claims.values()].filter((c) => c.appealOf !== undefined && !c.verdict && !c.paid)
-      .map((c) => ({ claimId: c.claimId, appealOf: c.appealOf, assessment: c.assessment, votes: c.panel ?? [], jurors: this.deps.jurors ?? [] }));
+      .map((c) => ({ claimId: c.claimId, appealOf: c.appealOf, assessment: c.assessment, votes: c.panel ?? [], jurors: this.deps.jurors ?? [], escalated: this.panelDecided(c) }));
   }
 
   /** Any party to the claim (filer, policy holder, paid account) with a rejected no-evidence claim. */

@@ -7697,6 +7697,15 @@ function decodeClaim(bytes) {
   return c;
 }
 
+// ../cover/src/risk.ts
+var BPS = 10000n;
+function experienceBps(orders, paidClaims) {
+  const c = BigInt(Math.max(0, Math.floor(paidClaims)));
+  const n = BigInt(Math.max(0, Math.floor(orders), Math.floor(paidClaims)));
+  const bps = BPS * 50n * (1n + c) / (n + 50n);
+  return bps < 7000n ? 7000n : bps > 20000n ? 20000n : bps;
+}
+
 // ../cover/src/assess.ts
 var DUPLICATE_WINDOW_MS = 10 * 6e4;
 
@@ -7767,7 +7776,7 @@ async function riskOf(payer) {
   AccountAddress2.fromBase58(payer);
   const { books } = await scan();
   const paidClaims = books.reduce((n, b) => n + b.claims.filter((c) => c.status.tag === "Paid" && b.policies[Number(c.policyId)]?.agentPayer === payer).length, 0);
-  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: COVERS.map((c) => `kuasa-cover <${c},0>`).join(" + ") };
+  return { payer, paidClaims, premiumMultiplier: Number(experienceBps(paidClaims, paidClaims)) / 1e4, source: COVERS.map((c) => `kuasa-cover <${c},0>`).join(" + ") };
 }
 async function coverOf(payer, cover = CURRENT) {
   AccountAddress2.fromBase58(payer);

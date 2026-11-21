@@ -1,7 +1,7 @@
 /** Read-only Kuasa Cover data straight from Concordium testnet over gRPC-web (browser and Node). */
 import { AccountAddress, ConcordiumGRPCWebClient, ContractAddress, Parameter, ReceiveName, ReturnValue } from '@concordium/web-sdk';
 import { decodeClaim, decodeCoverView, decodePolicy, encodeCoverQuery, encodeU64, type Claim, type Policy } from '@kuasa/core';
-import { solvency } from '@kuasa/cover';
+import { experienceBps, solvency } from '@kuasa/cover';
 
 /** kuasa-cover instances, oldest first: v1 (history) and v2 (current, automation rules on-chain). */
 export const COVER_V1 = 13066n;
@@ -61,7 +61,7 @@ export async function riskOf(payer: string) {
   AccountAddress.fromBase58(payer); // throws on a bad address
   const { books } = await scan();
   const paidClaims = books.reduce((n, b) => n + b.claims.filter((c) => c.status.tag === 'Paid' && b.policies[Number(c.policyId)]?.agentPayer === payer).length, 0);
-  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: COVERS.map((c) => `kuasa-cover <${c},0>`).join(' + ') };
+  return { payer, paidClaims, premiumMultiplier: Number(experienceBps(paidClaims, paidClaims)) / 10_000, source: COVERS.map((c) => `kuasa-cover <${c},0>`).join(' + ') };
 }
 
 export async function coverOf(payer: string, cover = CURRENT) {

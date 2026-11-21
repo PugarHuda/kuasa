@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { quote, type RiskInput } from '../src/index.js';
+import { experienceBps, quote, type RiskInput } from '../src/index.js';
 
 const EUR = 1_000_000n;
 const base: RiskInput = {
@@ -41,7 +41,7 @@ test('highest category risk applies; unknown categories are refused', () => {
 test('owner kind and history', () => {
   assert.equal(premium({ ownerKind: 'business' }), 1_487_160n); // x0.85
   assert.equal(premium({ incidents: 1 }), 2_187_000n); // x1.25
-  assert.equal(premium({ receipts: 10 }), 1_574_640n); // -10% => x0.9
+  assert.equal(premium({ receipts: 10 }), 1_457_942n); // credibility: 50/60 => x0.8333
   assert.equal(premium({ receipts: 1000 }), 1_224_720n); // floor x0.7
 });
 
@@ -61,12 +61,23 @@ test('prototype keys are not categories', () => {
   }
 });
 
-test('experience rating: paid claims raise the premium 20% each (max x2) and cancel the claim-free discount', () => {
-  assert.equal(premium({ paidClaims: 1 }), 2_099_520n);
+test('spend surge: the window spend plus this order above twice the per-order cap raises per-order cover x1.25; with velocity at most x2', () => {
+  const o = { order: { amount: 20_000_000n } }; // per-order cap 50: a surge is above 100
+  assert.equal(premium({ ...o, recentSpend: 80_000_000n }), 300_000n, 'exactly 100: no surge');
+  assert.equal(premium({ ...o, recentSpend: 80_000_001n }), 375_000n, 'above 100: x1.25');
+  assert.equal(premium({ ...o, recentSpend: 81_000_000n, recentOrders: 12 }), 600_000n, 'velocity x2 and surge: capped at x2');
+});
+
+test('experience rating (Buhlmann credibility): 50*(1+claims)/(orders+50), x0.7..x2', () => {
+  assert.equal(experienceBps(0, 0), 10_000n, 'new agent: neutral');
+  assert.equal(experienceBps(50, 1), 10_000n, 'a claim on 2% of orders is the prior');
+  assert.equal(experienceBps(10, 1), 16_666n, 'few orders: a claim weighs a lot');
+  assert.equal(experienceBps(1, 1), 19_607n);
+  assert.equal(experienceBps(9, 9), 20_000n, 'cap');
+  assert.equal(experienceBps(500, 0), 7_000n, 'floor');
   assert.equal(premium({ paidClaims: 9 }), 3_499_200n);
-  assert.equal(premium({ paidClaims: 1, receipts: 10 }), 2_099_520n, 'no claim-free discount after a paid claim');
-  const q = quote({ ...base, paidClaims: 1 });
-  assert.ok(!('refused' in q) && q.factors.some((f) => f.name === 'claims history' && f.multiplier === 1.2));
+  const q = quote({ ...base, paidClaims: 1, receipts: 10 });
+  assert.ok(!('refused' in q) && q.factors.some((f) => f.name === 'experience (credibility)' && f.multiplier === 1.6666));
 });
 
 test('roadmap factors: an operator bond lowers the period premium; order velocity raises per-order cover', () => {

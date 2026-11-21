@@ -25,6 +25,8 @@ export type RiskInput = {
   bonded?: boolean;
   /** Orders this mandate placed in the insurer's recent on-chain window (order velocity, Radar-style). */
   recentOrders?: number;
+  /** What this mandate spent in that window (spend surge: amount, not only count). */
+  recentSpend?: bigint;
 };
 
 export type Factor = { name: string; multiplier: number; reason: string };
@@ -36,6 +38,19 @@ const CATEGORY_BPS = new Map<string, bigint>([['groceries', 10_000n], ['insuranc
 const TOP_UP_BPS = 150n; // 1.5% of the order
 const TOP_UP_MIN = 100_000n; // 0.10 in a 6-decimal asset
 
+/**
+ * Experience rating with Buhlmann credibility. Prior: a claim on 2% of orders (f0 = 1/50), weighted as
+ * K = 50 orders. With n orders seen and c paid claims, Z = n/(n+K) and the factor is
+ * Z*(c/n)/f0 + (1-Z) = 50*(1+c)/(n+50), clamped to x0.7..x2. New agents are neutral; every order
+ * without a claim earns credibility; a claim weighs more the fewer orders back it.
+ */
+export function experienceBps(orders: number, paidClaims: number): bigint {
+  const c = BigInt(Math.max(0, Math.floor(paidClaims)));
+  const n = BigInt(Math.max(0, Math.floor(orders), Math.floor(paidClaims))); // a paid claim implies an order
+  const bps = (BPS * 50n * (1n + c)) / (n + 50n);
+  return bps < 7_000n ? 7_000n : bps > 20_000n ? 20_000n : bps;
+}
+
 export function quote(input: RiskInput): Quote | { refused: string } {
   if (input.order) {
     if (input.order.amount <= 0n) return { refused: 'order amount must be positive' };
@@ -44,12 +59,19 @@ export function quote(input: RiskInput): Quote | { refused: string } {
     const factors: Factor[] = [{ name: 'order top-up', multiplier: 1, reason: '1.5% of the order, minimum 0.10' }];
     // Per-order risk scoring: an agent buying fast (a loop, an injection) is riskier per order.
     const n = input.recentOrders ?? 0;
+    let v = BPS;
     if (n >= 3) {
-      const v = BPS + 2_500n * BigInt(n - 2) > 20_000n ? 20_000n : BPS + 2_500n * BigInt(n - 2);
+      v = BPS + 2_500n * BigInt(n - 2) > 20_000n ? 20_000n : BPS + 2_500n * BigInt(n - 2);
       factors.push({ name: 'order velocity', multiplier: Number(v) / 10_000, reason: `${n} orders on this mandate in the last minutes` });
-      return { premium: (base * v + BPS / 2n) / BPS, factors };
     }
-    return { premium: base, factors };
+    // Spend surge: this order plus the window's spend above twice the mandate's per-order cap.
+    const spend = (input.recentSpend ?? 0n) + input.order.amount;
+    if (spend > 2n * input.mandate.maxPerOrder) {
+      factors.push({ name: 'spend surge', multiplier: 1.25, reason: `${spend} spent in the last minutes, over twice the per-order cap` });
+      v = (v * 12_500n) / BPS;
+    }
+    if (v > 20_000n) v = 20_000n; // velocity and surge together: at most x2
+    return { premium: v === BPS ? base : (base * v + BPS / 2n) / BPS, factors };
   }
   if (input.limit <= 0n) return { refused: 'limit must be positive' };
   if (!Number.isInteger(input.days) || input.days <= 0 || input.days > 365) return { refused: 'days must be 1..365' };
@@ -74,15 +96,8 @@ export function quote(input: RiskInput): Quote | { refused: string } {
   if (input.ownerKind === 'business') applied.push({ name: 'business owner', bps: 8_500n, reason: 'LEI-verified business principal' });
   if (input.incidents > 0) applied.push({ name: 'incidents', bps: BPS + 2_500n * BigInt(input.incidents), reason: `${input.incidents} incident(s) on the mandate` });
   const paid = input.paidClaims ?? 0;
-  if (paid > 0) {
-    const c = BPS + 2_000n * BigInt(paid);
-    applied.push({ name: 'claims history', bps: c > 20_000n ? 20_000n : c, reason: `${paid} paid claim(s) on this agent (experience rating)` });
-  }
-  const steps = BigInt(Math.floor(input.receipts / 5));
-  if (steps > 0n && paid === 0) {
-    const h = BPS - 500n * steps;
-    applied.push({ name: 'claim-free history', bps: h < 7_000n ? 7_000n : h, reason: `${input.receipts} receipts without claims` });
-  }
+  const exp = experienceBps(input.receipts, paid);
+  if (exp !== BPS) applied.push({ name: 'experience (credibility)', bps: exp, reason: `${paid} paid claim(s) over ${Math.max(input.receipts, paid)} order(s), Buhlmann-weighted against a 2% prior` });
 
   let num = input.limit * BASE_BPS_PER_30_DAYS * BigInt(input.days);
   let den = BPS * 30n;

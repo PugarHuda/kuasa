@@ -20,7 +20,7 @@ Multipliers on the base rate:
 | Business owner | ×0.85 | the principal is a business |
 | Incidents | +25% per incident | incidents are filed against the mandate |
 | Claim-free history | −5% per 5 receipts (floor ×0.7) | the agent has no paid claims |
-| **Experience rating** (new) | +20% per paid claim (max ×2) | the agent has paid claims; it also cancels the claim-free discount |
+| **Experience rating** (Bühlmann credibility) | 50·(1 + paid claims) / (orders + 50), ×0.7 to ×2 | always: a 2% claim-per-order prior weighted as 50 orders; orders without claims earn a discount, and a claim weighs more the fewer orders back it |
 
 Every input is read from chain data or from a verified proof at quote time, and read again when the premium is paid. Paid claims are counted on the `kuasa-cover` contract.
 
@@ -44,8 +44,8 @@ Every input is read from chain data or from a verified proof at quote time, and 
 **Reading:** the base premium breaks even at about **1.2% duplicate orders per order**.
 
 An agent that makes mistakes more often than that pays more in two ways:
-- Each paid claim raises its next premium by 20%.
-- Its claim-free discount disappears.
+- Experience rating weighs its paid claims against its orders with Bühlmann credibility: one claim in 10 orders is about ×1.67, one in 50 orders is the neutral prior.
+- Orders without claims earn credibility the other way, down to ×0.7.
 
 The tail is capped by the policy limit (100). Holding enough capital for that tail is what the public `/solvency` endpoint shows.
 

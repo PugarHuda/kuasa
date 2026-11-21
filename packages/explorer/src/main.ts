@@ -81,9 +81,17 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
   const total = cats.reduce((a, c) => a + c.n, 0);
   $('claims-chart').innerHTML = decisions.length === 0 ? '<span class="muted">Reading claim decisions…</span>' : `<h3>Claims by outcome (${total})</h3>
     <div class="stack" role="img" aria-label="${cats.map((c) => `${c.label}: ${c.n}`).join(', ')}">${cats.filter((c) => c.n > 0).map((c) => `<span style="flex:${c.n};background:${c.color}" title="${c.label}: ${c.n}">${c.n}</span>`).join('')}</div>
-    <div class="legend">${cats.map((c) => `<span><i style="background:${c.color}"></i>${c.label} (${c.n})</span>`).join('')}</div>`;
+    <div class="legend">${cats.map((c) => `<span><i style="background:${c.color}"></i>${c.label} (${c.n})</span>`).join('')}</div>${byClass(claims, decisions)}`;
   renderTimelines(claims, decisions, attests);
   $('updated').textContent = `Read from Concordium testnet at ${new Date().toLocaleTimeString()}`;
+}
+
+/** Paid out per risk class (reason-code family from the published decision): what each class of capital carries. */
+function byClass(claims: Claim[], decisions: (Awaited<ReturnType<typeof decisionOf>>)[]) {
+  const sums: Record<string, bigint> = { AM: 0n, WI: 0n, ML: 0n, other: 0n };
+  claims.forEach((c, i) => { if (c.status.tag === 'Paid') { const k = decisions[i]?.reason?.slice(0, 2) ?? ''; sums[k in sums ? k : 'other'] += c.payout; } });
+  const names: Record<string, string> = { AM: 'agent mistakes (AM)', WI: 'wrong items (WI)', ML: 'merchant loss (ML)', other: 'no reason code (before codes)' };
+  return `<p class="muted" style="margin:10px 0 0">Paid by risk class: ${Object.entries(sums).filter(([, v]) => v > 0n).map(([k, v]) => `${names[k]} ${eur(v)}`).join(' · ') || '–'}</p>`;
 }
 
 const OPERATOR = '4Tw9uzZZSQmbLytV8XqRYU5dCDyrhu8yWU2xwvXovaS54sTZzJ';
@@ -107,6 +115,12 @@ function renderTimelines(claims: Claim[], decisions: (Awaited<ReturnType<typeof 
       step(decided, 'Decided', d?.by ? `${decidedBy(d)} ${esc(d.verdict ?? '')}${why}` : decided ? statusPill(c.status.tag) : 'awaiting a decision (the objection window runs first)'),
       step(c.status.tag === 'Paid', 'Paid', c.status.tag === 'Paid' ? `${eur(c.payout)} to the agent, tx ${tx((c.status as { payoutTx: string }).payoutTx)}` : c.status.tag === 'Rejected' || c.status.tag === 'Fraud' ? 'not paid' : '–'),
     ].join('');
+    // content-addressed evidence (docs/explorer/evidence/<hash>.json): linked when published; its sha256 is the on-chain hash
+    const hash = c.evidence;
+    void fetch(`evidence/${hash}.json`, { method: 'HEAD' }).then((r) => {
+      const span = $('timeline').querySelector('span.mono');
+      if (r.ok && span && Number(pick.value) === i) span.outerHTML = `<a class="mono" href="evidence/${esc(hash)}.json" target="_blank" rel="noopener" title="sha256 of this document is the claim's on-chain evidence">${esc(hash.slice(0, 12))}… (document)</a>`;
+    }).catch(() => {});
   };
   pick.onchange = draw;
   draw();
@@ -121,7 +135,7 @@ function calc() {
     limit: BigInt(Math.max(1, n('limit'))) * E, days: Math.min(365, Math.max(1, n('days'))),
     mandate: { maxPerOrder: BigInt(Math.max(1, n('maxPerOrder'))) * E, categories: [String(f.get('category'))], merchants: f.get('merchants') ? ['shop'] : undefined },
     provenAgeAndResidency: !!f.get('proven'), ownerKind: (f.get('business') ? 'business' : 'person') as 'person' | 'business',
-    incidents: n('incidents'), receipts: n('receipts'), paidClaims: n('paidClaims'), bonded: !!f.get('bonded'), recentOrders: n('recentOrders'),
+    incidents: n('incidents'), receipts: n('receipts'), paidClaims: n('paidClaims'), bonded: !!f.get('bonded'), recentOrders: n('recentOrders'), recentSpend: BigInt(n('recentSpend')) * E,
   };
   const q = quote(base);
   if ('refused' in q) { $('premium').textContent = q.refused; $('factors').innerHTML = ''; return; }

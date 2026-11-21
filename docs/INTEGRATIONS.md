@@ -78,3 +78,16 @@ Alice's agent also has an Ethereum key. The owner bound it to the agent in two s
 2. **CIS-8004 `setExternalReference`.**
 
 A merchant or agent on Base or Ethereum that only knows the agent's `0x` address asks it to sign a challenge, then calls `verify-evm-agent`. `scripts/evm-agent-check.ts` does exactly that against the public endpoint. The Verified-by-Concordium badge and the insurance status become readable from any EVM stack, without a Concordium wallet.
+
+## Card-network agent protocols (Visa Trusted Agent Protocol, Mastercard Agent Pay)
+
+Card networks are adding their own agent identity: Visa's Trusted Agent Protocol has agents sign their HTTP requests with keys that merchants can look up, and Mastercard Agent Pay registers agents and gives them tokenised credentials scoped to what the user allowed. Kuasa Cover does not depend on the payment rail, so it maps onto these as follows. This is a design mapping; nothing here is integrated with Visa or Mastercard.
+
+| Card-network concept | Kuasa equivalent today | How cover attaches |
+|---|---|---|
+| A registered, verifiable agent identity | The agent's CIS-8004 entry (Verified by Concordium badge) | The policy names the agent's payer account and CIS-8004 token; a card-network agent id would be one more field on the policy |
+| A signed request from the agent to the merchant | The payer proof header (`x-kuasa-payer*`), signed with the agent's account key, which the shop and the insurer verify | A shop that already verifies a card-network agent signature can hand the same verified identity to the insurer instead |
+| A credential scoped to what the user allowed | The on-chain mandate (per-order cap, categories, merchants, expiry) and the owner-signed AP2 intent | The insurer prices and pays against that scope; for card payments the scope would come from the agentic token's limits |
+| Dispute and chargeback after the fact | Kuasa claims with chargeback-style reason codes (AM10, AM20, WI10, ML10) and signed evidence | Kuasa pays the user within the published rules first; a card chargeback remains the merchant's route against the network |
+
+What it would take: a receipt recorder that reads card authorisations instead of x402 settlements, and the network's agent id stored with the policy. The cover contract, assessor and pool stay as they are.

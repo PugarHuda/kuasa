@@ -18,11 +18,11 @@ import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/concordium';
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
-import { solvency } from '@kuasa/cover';
+import { experienceBps, solvency } from '@kuasa/cover';
 import { handleA2a } from './a2a.js';
 import { CapitalLedger, capitalClassOf, type RiskClass } from './capital.js';
 import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, claimKey, COVER_V1, connect, finalizedHeight, registryReceiptsAt, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
-import { canonicalJson, type ClaimEvidence, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
+import { canonicalJson, type ClaimEvidence, evidenceHash, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyAp2Intent, verifyDeliveryNote, verifyPayerProof } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
 import { checkSponsorable, jsonSafe, SponsorBudget } from './sponsor.js';
@@ -257,7 +257,9 @@ app.get('/cover/quote', async (req, res) => {
   if (order && !/^[0-9a-f]{64}$/.test(order.ref)) return json(res, { refused: 'bad order reference' }, 400);
   const sponsor = req.query.sponsor ? String(req.query.sponsor) : undefined;
   if (sponsor && !order) return json(res, { refused: 'a sponsor can pay for per-order cover only' }, 400);
-  json(res, await svc.quote({ mandateUrl, limit: order ? order.amount : big(req.query.limit), days: Number(req.query.days ?? 30), order, proof: (n: string) => req.header(n), ap2: ap2Of(req.header('x-ap2-intent-mandate')), sponsor }));
+  const maxAutoPay = req.query.maxAutoPay !== undefined ? big(req.query.maxAutoPay) : undefined;
+  if (maxAutoPay !== undefined && maxAutoPay < 0n) return json(res, { refused: 'maxAutoPay must be a non-negative amount' }, 400);
+  json(res, await svc.quote({ mandateUrl, limit: order ? order.amount : big(req.query.limit), days: Number(req.query.days ?? 30), order, proof: (n: string) => req.header(n), ap2: ap2Of(req.header('x-ap2-intent-mandate')), sponsor, ...(maxAutoPay !== undefined ? { maxAutoPay } : {}) }));
 });
 
 // Unknown quotes never reach the paywall.
@@ -288,7 +290,7 @@ app.get('/cover/status', async (req, res) => {
 async function riskOf(payer: string) {
   sdk.AccountAddress.fromBase58(payer); // throws on a bad address
   const paidClaims = await paidClaimsOf(payer);
-  return { payer, paidClaims, premiumMultiplier: Math.min(2, 1 + 0.2 * paidClaims), source: books.map((b) => `kuasa-cover <${b.address.index},0>`).join(" + ") };
+  return { payer, paidClaims, premiumMultiplier: Number(experienceBps(paidClaims, paidClaims)) / 10_000, source: books.map((b) => `kuasa-cover <${b.address.index},0>`).join(" + ") };
 }
 app.get('/risk/:payer', async (req, res) => { try { json(res, await riskOf(req.params.payer)); } catch (e) { json(res, { error: (e as Error).message }, 400); } });
 
@@ -628,6 +630,14 @@ app.post('/claims/:id/object', async (req, res) => {
 /** A human takes a claim over (no automatic payout). */
 app.post('/claims/:id/hold', consoleOnly, (req, res) => {
   try { svc.hold(big(req.params.id)); json(res, { held: true }); } catch (e) { json(res, { error: (e as Error).message }, 400); }
+});
+
+/** A claim's evidence document by its hash (public: sha256 of its canonical JSON is the claim's on-chain `evidence`). */
+app.get('/evidence/:hash', async (req, res) => {
+  for (const c of svc.state().claims) {
+    if (c.evidenceDoc && await evidenceHash(c.evidenceDoc) === req.params.hash) return res.type('json').send(canonicalJson(c.evidenceDoc));
+  }
+  json(res, { error: 'no such evidence document' }, 404);
 });
 
 /** Appeals panel: open appeals and votes (public), and a juror's signed vote. */
