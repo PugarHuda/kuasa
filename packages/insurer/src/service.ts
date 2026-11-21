@@ -44,6 +44,8 @@ export type InsurerDeps = {
   treasuryBalance(): Promise<bigint>;
   /** Claims already paid to this agent payer (on-chain), for experience rating. */
   paidClaims?(payer: string): Promise<number>;
+  /** On-chain cover of this payer now (the contract's coverOf view): one live period policy per payer. */
+  coverOf?(payer: string): Promise<{ periodRemaining: bigint; policyId: bigint | null }>;
   /** Submits a payout from the treasury and returns its hash without waiting for finalization. */
   pay(to: string, amount: bigint, memo: string): Promise<string>;
   /** Outcome of a submitted transaction. */
@@ -189,6 +191,12 @@ export class InsurerService {
     if (!e || e.revoked || e.owner !== m.principal.account || e.payer !== m.agent.payer) return { refused: 'mandate not active on-chain' };
     if (Number(e.validUntilMs) < this.deps.now()) return { refused: 'mandate expired' };
     if (req.limit > e.maxTotal) return { refused: 'cover limit exceeds the mandate budget' };
+    if (!req.order && this.deps.coverOf) {
+      // Re-checked at purchase (checkPurchase re-prices), so two open quotes cannot both become policies.
+      const v = await this.deps.coverOf(m.agent.payer).catch(() => null);
+      if (!v) return { refused: 'cover status unavailable; try again' };
+      if (v.policyId !== null && v.periodRemaining > 0n) return { refused: `this agent already has period cover (policy #${v.policyId}); cancel it or wait for it to end` };
+    }
     if (req.ap2) {
       const scope = scopeFromAp2Intent(req.ap2, (n) => this.deps.ap2Merchant?.(n));
       if ('refused' in scope) return { refused: `AP2 intent: ${scope.refused}` };

@@ -83,6 +83,19 @@ test('quote refuses revoked mandates and limits above the mandate budget', async
   assert.ok('refused' in await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30 }));
 });
 
+test('no second period policy while one is live (re-checked at purchase); order cover still sold', async () => {
+  let live: bigint | null = null;
+  const t = harness({ coverOf: async () => ({ periodRemaining: live === null ? 0n : 100n * EUR, policyId: live }) });
+  const q = await quoteOk(t.svc);
+  live = 4n; // another quote got paid meanwhile
+  assert.match((await t.svc.checkPurchase(q.quoteId, PAYER, q.premium))!, /already has period cover \(policy #4\)/);
+  assert.ok('refused' in await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30 }));
+  const o = await t.svc.quote({ mandateUrl: 'x', limit: 20n * EUR, days: 1, order: { ref: h(3), amount: 20n * EUR } });
+  assert.ok(!('refused' in o), 'refused' in o ? o.refused : '');
+  const down = harness({ coverOf: async () => { throw new Error('502'); } });
+  assert.match((await down.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30 }) as { refused: string }).refused, /unavailable/);
+});
+
 test('premium settled, issuance failed -> unissued + retry', async () => {
   let fail = true;
   const t = harness();

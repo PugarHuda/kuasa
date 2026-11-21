@@ -136,6 +136,7 @@ const svc = new InsurerService({
   paidClaims: async (payer) => {
     return paidClaimsOf(payer);
   },
+  coverOf: (payer) => cover.coverOf(payer),
   autoPayLimit: AUTO_PAY_LIMIT, // smaller claims pay after the objection window (enforced by a v2 contract)
   autoPayDelayMs: AUTO_PAY_DELAY_MS,
   pay: (to, amount, memo) => treasuryPay(to, amount, memo), // submitted; txOutcome confirms it
