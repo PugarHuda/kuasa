@@ -163,12 +163,25 @@ function publishDecision(claimId: bigint | string, by: 'auto' | 'human' | 'panel
  * kept in the audit log (anyone can rebuild it from the claim).
  */
 const GIVE_FEEDBACK_ABI = [{ type: 'function', name: 'giveFeedback', stateMutability: 'nonpayable', inputs: [{ name: 'agentId', type: 'uint256' }, { name: 'value', type: 'int128' }, { name: 'valueDecimals', type: 'uint8' }, { name: 'tag1', type: 'string' }, { name: 'tag2', type: 'string' }, { name: 'endpoint', type: 'string' }, { name: 'feedbackURI', type: 'string' }, { name: 'feedbackHash', type: 'bytes32' }], outputs: [] }] as const;
+const postingNow = new Set<string>();
+const progressFile = new URL('erc8004.json', ROOT);
+const readProgress = () => (existsSync(progressFile) ? JSON.parse(readFileSync(progressFile, 'utf8')) : { posted: {} }) as { posted: Record<string, { tx: string; uri: string }> };
+/** Re-reads and merges before writing (the posting script shares the file), then replaces it atomically. */
+const markPosted = (id: string, v: { tx: string; uri: string }) => {
+  const p = readProgress();
+  p.posted[id] = v;
+  const tmp = new URL('erc8004.json.tmp', ROOT);
+  writeFileSync(tmp, JSON.stringify(p, null, 2));
+  renameSync(tmp, progressFile);
+};
 async function postReputation(claimId: bigint) {
   if (!ownEvm) return;
-  const progressFile = new URL('erc8004.json', ROOT);
-  const progress = (existsSync(progressFile) ? JSON.parse(readFileSync(progressFile, 'utf8')) : { posted: {} }) as { posted: Record<string, { tx: string; uri: string }> };
   const id = `<${state.cover},0>:${claimId}`;
-  if (progress.posted[id]) return;
+  // one at a time per claim, and a 'pending' mark before the transaction: a crash after sending never
+  // posts twice (a pending entry is left for a human to check against the chain)
+  if (postingNow.has(id) || readProgress().posted[id]) return;
+  postingNow.add(id);
+  try {
   const c = await cover.claim(claimId);
   const p = c && await cover.policy(c.policyId);
   if (!c || !p || c.status.tag !== 'Paid') return;
@@ -177,13 +190,16 @@ async function postReputation(claimId: bigint) {
   const link = (await cis8004GetMetadata(grpc, p.agentToken, 'kuasa:erc8004'))?.match(/^eip155:11155111:(0x[0-9a-fA-F]{40}):(\d+)$/);
   if (!link || link[1].toLowerCase() !== ERC8004_IDENTITY.toLowerCase()) return;
   const uri = `ccd:testnet:kuasa-cover:<${state.cover},0>:claim:${claimId}`;
+  markPosted(id, { tx: 'pending', uri });
   const body = JSON.stringify({ agentRegistry: `eip155:11155111:${ERC8004_IDENTITY}`, agentId: Number(link[2]), value: score, tag1: 'kuasa-cover', tag2: c.kind, evidence: { network: 'ccd:testnet', contract: `<${state.cover},0>`, claimId: String(claimId), status: 'Paid' } });
   const account = privateKeyToAccount(JSON.parse(readFileSync(ownEvmKey, 'utf8')).privateKey);
   const tx = await createWalletClient({ account, chain: sepolia, transport: evmHttp(process.env.SEPOLIA_RPC ?? 'https://ethereum-sepolia-rpc.publicnode.com') })
     .writeContract({ address: ERC8004_REPUTATION, abi: GIVE_FEEDBACK_ABI, functionName: 'giveFeedback', args: [BigInt(link[2]), BigInt(score), 0, 'kuasa-cover', c.kind, PUBLIC_URL, uri, keccak256(toBytes(body))] });
-  progress.posted[id] = { tx, uri };
-  writeFileSync(progressFile, JSON.stringify(progress, null, 2));
+  markPosted(id, { tx, uri });
   audit.append({ kind: 'erc8004-feedback', claimId: String(claimId), tx, body });
+  } finally {
+    postingNow.delete(id);
+  }
 }
 
 const grpc = connect();
@@ -782,6 +798,18 @@ app.post('/appeals/:id/vote', async (req, res) => {
 
 /** Owner-facing: parametric detections and the purchase hold on an agent (both public on-chain anyway). */
 app.get('/detections/:payer', (req, res) => json(res, { detections: svc.detectionsOf(req.params.payer), hold: svc.holdOf(req.params.payer) }));
+/** Owner rules: the policy holder signs (x-kuasa-payer* proof with the holder's account) a spending limit per hour. */
+app.get('/rules/:payer', (req, res) => json(res, { rule: svc.ruleOf(req.params.payer) }));
+app.post('/rules/:payer', async (req, res) => {
+  const holder = String(req.header('x-kuasa-payer') ?? '');
+  if (!(await verifyPayerProof({ header: (n) => req.header(n), payer: holder, audience: AUDIENCES, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false))) return json(res, { error: 'holder signature required' }, 401);
+  try {
+    const rule = svc.setRule(req.params.payer, holder, big(req.body?.maxSpendPerHour));
+    audit.append({ kind: 'owner-rule', payer: req.params.payer, by: holder, maxSpendPerHour: String(rule?.maxSpendPerHour ?? 0) });
+    json(res, { rule });
+  } catch (e) { json(res, { error: (e as Error).message }, 400); }
+});
+
 /** The owner resumes a paused agent (console = the owner's side in the demo). */
 app.post('/holds/:payer/clear', consoleOnly, async (req, res) => {
   try {

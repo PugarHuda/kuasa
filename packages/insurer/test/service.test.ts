@@ -191,6 +191,19 @@ test('market, contribution is bounded by the verified loss, not the amount claim
   assert.ok(!a.ok || a.payout <= 4n * EUR, `payout ${a.payout} must not exceed loss 24 minus 20 paid elsewhere`);
 });
 
+test('owner rules (Stripe Radar style): only a policy holder sets them; spend above the hourly limit pauses the agent', async () => {
+  const t = harness({ coverOf: async () => ({ periodRemaining: 0n, policyId: null }) });
+  assert.throws(() => t.svc.setRule(PAYER, OWNER, 5n * EUR), /holder of a policy/);
+  await t.svc.issue((await quoteOk(t.svc)).quoteId, h(9));
+  assert.throws(() => t.svc.setRule(PAYER, addr(40), 5n * EUR), /holder of a policy/);
+  t.svc.setRule(PAYER, OWNER, 5n * EUR);
+  const r = (o: string, at: number, amount: bigint) => ({ owner: OWNER, mandateId: h(7), order: o, paymentTx: h(50 + at), amount, at: 1_000_000 + at, receiptTx: `t${o}` });
+  await t.svc.onReceipts([r('a', 1, 3n * EUR)]);
+  assert.equal(t.svc.holdOf(PAYER), null, '3 of 5 spent');
+  await t.svc.onReceipts([r('b', 2, 4n * EUR)]); // 7 > 5 (different amounts: not a duplicate)
+  assert.equal(t.svc.holdOf(PAYER)?.reason, 'owner-rule');
+});
+
 test('approve pays the agent payer and records the payout', async () => {
   const t = harness();
   const a = await filedClaim(t, true, 0n);

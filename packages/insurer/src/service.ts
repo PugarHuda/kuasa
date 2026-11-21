@@ -210,6 +210,10 @@ export class InsurerService {
   private holds = new Map<string, { reason: string; at: number; published?: boolean }>();
   /** Receipts at or before this time (per mandate) were confirmed by the owner when resuming the agent. */
   private confirmedBefore = new Map<string, number>();
+  /** Owner rules (Stripe Radar style), per agent payer: pause the agent above this spend in one hour. */
+  private rules = new Map<string, { maxSpendPerHour: bigint; by: string; at: number }>();
+  /** Receipts kept for owner rules (one hour, per mandate). */
+  private spendLog: SeenReceipt[] = [];
 
   constructor(private deps: InsurerDeps, snapshot?: string) {
     if (snapshot) {
@@ -233,6 +237,7 @@ export class InsurerService {
       this.detections = s.detections ?? [];
       this.holds = new Map(Object.entries(s.holds ?? {}));
       this.confirmedBefore = new Map(Object.entries(s.confirmedBefore ?? {}));
+      this.rules = new Map(Object.entries(s.rules ?? {}));
     }
   }
 
@@ -243,6 +248,7 @@ export class InsurerService {
       fraud: Object.fromEntries(this.fraud), pendingDisclosures: this.pendingDisclosures, disclosures: this.disclosures,
       payouts: this.payouts, premiumsIn: this.premiumsIn, refunds: this.refunds, objectionsBy: Object.fromEntries(this.objectionsBy),
       detections: this.detections, holds: Object.fromEntries(this.holds), confirmedBefore: Object.fromEntries(this.confirmedBefore),
+      rules: Object.fromEntries(this.rules),
     }));
   }
 
@@ -575,7 +581,20 @@ export class InsurerService {
       found.push(det);
       if (!this.holds.has(e.payer)) this.holds.set(e.payer, { reason: 'duplicate-orders', at: this.deps.now() });
     }
-    if (found.length) { this.save(); await this.publishHolds(); }
+    // owner rules: total spend of the agent in the last hour (since the owner last resumed it) above the limit
+    const hour = 3_600_000;
+    const knownSpend = new Set(this.spendLog.map((r) => r.receiptTx + r.order));
+    this.spendLog = [...this.spendLog, ...seen.filter((r) => !knownSpend.has(r.receiptTx + r.order))].filter((r) => now - r.at <= hour);
+    let ruleHeld = false;
+    for (const mandateId of new Set(seen.map((r) => r.mandateId))) {
+      const sample = seen.find((r) => r.mandateId === mandateId)!;
+      const e = await this.deps.mandateEntry(sample.owner, mandateId).catch(() => null);
+      const rule = e && this.rules.get(e.payer);
+      if (!e || !rule || this.holds.has(e.payer)) continue;
+      const spent = this.spendLog.filter((r) => r.mandateId === mandateId && r.at > (this.confirmedBefore.get(mandateId) ?? 0)).reduce((a, r) => a + r.amount, 0n);
+      if (spent > rule.maxSpendPerHour) { this.holds.set(e.payer, { reason: 'owner-rule', at: this.deps.now() }); ruleHeld = true; }
+    }
+    if (found.length || ruleHeld) { this.save(); await this.publishHolds(); }
     for (const d of found) await this.fileDetected(d);
     return found;
   }
@@ -587,6 +606,20 @@ export class InsurerService {
       try { await this.deps.hold(payer, h.reason); h.published = true; this.save(); } catch { /* next round */ }
     }
   }
+
+  /**
+   * The owner sets a spending rule for an agent (Stripe Radar rules for agents): above `maxSpendPerHour`
+   * the insurer pauses the agent through the same circuit breaker merchants honour. Only the holder of a
+   * policy on that agent may set it (the caller has verified the holder's signature). 0 removes it.
+   */
+  setRule(payer: string, holder: string, maxSpendPerHour: bigint) {
+    if (!this.policies.some((p) => p.payer === payer && p.holder === holder)) throw new Error('only the holder of a policy on this agent sets its rules');
+    if (maxSpendPerHour < 0n) throw new Error('the limit must not be negative');
+    if (maxSpendPerHour === 0n) this.rules.delete(payer); else this.rules.set(payer, { maxSpendPerHour, by: holder, at: this.deps.now() });
+    this.save();
+    return this.rules.get(payer) ?? null;
+  }
+  ruleOf = (payer: string) => this.rules.get(payer) ?? null;
 
   detectionsOf = (payer: string) => this.detections.filter((d) => d.payer === payer);
   holdOf = (payer: string) => this.holds.get(payer) ?? null;
