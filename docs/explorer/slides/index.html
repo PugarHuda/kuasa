@@ -142,6 +142,23 @@
   </div>
 </section>
 
+<section class="slide" aria-label="Contract v3">
+  <div class="margin"><div class="clause">§4.2</div><div class="doc">Contract v3</div></div>
+  <div class="body">
+    <h2>The contract does more of the work</h2>
+    <table>
+      <thead><tr><th>On-chain in kuasa-cover v3</th><th>Live on testnet</th><th></th></tr></thead>
+      <tbody>
+        <tr><td>The insurer files a detected mistake for the agent</td><td>Claim #0: filed, approved by the contract's rules, paid</td><td><span class="stamp paid">PAID</span></td></tr>
+        <tr><td>Objections lock a CCD bond</td><td>Claim #1: shop objected, objection upheld, bond returned</td><td><span class="stamp">HUMAN</span></td></tr>
+        <tr><td>Operators bond their agents; slashed into the pool on proven fraud</td><td>Alice bonded her agent with 10 CCD</td><td><span class="stamp">LOCKED</span></td></tr>
+        <tr><td>Each policy carries stricter terms and the owner-signed intent</td><td>Policy #0: intent hash on-chain</td><td><span class="stamp">SET</span></td></tr>
+      </tbody>
+    </table>
+    <p class="small">Also live: merchant-paid cover, a shop staking first loss on its own wrong items, and claim outcomes as ERC-8004 reputation feedback.</p>
+  </div>
+</section>
+
 <section class="slide" aria-label="Concordium components">
   <div class="margin"><div class="clause">§5</div><div class="doc">Infrastructure relied upon</div></div>
   <div class="body">
