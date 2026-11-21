@@ -11,7 +11,7 @@ AI agents can pay on their own now. When one makes a mistake, nobody carries the
 1. **The owner verifies once.** The owner uses Concordium ID and gives the agent a mandate: budget, per-order limit, categories, merchants and expiry. The mandate carries a Verify & Access zero-knowledge proof (18+, EU resident) bound to that one agent.
 2. **The agent insures itself.** It buys cover over x402 in EUDemo, an allow-listed euro PLT. The premium is priced from on-chain facts and experience-rated.
 3. **Merchants check before taking payment.** They check the mandate, the proof, the agent's CIS-8004 entry, and that the order is insured.
-4. **Claims are paid from on-chain evidence.** The agent files them itself, with the fee sponsored. Claims of 10 EUDemo or less are paid automatically after an objection window. Larger ones need a human.
+4. **Claims are paid from on-chain evidence.** The agent files them itself, with the fee sponsored. Claims of 10 EUDemo or less are paid automatically after an objection window, under rules the cover contract enforces. Larger ones need a human.
 
 **The demo agent is real.** Claude, given only the Kuasa MCP tools and no step hints, read the shop's refusal, bought the smallest cover that fit, and completed the purchase. Later it found a double charge and filed the claim itself.
 
@@ -19,6 +19,10 @@ AI agents can pay on their own now. When one makes a mistake, nobody carries the
 - the on-chain receipts;
 - the insurer's published decision (automatic or human);
 - the merchant's attestation that the orders are real. The fraud attempts show none.
+
+**Evidence, not trust.** Claims carry chargeback-style reason codes. A wrong item is proven by the merchant's delivery note, signed by the same account that recorded the receipt on-chain. A purchase a prompt-injected agent made outside the owner's signed AP2 intent is covered as well.
+
+**Prevention, not only payouts.** The insurer watches every finalized block. When an insured agent pays twice, it pauses that agent at every merchant guard until the owner resumes it, and the agent files the detected claim with one call. On testnet the shop refused the paused agent before any money moved, and the contract approved the automatic payout.
 
 **More integrations:**
 - The insurer is itself a badged agent with A2A skills, and the read-only skills are public.

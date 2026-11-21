@@ -595,14 +595,18 @@ setInterval(() => {
     .then(() => { for (const r of svc.state().refunds.slice(before)) audit.append({ kind: 'premium-refunded', policyId: String(r.policyId), to: r.to, amount: String(r.amount), tx: r.tx }); })
     .catch((e) => console.error('[insurer] refund failed', (e as Error).message));
 }, 60_000);
-const autoAudited = new Set<string>();
+// claims paid automatically before this start were audited then (the set itself is not persisted)
+const publishChecked = new Set<string>();
+const autoAudited = new Set<string>(svc.state().claims.filter((c) => c.decidedBy === 'auto' && c.paid).map((c) => String(c.claimId)));
 setInterval(() => {
   void svc.runAutoPay().then(() => {
     for (const c of svc.state().claims) {
-      if (c.decidedBy !== 'auto' || !c.paid || autoAudited.has(String(c.claimId))) continue;
+      if (c.decidedBy !== 'auto' || !c.paid) continue;
+      // once per process: publishDecision reads first and writes only if the decision is missing on-chain
+      if (!publishChecked.has(String(c.claimId))) { publishChecked.add(String(c.claimId)); publishDecision(c.claimId, 'auto', 'approved', c.paid); }
+      if (autoAudited.has(String(c.claimId))) continue;
       autoAudited.add(String(c.claimId));
       audit.append({ kind: 'claim-decided', claimId: String(c.claimId), approve: true, by: c.autoApproveTx ? 'automatic, accepted on-chain by the contract rules (autoApprove)' : 'automatic (below the auto-pay limit, objection window passed)', autoApproveTx: c.autoApproveTx, paid: c.paid });
-      publishDecision(c.claimId, 'auto', 'approved', c.paid);
     }
   });
 }, 15_000);

@@ -126,6 +126,22 @@
   </div>
 </section>
 
+<section class="slide" aria-label="Evidence and prevention">
+  <div class="margin"><div class="clause">§4.1</div><div class="doc">Evidence and prevention</div></div>
+  <div class="body">
+    <h2>Proven by signatures, stopped before it repeats</h2>
+    <table>
+      <thead><tr><th>Reason code</th><th>What went wrong</th><th>What proves it</th><th></th></tr></thead>
+      <tbody>
+        <tr><td>AM10</td><td>Agent paid twice</td><td>Insurer spotted it on-chain, paused the agent at the shop; the contract approved the payout</td><td><span class="stamp paid">PAID</span></td></tr>
+        <tr><td>WI10</td><td>Wrong item shipped</td><td>Delivery note signed by the account that recorded the receipt</td><td><span class="stamp">HUMAN</span></td></tr>
+        <tr><td>AM20</td><td>Prompt-injected purchase</td><td>Outside the AP2 intent the owner signed</td><td><span class="stamp">HUMAN</span></td></tr>
+      </tbody>
+    </table>
+    <p class="small">Reason codes follow card chargebacks. Only the evidence hash is on-chain, so evidence cannot be swapped after filing. A paused agent is refused before any money moves, until its owner resumes it.</p>
+  </div>
+</section>
+
 <section class="slide" aria-label="Concordium components">
   <div class="margin"><div class="clause">§5</div><div class="doc">Infrastructure relied upon</div></div>
   <div class="body">

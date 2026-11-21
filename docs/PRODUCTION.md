@@ -26,6 +26,8 @@ Kuasa Cover was built against interfaces, so each testnet stand-in has a named r
 - **Carrier.** Kuasa acts as the technology layer and MGA. A licensed **fronting insurer** carries the risk and holds the regulatory licence (EU: Solvency II; distribution under the IDD). Kuasa provides underwriting data, policy administration, claims evidence and payouts.
 - **Pricing.** Today's rules are transparent but illustrative. In production they are calibrated on loss data. The inputs stay the same and verifiable: mandate tightness, proven attributes, on-chain receipts and incidents, owner type (LEI businesses).
 - **Claims.** The assessor only recommends; a human claims handler decides (EU AI Act and insurance conduct rules). Every decision is anchored (`registerData`), which gives Art. 12 record keeping without putting personal data on-chain.
+- **Evidence.** Each claim carries a reason code modelled on card chargebacks (AM10 duplicate, AM20 outside the user's intent, WI10 wrong item, ML10 merchant loss) and an evidence document whose hash is the claim's on-chain `evidence`. Wrong items are proven by the merchant's delivery note, signed by the account that recorded the receipt; outside-intent purchases by an AP2 intent the owner signed. In production the delivery note comes from the merchant's fulfilment system (pick/pack scan), signed by the same recorder key.
+- **Prevention.** The insurer follows every finalized block, detects duplicate orders on insured agents and publishes a purchase hold that every `KuasaGuard` honours until the owner resumes the agent. In production the hold rules widen to spend velocity and anomaly scores.
 - **Fraud.** Claims need on-chain receipts, so the most common fraud (claiming orders that never happened) is rejected automatically. Repeat offenders go to the lawful identity-disclosure process via the identity provider and **Privacy Guardians**. The insurer never stores identity documents.
 - **Scope.** Kuasa covers the agent's own mistakes inside its mandate, wrong or counterfeit goods, and third-party loss to merchants. **Non-delivery is left to Concordium's Protocol-Enforced Escrow.**
 
@@ -50,3 +52,20 @@ Kuasa Cover was built against interfaces, so each testnet stand-in has a named r
 5. Fronting-carrier agreement, policy wording, claims-handling procedure and a DPIA (no personal data on-chain; ZK proofs only).
 6. Security review of both contracts and the guard. Bug bounty.
 7. Contract hardening deferred on testnet to keep the recorded evidence valid (enforced off-chain today by the assessor and service): distinct orders per duplicate claim, one policy per premium transaction, one claim per order across all policies of a mandate, `agent_token` checked against the mandate, and a bounded per-payer policy index.
+
+## 6. Next, adopted from elsewhere
+
+Ideas from other insurance, dispute and agent-trust systems, each with the Kuasa seam where it lands. None of them is needed for the testnet demo; all of them fit the existing design.
+
+| Idea | From | In Kuasa | Seam |
+|---|---|---|---|
+| Bonded objections and assertions | UMA Optimistic Oracle | An objection posts a small EUDemo bond; a losing objection's bond goes to the pool. Ends free objections | `InsurerService.object`, `objectClaim` in kuasa-cover |
+| Decentralised appeal court | Kleros | Disputed appeals go to a juror pool instead of the insurer's own claims handler | `appealOf` on claim records |
+| Risk-specific staking | Nexus Mutual | Capital providers stake on a merchant category or an agent class, not one flat pool, and price that risk | `packages/insurer/src/capital.ts` |
+| Operator bonds and slashing | EigenLayer-style restaking | Agent operators post a bond that is cut when fraud is proven (`Fraud` status), on top of lawful disclosure | `markFraud` in kuasa-cover |
+| Portable reputation across chains | ERC-8004 Reputation Registry (Ethereum) | Claim outcomes of EVM-bound agents (CIS-8 key) posted as ERC-8004 feedback, so EVM merchants see them natively | `packages/explorer/src/evm.ts`, `verify-evm-agent` A2A skill |
+| Per-order risk scoring | Stripe Radar | The guard scores each order (velocity, basket, merchant) and prices per-order cover from it | `KuasaGuard.decide`, `RiskInput` |
+| Merchant-paid cover | "Free shipping" economics | The merchant pays the agent's per-order premium to win the sale; the policy still covers the agent | `checkPurchase` (premium payer), shop `/quote` |
+| Unused premium giveback | Lemonade | At policy end, an unused share of the premium is returned or donated | `refundCancelled` (pro-rata logic exists) |
+
+Contract v3 candidates, deferred to keep the v2 evidence valid: the insurer may file a detected AM10 claim on the holder's behalf (fully parametric), per-policy auto-pay limit and objection window, and the hash of the owner-signed AP2 intent stored on the policy.
