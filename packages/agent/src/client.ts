@@ -320,7 +320,7 @@ export class KuasaAgent {
    * from its public /solvency) is filled cheapest first, per unit of cover; each share is that insurer's
    * own policy, and the shop adds them up. Stops at the first failed purchase (shares bought stay bought).
    */
-  async coverBuySyndicated(limit: bigint, days = 30) {
+  async coverBuySyndicated(limit: bigint, days = 30, opts: { followLead?: number } = {}) {
     const offers: { at: string; free: bigint; unit: number }[] = [];
     for (const at of this.insurerUrls) {
       const s = await (await fetch(new URL('/solvency', at))).json().catch(() => null) as { pool?: string; exposure?: string } | null;
@@ -332,6 +332,12 @@ export class KuasaAgent {
       if (q?.premium) offers.push({ at, free, unit: Number(q.premium) / Number(probe) });
     }
     offers.sort((a, b) => a.unit - b.unit);
+    // Lloyd's lead and following market: the cheapest insurer leads and sets the rate; followers take a
+    // share only within `followLead` of it (e.g. 0.1 = at most 10% dearer), so no share is bought at any price
+    if (opts.followLead !== undefined && offers.length) {
+      const cap = offers[0].unit * (1 + opts.followLead);
+      offers.splice(0, offers.length, ...offers.filter((o) => o.unit <= cap));
+    }
     let rest = limit;
     const legs: { at: string; limit: bigint; ok: boolean; premium?: string; policyId?: string; paymentTx?: string; reasons?: string[] }[] = [];
     for (const o of offers) {
