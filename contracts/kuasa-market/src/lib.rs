@@ -43,6 +43,14 @@ pub struct ClaimRef {
     pub claim_id: u64,
 }
 
+/// An escrowed slash, named in full: it outlives the insurer's registration (release and veto never need it).
+#[derive(Serialize, SchemaType)]
+pub struct EscrowRef {
+    pub pool: AccountAddress,
+    pub cover: ContractAddress,
+    pub claim_id: u64,
+}
+
 /// kuasa-cover's `claim` view, mirrored here for reading only (same wire format).
 #[derive(Deserial)]
 pub enum CoverClaimKind { AgentMistake, WrongItem, MerchantLoss }
@@ -277,29 +285,32 @@ fn slash_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
 }
 
 /// Anyone, after the release time: the escrowed penalty goes to the claimant.
-#[receive(contract = "kuasa_market", name = "releaseSlash", parameter = "ClaimRef", error = "Error", mutable, enable_logger)]
+#[receive(contract = "kuasa_market", name = "releaseSlash", parameter = "EscrowRef", error = "Error", mutable, enable_logger)]
 fn release_slash(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
-    let r: ClaimRef = ctx.parameter_cursor().get()?;
-    let cover = host.state().insurers.get(&r.pool).map(|i| i.cover).ok_or(Error::UnknownInsurer)?;
-    let (to, amount, release_at) = host.state().escrow.get(&(r.pool, cover, r.claim_id)).map(|e| *e).ok_or(Error::NotApprovedUnpaid)?;
+    let r: EscrowRef = ctx.parameter_cursor().get()?;
+    let (to, amount, release_at) = host.state().escrow.get(&(r.pool, r.cover, r.claim_id)).map(|e| *e).ok_or(Error::NotApprovedUnpaid)?;
     ensure!(ctx.metadata().slot_time() >= release_at, Error::TooEarly);
-    host.state_mut().escrow.remove(&(r.pool, cover, r.claim_id));
+    host.state_mut().escrow.remove(&(r.pool, r.cover, r.claim_id));
     host.invoke_transfer(&to, amount)?;
     logger.log(&Event::Slashed { pool: r.pool, amount, to, reason: HashSha2256([0; 32]) })?;
     Ok(())
 }
 
 /// The arbiter (the 2-of-3 juror account), before release: a self-dealt or mistaken slash goes back to the bond.
-#[receive(contract = "kuasa_market", name = "vetoSlash", parameter = "ClaimRef", error = "Error", mutable, enable_logger)]
+#[receive(contract = "kuasa_market", name = "vetoSlash", parameter = "EscrowRef", error = "Error", mutable, enable_logger)]
 fn veto_slash(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
     ensure!(sender_account(ctx)? == host.state().arbiter, Error::Unauthorized);
-    let r: ClaimRef = ctx.parameter_cursor().get()?;
-    let cover = host.state().insurers.get(&r.pool).map(|i| i.cover).ok_or(Error::UnknownInsurer)?;
-    let (_to, amount, _release) = host.state().escrow.get(&(r.pool, cover, r.claim_id)).map(|e| *e).ok_or(Error::NotApprovedUnpaid)?;
-    host.state_mut().escrow.remove(&(r.pool, cover, r.claim_id));
-    let mut i = host.state_mut().insurers.get_mut(&r.pool).ok_or(Error::UnknownInsurer)?;
-    i.bond += amount;
-    drop(i);
+    let r: EscrowRef = ctx.parameter_cursor().get()?;
+    let (_to, amount, _release) = host.state().escrow.get(&(r.pool, r.cover, r.claim_id)).map(|e| *e).ok_or(Error::NotApprovedUnpaid)?;
+    host.state_mut().escrow.remove(&(r.pool, r.cover, r.claim_id));
+    // back into the bond if the insurer is still registered with that cover, else back to its pool account
+    let registered = host.state().insurers.get(&r.pool).map(|i| i.cover == r.cover).unwrap_or(false);
+    if registered {
+        let mut i = host.state_mut().insurers.get_mut(&r.pool).ok_or(Error::UnknownInsurer)?;
+        i.bond += amount;
+    } else {
+        host.invoke_transfer(&r.pool, amount)?;
+    }
     logger.log(&Event::SlashVetoed { pool: r.pool, claim_id: r.claim_id, amount })?;
     Ok(())
 }

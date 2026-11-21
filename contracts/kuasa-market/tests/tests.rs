@@ -173,9 +173,9 @@ fn anyone_slashes_an_approved_claim_left_unpaid_after_the_grace_period() {
     let before = chain.account_balance_available(CLAIMANT).unwrap();
     upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).unwrap(); // a stranger, no arbiter
     assert_eq!(listed(&chain, market)[0].1.bond, Amount::from_ccd(6), "the penalty leaves the bond at once");
-    assert!(upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &r, Amount::zero()).is_err(), "escrowed for the exit delay");
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &EscrowRef { pool: POOL, cover: _cover, claim_id: 0 }, Amount::zero()).is_err(), "escrowed for the exit delay");
     chain.tick_block_time(Duration::from_millis(7 * DAY)).unwrap();
-    upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &r, Amount::zero()).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &EscrowRef { pool: POOL, cover: _cover, claim_id: 0 }, Amount::zero()).unwrap();
     assert_eq!(chain.account_balance_available(CLAIMANT).unwrap(), before + Amount::from_ccd(4), "the claimant is compensated");
     assert!(upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).is_err(), "one unpaid claim costs the bond once");
     assert!(upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).is_err(), "and cannot be flagged again");
@@ -202,9 +202,29 @@ fn the_panel_vetoes_a_slash_in_escrow_and_the_bond_is_restored() {
     upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).unwrap();
     chain.tick_block_time(Duration::from_millis(DAY)).unwrap();
     upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).unwrap();
-    assert!(upd(&mut chain, market, OTHER, "kuasa_market.vetoSlash", &r, Amount::zero()).is_err(), "only the arbiter vetoes");
-    upd(&mut chain, market, ARBITER, "kuasa_market.vetoSlash", &r, Amount::zero()).unwrap();
+    let e = EscrowRef { pool: POOL, cover: _cover, claim_id: 0 };
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.vetoSlash", &e, Amount::zero()).is_err(), "only the arbiter vetoes");
+    upd(&mut chain, market, ARBITER, "kuasa_market.vetoSlash", &e, Amount::zero()).unwrap();
     assert_eq!(listed(&chain, market)[0].1.bond, Amount::from_ccd(10), "self-dealing gains nothing");
     chain.tick_block_time(Duration::from_millis(7 * DAY)).unwrap();
-    assert!(upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &r, Amount::zero()).is_err(), "nothing left to release");
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &e, Amount::zero()).is_err(), "nothing left to release");
+}
+
+
+#[test]
+fn an_escrowed_slash_survives_the_insurer_leaving_and_withdrawing() {
+    let (mut chain, market, cover) = market_with_approved_claim();
+    let r = ClaimRef { pool: POOL, claim_id: 0 };
+    upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).unwrap();
+    chain.tick_block_time(Duration::from_millis(DAY)).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).unwrap();
+    // the insurer walks away with what is left of its bond
+    upd(&mut chain, market, POOL, "kuasa_market.leave", &(), Amount::zero()).unwrap();
+    chain.tick_block_time(Duration::from_millis(7 * DAY)).unwrap();
+    upd(&mut chain, market, POOL, "kuasa_market.withdraw", &(), Amount::zero()).unwrap();
+    assert!(listed(&chain, market).is_empty());
+    // the claimant is still paid from escrow
+    let before = chain.account_balance_available(CLAIMANT).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &EscrowRef { pool: POOL, cover, claim_id: 0 }, Amount::zero()).unwrap();
+    assert_eq!(chain.account_balance_available(CLAIMANT).unwrap(), before + Amount::from_ccd(4));
 }
