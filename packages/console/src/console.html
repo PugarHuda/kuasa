@@ -159,7 +159,11 @@ function renderCover(cv, mandates) {
   const pols = cv.policies.slice().reverse().map((p) => `<li><span class="mono">#${esc(p.policyId)}</span><div>
     <strong>${esc(who[p.payer] ?? short(p.payer))}</strong> · ${esc(p.kind)} cover up to ${ccd(p.limit)} · until ${new Date(Number(p.until)).toLocaleDateString()}<br>
     premium ${tx(p.premiumTx)}</div></li>`).join('');
-  return `${warn}<dl>
+  const holds = Object.entries(cv.holds ?? {}).map(([payer, h]) => `<div class="card"><div class="row"><span class="name">${esc(who[payer] ?? short(payer))}: purchases paused</span><span class="pill bad">Circuit breaker</span></div>
+    <p class="muted">The insurer saw ${esc(h.reason)} on-chain and published a hold that merchants honour${h.published ? '' : ' (publishing…)'}. Check the agent, then resume it.</p>
+    ${who[payer] ? `<button data-fn="resume" data-a="${esc(who[payer])}">Resume agent</button>` : ''}</div>`).join('');
+  const dets = (cv.detections ?? []).slice().reverse().map((d) => `<li><span class="mono">${esc(d.status)}</span><div>Duplicate orders detected for <strong>${esc(who[d.payer] ?? short(d.payer))}</strong> · ${ccd(d.amount)} · ${d.paymentTxs.map((t) => tx(t)).join(' + ')}${d.claimId !== undefined ? ` · claim #${esc(d.claimId)}` : ' · waiting for the agent to file'}</div></li>`).join('');
+  return `${warn}${holds}${dets ? `<ul class="feed">${dets}</ul>` : ''}<dl>
       <dt>Pool</dt><dd>${cv.pool == null ? 'balance unavailable' : ccd(cv.pool)} in treasury ${acct(cv.treasury)}</dd>
       <dt>Premiums in</dt><dd>${ccd(cv.premiumsIn)}</dd>
       <dt>Payouts out</dt><dd>${ccd(paidOut)} (${cv.payouts.length})</dd>
@@ -238,7 +242,7 @@ async function refresh() {
 // One delegated handler: values travel as data- attributes (escaped HTML), never inside JS strings.
 let reviews = {};
 async function aiReview(id, b) { b.disabled = true; b.textContent = 'Drafting…'; try { await fetch(`/api/claims/${id}/ai-review`, { method: 'POST', headers: { 'x-kuasa-console': '1' } }); reviews = await (await fetch('/api/reviews')).json(); } finally { b.disabled = false; b.textContent = 'AI draft'; } refresh(); }
-const handlers = { aiReview: (b, x) => aiReview(x, b), act: (b, x, y) => act(x, y, b), decide: (b, x, y) => decide(x, y, b), assessPending: (b, x) => assessPending(x, b), approveDisclosure: (b, x) => approveDisclosure(x, b) };
+const handlers = { aiReview: (b, x) => aiReview(x, b), act: (b, x, y) => act(x, y, b), decide: (b, x, y) => decide(x, y, b), assessPending: (b, x) => assessPending(x, b), approveDisclosure: (b, x) => approveDisclosure(x, b), resume: (b, x) => post(`/api/resume/${x}`, b, () => `Purchases resumed for ${x}`) };
 document.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-fn]');
   if (b && Object.hasOwn(handlers, b.dataset.fn)) handlers[b.dataset.fn](b, b.dataset.a, b.dataset.b);

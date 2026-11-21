@@ -13,7 +13,7 @@ import { CONCORDIUM_TESTNET_CAIP2 } from '@x402/concordium';
 import { ExactConcordiumScheme } from '@x402/concordium/exact/client';
 import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from '@x402/fetch';
 import { connect } from '@kuasa/chain';
-import { canonicalJson, type ClaimKind, encodeFileClaim, sha256Hex } from '@kuasa/core';
+import { type ClaimEvidence, type ClaimKind, defaultReason, encodeFileClaim, evidenceHash, REASON_CODES, type ReasonCode, type SignedDeliveryNote } from '@kuasa/core';
 import { type AgentRegistry, Cis8004Registry, makePayerProof } from '@kuasa/merchant';
 
 export const MANDATE_HEADER = 'x-kuasa-mandate';
@@ -264,13 +264,40 @@ export class KuasaAgent {
    * insurer (the agent pays no fee). The insurer assesses it against the on-chain receipts.
    */
   /** policyId: the policy claimed on (defaults to this agent's live cover; a merchant names the buyer's policy). */
-  async fileClaim(kind: ClaimKind, paymentTxs: string[], amount: bigint, note = '', policyIdArg?: string) {
+  /** Duplicate orders the insurer spotted on-chain for this agent, and whether its purchases are on hold. */
+  async detections() {
+    return (await (await fetch(new URL(`/detections/${this.opts.payer}`, this.insurerUrl))).json()) as {
+      detections: { orders: string[]; paymentTxs: string[]; amount: string; status: 'open' | 'filed'; claimId?: string }[]; hold: { reason: string; at: number } | null;
+    };
+  }
+
+  /** Files every open detection as an AM10 duplicate-order claim (the insurer already did the finding). */
+  async claimDetected() {
+    const { detections } = await this.detections();
+    const out = [];
+    for (const d of detections.filter((x) => x.status === 'open')) out.push(await this.fileClaim('AgentMistake', d.paymentTxs, big(d.amount), 'detected by the insurer', undefined, 'AM10'));
+    return out;
+  }
+
+  /** The shop's signed delivery note (ordered vs. shipped) for one of our payments. */
+  async deliveryNote(paymentTx: string): Promise<SignedDeliveryNote> {
+    const u = new URL(`/delivery/${paymentTx}`, this.opts.shopUrl);
+    const r = await fetch(u, { headers: await this.proof(u.origin) });
+    if (!r.ok) throw new Error(`no delivery note for ${paymentTx}: ${(await r.json().catch(() => ({}))).error ?? r.status}`);
+    return r.json() as Promise<SignedDeliveryNote>;
+  }
+
+  /** reason: a chargeback-style code (AM10 duplicate, AM20 outside the user intent, WI10 wrong item, ML10 merchant loss). */
+  async fileClaim(kind: ClaimKind, paymentTxs: string[], amount: bigint, note = '', policyIdArg?: string, reason: ReasonCode = defaultReason(kind)) {
+    if (REASON_CODES[reason]?.kind !== kind) return { ok: false as const, reasons: [`reason code ${reason} does not fit a ${kind} claim`] };
     const status = policyIdArg ? undefined : await this.coverStatus();
     const policyId = policyIdArg ?? status?.onChain.policyId ?? status?.policies.at(-1)?.policyId;
     if (policyId == null) return { ok: false as const, reasons: ['no live policy'] };
     const receipts = await Promise.all(paymentTxs.map((tx) => this.receiptOf(tx)));
     const info = await (await fetch(new URL('/info', this.insurerUrl))).json() as { cover: { index: string; subindex: string }; operator: string };
-    const evidence = await sha256Hex(canonicalJson({ paymentTxs, note }));
+    // The evidence document travels with the filing; only its hash goes on-chain.
+    const doc: ClaimEvidence = { v: 2, reason, paymentTxs, note, ...(reason === 'WI10' || reason === 'AM20' ? { delivery: await Promise.all(paymentTxs.map((tx) => this.deliveryNote(tx))) } : {}) };
+    const evidence = await evidenceHash(doc);
     const message = encodeFileClaim({ policyId: big(policyId), kind, amount, evidence, orders: receipts.map((r) => r.order) });
 
     const grpc = connect();
@@ -286,7 +313,7 @@ export class KuasaAgent {
     const signed = await Transaction.sign(tx as never, buildBasicAccountSigner(this.opts.payerKey));
     const res = await fetch(new URL('/claims/sponsor', this.insurerUrl), {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ tx: JSON.parse(JSON.stringify(Transaction.toJSON(signed), jsonSafe)), receiptTxs: receipts.map((r) => r.receiptTx) }),
+      body: JSON.stringify({ tx: JSON.parse(JSON.stringify(Transaction.toJSON(signed), jsonSafe)), receiptTxs: receipts.map((r) => r.receiptTx), evidence: doc }),
     });
     return { ok: res.ok, ...(await res.json()) };
   }

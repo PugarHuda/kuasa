@@ -22,11 +22,13 @@ server.tool('cover_quote', 'Price Kuasa Cover (insurance) for this agent: limit 
 server.tool('cover_buy', 'Buy Kuasa Cover for this agent (premium paid over x402 under the mandate). Returns the policy.', { limit: z.number().positive(), days: z.number().int().min(1).max(365).default(30) }, async ({ limit, days }) => text(await agent.coverBuy(eur(limit), days)));
 server.tool('kuasa_my_payments', "List this agent's recent purchases at the shop (item, amount in atomic EUDemo with 6 decimals, payment tx, time). Use it to spot mistakes such as being charged twice.", async () => text(await agent.myPayments()));
 server.tool('cover_status', "Show this agent's live cover and policies.", async () => text(await agent.coverStatus()));
-server.tool('file_claim', 'File an insurance claim for a mistake this agent made (AgentMistake: two duplicate payments; WrongItem: one payment). Small duplicate-order claims are paid automatically after an objection window; others wait for a human claims handler.',
-  { kind: z.enum(['AgentMistake', 'WrongItem']), amount: z.number().positive(), paymentTxs: z.array(z.string().regex(/^[0-9a-f]{64}$/)).min(1).max(2) },
-  async ({ kind, amount, paymentTxs }) => text(await agent.fileClaim(kind, paymentTxs, eur(amount))));
+server.tool('file_claim', 'File an insurance claim for a mistake this agent made. Reason codes: AM10 duplicate order (AgentMistake, two payments); AM20 bought something outside the user’s intent, e.g. after a prompt injection (AgentMistake, one payment); WI10 the shop shipped the wrong item (WrongItem, one payment). AM20 and WI10 attach the shop’s signed delivery note automatically. Small duplicate-order claims are paid automatically after an objection window; others wait for a human claims handler.',
+  { kind: z.enum(['AgentMistake', 'WrongItem']), amount: z.number().positive(), paymentTxs: z.array(z.string().regex(/^[0-9a-f]{64}$/)).min(1).max(2), reason: z.enum(['AM10', 'AM20', 'WI10']).optional(), note: z.string().max(280).default('') },
+  async ({ kind, amount, paymentTxs, reason, note }) => text(await agent.fileClaim(kind, paymentTxs, eur(amount), note, undefined, reason)));
+server.tool('cover_detected', 'Check whether the insurer spotted a mistake of yours on-chain (duplicate orders) and whether your purchases are paused because of it. Pass file=true to file every open detection as a claim.',
+  { file: z.boolean().default(false) }, async ({ file }) => text(file ? await agent.claimDetected() : await agent.detections()));
 server.tool('appeal_claim', 'Appeal a rejected claim: re-file the same payments, ideally with a better explanation. The insurer recognises the re-filed orders as an appeal of the earlier claim; appeals are always decided by a human.',
-  { rejectedClaimId: z.string().regex(/^d+$/), kind: z.enum(['AgentMistake', 'WrongItem']), amount: z.number().positive(), paymentTxs: z.array(z.string().regex(/^[0-9a-f]{64}$/)).min(1).max(2), reason: z.string().max(280) },
+  { rejectedClaimId: z.string().regex(/^\d+$/), kind: z.enum(['AgentMistake', 'WrongItem']), amount: z.number().positive(), paymentTxs: z.array(z.string().regex(/^[0-9a-f]{64}$/)).min(1).max(2), reason: z.string().max(280) },
   async ({ rejectedClaimId, kind, amount, paymentTxs, reason }) => text(await agent.fileClaim(kind, paymentTxs, eur(amount), `appeal of #${rejectedClaimId}: ${reason}`)));
 
 await server.connect(new StdioServerTransport());

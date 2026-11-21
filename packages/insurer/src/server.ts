@@ -21,9 +21,9 @@ import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/se
 import { solvency } from '@kuasa/cover';
 import { handleA2a } from './a2a.js';
 import { CapitalLedger, isCapitalMemo } from './capital.js';
-import { AuditLog, bigintJson, cis8004SetMetadata, claimKey, COVER_V1, connect, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
-import { canonicalJson, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
-import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyPayerProof } from '@kuasa/merchant';
+import { AuditLog, bigintJson, cis8004SetMetadata, claimKey, COVER_V1, connect, finalizedHeight, registryReceiptsAt, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
+import { canonicalJson, type ClaimEvidence, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
+import { KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyDeliveryNote, verifyPayerProof } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
 import { checkSponsorable, jsonSafe, SponsorBudget } from './sponsor.js';
 import { Transaction } from '@concordium/web-sdk/transactions';
@@ -71,7 +71,8 @@ const ap2Of = (v: unknown) => { try { return v ? JSON.parse(Buffer.from(String(v
  */
 function publishDecision(claimId: bigint | string, by: 'auto' | 'human', verdict: 'approved' | 'rejected', paid?: string) {
   if (!state.insurerAgent) return;
-  const value = `by=${by};verdict=${verdict};paid=${paid ?? '-'};at=${Math.floor(Date.now() / 1000)}`;
+  const reason = svc.state().claims.find((c) => String(c.claimId) === String(claimId))?.reason;
+  const value = `by=${by};verdict=${verdict};paid=${paid ?? '-'};${reason ? `reason=${reason};` : ''}at=${Math.floor(Date.now() / 1000)}`;
   void cis8004SetMetadata(grpc, state.insurerAgent, claimKey('decision', state.cover, claimId), value, treasury)
     .catch((e) => console.error('[insurer] publishing decision failed', String(claimId), (e as Error).message));
 }
@@ -88,6 +89,8 @@ for (let i = 0; isV2 && !rules && i < 5; i++) { rules = await cover.rules(); if 
 if (isV2 && !rules) throw new Error(`cannot read the automation rules of kuasa-cover <${coverIndex},0>; refusing to start`);
 const AUTO_PAY_LIMIT = rules?.autoPayLimit ?? BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000);
 const AUTO_PAY_DELAY_MS = rules?.objectionWindowMs ?? Number(process.env.KUASA_AUTOPAY_DELAY_MS ?? 120_000);
+/** CIS-8004 key of an agent payer's purchase hold on the insurer's entry. */
+const holdKey = (payer: string) => `kuasa:hold:${payer}`;
 const fetchDoc = (url: string) => safeFetchText(url, { localOrigin: SHOP_ORIGIN });
 const disclosureDir = new URL('disclosures/', ROOT);
 
@@ -132,6 +135,10 @@ const svc = new InsurerService({
     },
   },
   registryEvents: (tx) => registryEventsOfTx(grpc, tx, registryIndex),
+  // Circuit breaker: holds live on the insurer's own CIS-8004 entry, where any merchant guard can read them.
+  hold: async (payer, reason) => { if (state.insurerAgent) await cis8004SetMetadata(grpc, state.insurerAgent, holdKey(payer), `hold;reason=${reason};at=${Math.floor(Date.now() / 1000)}`, treasury); },
+  unhold: async (payer) => { if (state.insurerAgent) await cis8004SetMetadata(grpc, state.insurerAgent, holdKey(payer), `clear;by=owner;at=${Math.floor(Date.now() / 1000)}`, treasury); },
+  verifyDelivery: (d, signer) => verifyDeliveryNote(d, signer, (a) => grpc.getAccountInfo(a)),
   treasuryBalance: () => eudemoBalance(treasury.address.address),
   paidClaims: async (payer) => {
     return paidClaimsOf(payer);
@@ -290,7 +297,9 @@ app.get('/info', (_req, res) => json(res, { cover: { index: state.cover, subinde
 /** Co-signs (sponsors) a claim filing signed by the claimant, so agents never need CCD for fees. */
 const sponsorBudget = new SponsorBudget(5, 3_600_000);
 /** Filed on-chain but not assessed (e.g. a chain error mid-way); the console can assess them. */
-const pendingAssessments = new Map<string, { claimId: bigint; receiptTxs: string[]; error: string }>();
+const pendingAssessments = new Map<string, { claimId: bigint; receiptTxs: string[]; error: string; evidence?: ClaimEvidence }>();
+/** The claimant's evidence document (its hash is checked against the on-chain claim before use). */
+const evidenceOf = (v: unknown): ClaimEvidence | undefined => (v && typeof v === 'object' && (v as ClaimEvidence).v === 2 && JSON.stringify(v).length < 20_000 ? v as ClaimEvidence : undefined);
 
 app.post('/claims/sponsor', async (req, res) => {
   const check = await checkSponsorable(req.body?.tx, cover.address, operator.address);
@@ -318,12 +327,12 @@ app.post('/claims/sponsor', async (req, res) => {
     const txs = Array.isArray(req.body?.receiptTxs) ? req.body.receiptTxs.map(String).filter((t: string) => /^[0-9a-f]{64}$/.test(t)).slice(0, 4) : [];
     const filedTx = sdk.TransactionHash.toHexString(hash);
     try {
-      const assessment = await svc.assessClaim(claimId, txs);
+      const assessment = await svc.assessClaim(claimId, txs, evidenceOf(req.body?.evidence));
       audit.append({ kind: 'claim-assessed', claimId, filedTx, ok: assessment.ok, reason: assessment.reason, payout: assessment.payout });
       if (typeof assessment === 'object' && assessment.noEvidence) publishDecision(claimId, 'auto', 'rejected');
       json(res, { tx: filedTx, claimId, assessment });
     } catch (e) {
-      pendingAssessments.set(String(claimId), { claimId, receiptTxs: txs, error: (e as Error).message });
+      pendingAssessments.set(String(claimId), { claimId, receiptTxs: txs, error: (e as Error).message, evidence: evidenceOf(req.body?.evidence) });
       json(res, { tx: filedTx, claimId, assessment: 'pending', error: (e as Error).message }, 202);
     }
   } catch (e) { json(res, { error: (e as Error).message }, 400); }
@@ -339,10 +348,10 @@ app.get('/state', consoleOnly, async (_req, res) => json(res, {
 app.post('/claims/:id/assess', consoleOnly, async (req, res) => {
   // Operator recovery: receipts from the pending filing, or supplied by the operator (console only).
   const given = Array.isArray(req.body?.receiptTxs) ? req.body.receiptTxs.map(String).filter((t: string) => /^[0-9a-f]{64}$/.test(t)).slice(0, 4) : [];
-  const p = pendingAssessments.get(String(big(req.params.id))) ?? (given.length ? { claimId: big(req.params.id), receiptTxs: given, error: '' } : undefined);
+  const p = pendingAssessments.get(String(big(req.params.id))) ?? (given.length ? { claimId: big(req.params.id), receiptTxs: given as string[], error: '', evidence: undefined } : undefined);
   if (!p) return json(res, { error: 'no pending assessment for this claim' }, 404);
   try {
-    const a = await svc.assessClaim(p.claimId, p.receiptTxs);
+    const a = await svc.assessClaim(p.claimId, p.receiptTxs, p.evidence ?? evidenceOf(req.body?.evidence));
     pendingAssessments.delete(String(p.claimId));
     json(res, a);
   } catch (e) { json(res, { error: (e as Error).message }, 400); }
@@ -531,6 +540,47 @@ app.post('/claims/:id/object', async (req, res) => {
 app.post('/claims/:id/hold', consoleOnly, (req, res) => {
   try { svc.hold(big(req.params.id)); json(res, { held: true }); } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
+
+/** Owner-facing: parametric detections and the purchase hold on an agent (both public on-chain anyway). */
+app.get('/detections/:payer', (req, res) => json(res, { detections: svc.detectionsOf(req.params.payer), hold: svc.holdOf(req.params.payer) }));
+/** The owner resumes a paused agent (console = the owner's side in the demo). */
+app.post('/holds/:payer/clear', consoleOnly, async (req, res) => {
+  try {
+    const cleared = await svc.clearHold(String(req.params.payer));
+    if (cleared) audit.append({ kind: 'hold-cleared', payer: req.params.payer, by: 'owner (console)' });
+    json(res, { cleared });
+  } catch (e) { json(res, { error: (e as Error).message }, 400); }
+});
+
+/**
+ * Parametric monitoring: follow finalized blocks and feed every kuasa-registry receipt to the
+ * insurer, which spots duplicate orders on insured agents within seconds of the second receipt.
+ */
+let watchHeight: bigint | null = null;
+let watching = false;
+async function watchBlocks() {
+  if (watching) return;
+  watching = true;
+  try {
+    const top = await finalizedHeight(grpc);
+    watchHeight ??= top - BigInt(process.env.KUASA_WATCH_LOOKBACK ?? 300); // ~10 minutes back at start
+    for (let n = 0; watchHeight < top && n < 100; n++) {
+      const seen = await registryReceiptsAt(grpc, watchHeight + 1n, registryIndex);
+      const found = await svc.onReceipts(seen);
+      for (const d of found) {
+        audit.append({ kind: 'duplicate-detected', payer: d.payer, policyId: String(d.policyId), orders: d.orders, paymentTxs: d.paymentTxs });
+        console.log(`[insurer] duplicate orders detected for ${d.payer} (policy #${d.policyId}); purchases held`);
+      }
+      watchHeight += 1n;
+    }
+    await svc.publishHolds();
+  } catch (e) {
+    console.error('[insurer] block watch', (e as Error).message); // same height is retried next tick
+  } finally {
+    watching = false;
+  }
+}
+setInterval(() => { void watchBlocks(); }, 4_000);
 
 setInterval(() => { void svc.retryUnissued(); }, 60_000);
 setInterval(() => {

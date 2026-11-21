@@ -205,12 +205,34 @@ export function contractEvents(summary: unknown, index: bigint): Uint8Array[] {
 }
 
 /** kuasa-registry events in a finalized transaction, with the block time (ms). */
-export async function registryEventsOfTx(grpc: ConcordiumGRPCClient, txHash: string, registryIndex: bigint): Promise<{ at: number; events: RegistryEvent[] } | null> {
+export async function registryEventsOfTx(grpc: ConcordiumGRPCClient, txHash: string, registryIndex: bigint): Promise<{ at: number; events: RegistryEvent[]; sender?: string } | null> {
   const st = await grpc.getBlockItemStatus(TransactionHash.fromHexString(txHash)).catch(() => null);
   if (!st || st.status !== 'finalized' || !st.outcome) return null;
   const info = await grpc.getBlockInfo(st.outcome.blockHash);
   const events = contractEvents(st.outcome.summary, registryIndex).map(decodeRegistryEvent).filter((e): e is RegistryEvent => e !== null);
-  return { at: info.blockSlotTime.getTime(), events };
+  const sender = (st.outcome.summary as { sender?: { address?: string } | string }).sender;
+  return { at: info.blockSlotTime.getTime(), events, sender: typeof sender === 'string' ? sender : sender?.address };
+}
+
+/** Last finalized block height. */
+export const finalizedHeight = async (grpc: ConcordiumGRPCClient) => (await grpc.getConsensusStatus()).lastFinalizedBlockHeight;
+
+/** Every kuasa-registry Receipt recorded in the finalized block at `height`, with its transaction and block time. */
+export async function registryReceiptsAt(grpc: ConcordiumGRPCClient, height: bigint, registryIndex: bigint) {
+  const out: { owner: string; mandateId: string; order: string; paymentTx: string; amount: bigint; at: number; receiptTx: string; sender?: string }[] = [];
+  const [block] = await grpc.getBlocksAtHeight(height);
+  if (!block) return out;
+  let at: number | undefined;
+  for await (const item of grpc.getBlockTransactionEvents(block)) {
+    const evs = contractEvents(item, registryIndex).map(decodeRegistryEvent);
+    for (const ev of evs) {
+      if (ev?.type !== 'Receipt') continue;
+      at ??= (await grpc.getBlockInfo(block)).blockSlotTime.getTime();
+      const sender = (item as { sender?: { address?: string } }).sender?.address;
+      out.push({ owner: ev.owner, mandateId: ev.id, order: ev.order, paymentTx: ev.paymentTx, amount: ev.amount, at, receiptTx: TransactionHash.toHexString((item as { hash: TransactionHash.Type }).hash), sender });
+    }
+  }
+  return out;
 }
 
 /** The first kuasa-cover instance; its claim records keep un-namespaced CIS-8004 keys. */

@@ -47,7 +47,7 @@ export class KuasaGuard {
   private identity: IdentitySource;
   private spend: SpendControl;
   readonly log: { at: number; mandate?: string; payer?: string; amount?: string; decision: Decision }[] = [];
-  readonly receipts: { mandate: string; order: string; orderRef?: string; paymentTx: string; receiptTx: string; amount: string; payer?: string; route?: string; at?: number }[] = [];
+  readonly receipts: { mandate: string; order: string; orderRef?: string; paymentTx: string; receiptTx: string; amount: string; payer?: string; route?: string; at?: number; /** what was packed (fulfilment scan), when it differs from `route` */ shipped?: string }[] = [];
   /** Settled payments whose receipt could not be recorded; reconcile manually. */
   readonly unrecorded: { mandate: string; paymentTx: string; amount: string; error: string }[] = [];
 
@@ -72,6 +72,8 @@ export class KuasaGuard {
     agents?: AgentRegistry;
     /** Kuasa Cover check, required for offers with `minCover`. */
     cover?: CoverCheck;
+    /** Insurer circuit breaker: the hold on this payer ("hold;reason=..."), or null. Honoured on every offer. */
+    holdOf?: (payer: string) => Promise<string | null>;
     /** Upper bound on live order references (oldest evicted first). */
     maxOrders?: number;
     /** Upper bound per payer, so one payer can only evict its own references. */
@@ -143,9 +145,16 @@ export class KuasaGuard {
       reasons.push('mandate does not authorise this merchant to record receipts');
     }
     const cover = await this.coverCheck(offer, args);
-    reasons.push(...await this.agentReasons(mandate), ...cover.reasons);
+    reasons.push(...await this.agentReasons(mandate), ...cover.reasons, ...await this.holdReasons(args.payer));
     const base = { mandateId: id, owner: mandate.principal.account, budget, cover: cover.need };
     return reasons.length ? { ok: false, reasons, ...base } : { ok: true, ...base };
+  }
+
+  private async holdReasons(payer: string): Promise<string[]> {
+    if (!this.opts.holdOf) return [];
+    const h = await this.opts.holdOf(payer).catch(() => undefined);
+    if (h === undefined) return ['insurer hold check unavailable'];
+    return h?.startsWith('hold') ? [`purchases paused by the insurer (${h.split(';')[1] ?? 'hold'}): the owner must resume this agent`] : [];
   }
 
   private async agentReasons(m: Mandate): Promise<string[]> {

@@ -86,7 +86,13 @@ const fields = (v: string | null) => (v ? Object.fromEntries(v.split(';').map((k
 /** The insurer publishes each claim decision on its CIS-8004 entry: by=auto|human;verdict=...;paid=... */
 export async function decisionOf(claimId: number, cover = CURRENT) {
   const f = fields(await metadata(INSURER_TOKEN, claimKey('decision', cover, claimId)));
-  return f ? { by: f.by as 'auto' | 'human' | undefined, verdict: f.verdict } : null;
+  return f ? { by: f.by as 'auto' | 'human' | undefined, verdict: f.verdict, reason: f.reason } : null;
+}
+
+/** Circuit breaker: the insurer's purchase hold on an agent payer (kuasa:hold:<payer>), if one is in force. */
+export async function holdOf(payer: string) {
+  const v = await metadata(INSURER_TOKEN, `kuasa:hold:${payer}`);
+  return v?.startsWith('hold') ? fields(v) : null;
 }
 
 const SHOP_TOKEN = [0xf3, 0x04, 0, 0, 0, 0, 0, 0]; // the demo shop's CIS-8004 agent token

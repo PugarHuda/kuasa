@@ -5,7 +5,7 @@
  */
 import { type Claim, type Policy } from '@kuasa/core';
 import { solvency } from '@kuasa/cover';
-import { attestationOf, COVER_V1, decisionOf, POOL, poolBalance, scan } from './chain.js';
+import { attestationOf, COVER_V1, decisionOf, holdOf, POOL, poolBalance, scan } from './chain.js';
 
 const LABELS: Record<string, string> = {
   '4WmdhhLRPTk92STxiaXQFFNyJFLaM6k5kRq1ryFN8xjho1aq3s': 'Alice (owner)',
@@ -27,7 +27,8 @@ const day = (ms: bigint) => new Date(Number(ms)).toISOString().slice(0, 10);
 
 function decidedBy(d: Awaited<ReturnType<typeof decisionOf>> | undefined) {
   if (!d?.by) return '<span class="muted">–</span>';
-  return d.by === 'auto' ? '<span class="pill warn">automatic</span>' : '<span class="pill ok">human</span>';
+  const code = d.reason ? ` <span class="mono" title="reason code">${esc(d.reason)}</span>` : '';
+  return (d.by === 'auto' ? '<span class="pill warn">automatic</span>' : '<span class="pill ok">human</span>') + code;
 }
 
 function attested(a: string | null | undefined) {
@@ -50,6 +51,8 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
   $('stats').innerHTML = [
     ['Pool', eur(s.pool)], ['Live exposure', eur(s.exposure)], ['Coverage', s.coverage === null ? '–' : `×${s.coverage}`],
     ['Live policies', String(s.livePolicies)], ['Premiums in', eur(s.premiums)], ['Paid out', eur(s.paidOut)],
+    // claims paid / premiums earned: the number an insurer and its regulator watch first
+    ['Loss ratio', s.premiums === 0n ? '–' : `${(Number((s.paidOut * 1000n) / s.premiums) / 10).toFixed(1)}%`],
   ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   // Pool vs the cover it owes: one series, the title names it, values labelled.
   const max = s.pool > s.exposure ? s.pool : s.exposure;
@@ -95,6 +98,11 @@ async function load() {
       attests.push(await attestationOf(id, cover).catch(() => attestationOf(id, cover)).catch(() => null));
     }
     render(policies, claims, pool, decisions, attests);
+    // circuit breaker: agents the insurer paused after spotting duplicate orders on-chain
+    const payers = [...new Set(policies.map((p) => p.agentPayer))];
+    const held: string[] = [];
+    for (const p of payers) { const h = await holdOf(p).catch(() => null); if (h) held.push(`${acct(p)} <span class="pill bad">paused: ${esc(h.reason ?? 'hold')}</span>`); }
+    $('holds').innerHTML = held.length ? `Circuit breaker: ${held.join(' · ')}` : '<span class="pill ok">Circuit breaker: no agent paused</span>';
   } catch (e) {
     $('updated').textContent = `Could not read testnet: ${(e as Error).message}`;
   }

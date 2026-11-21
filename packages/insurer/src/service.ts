@@ -1,7 +1,7 @@
 import { AccountAddress } from '@concordium/web-sdk';
 import type { Wallet } from '@kuasa/chain';
-import { canonicalJson, type Claim, type IssuePolicyParams, type Mandate, type MandateEntry, type Policy, type RegistryEvent, sha256Hex } from '@kuasa/core';
-import { assess, type Assessment, quote, type Quote, type RiskInput, scopeFromAp2Intent, type Ap2IntentMandate } from '@kuasa/cover';
+import { canonicalJson, type Claim, type ClaimEvidence, evidenceHash, type SignedDeliveryNote, type IssuePolicyParams, type Mandate, type MandateEntry, type Policy, type RegistryEvent, sha256Hex } from '@kuasa/core';
+import { assess, type Assessment, DUPLICATE_WINDOW_MS, findDuplicates, type SeenReceipt, quote, type Quote, type RiskInput, scopeFromAp2Intent, type Ap2IntentMandate } from '@kuasa/cover';
 import type { IdentitySource } from '@kuasa/merchant';
 
 const EU = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK'];
@@ -40,12 +40,17 @@ export type InsurerDeps = {
     policyByPremiumTx(premiumTx: string): Promise<bigint | null>;
   };
   /** kuasa-registry events of a finalized transaction, with block time. */
-  registryEvents(tx: string): Promise<{ at: number; events: RegistryEvent[] } | null>;
+  registryEvents(tx: string): Promise<{ at: number; events: RegistryEvent[]; sender?: string } | null>;
+  /** Checks a merchant delivery note was signed by `signer` (the account that recorded the receipt). */
+  verifyDelivery?(d: SignedDeliveryNote, signer: string): Promise<boolean>;
   treasuryBalance(): Promise<bigint>;
   /** Claims already paid to this agent payer (on-chain), for experience rating. */
   paidClaims?(payer: string): Promise<number>;
   /** On-chain cover of this payer now (the contract's coverOf view): one live period policy per payer. */
   coverOf?(payer: string): Promise<{ periodRemaining: bigint; policyId: bigint | null }>;
+  /** Circuit breaker: publish (or lift) a purchase hold on an agent payer that merchants' guards honour. */
+  hold?(payer: string, reason: string): Promise<void>;
+  unhold?(payer: string): Promise<void>;
   /** Submits a payout from the treasury and returns its hash without waiting for finalization. */
   pay(to: string, amount: bigint, memo: string): Promise<string>;
   /** Outcome of a submitted transaction. */
@@ -79,7 +84,7 @@ export type StoredQuote = Quote & {
   quoteId: string; request: QuoteRequest; mandateId: string; owner: string; payer: string; token: string; expires: number;
 };
 type ClaimRecord = {
-  claimId: bigint; policyId: bigint; holder: string; claimant: string; recipient: string; assessment: Assessment; receiptTxs: string[]; orders: string[];
+  claimId: bigint; policyId: bigint; /** chargeback-style reason code from the verified evidence */ reason?: string; holder: string; claimant: string; recipient: string; assessment: Assessment; receiptTxs: string[]; orders: string[];
   mandateId?: string;
   /** The human decision (or the automatic no-evidence rejection). */
   verdict?: 'approved' | 'rejected';
@@ -97,6 +102,12 @@ type ClaimRecord = {
   busy?: Promise<{ decided: true; paid?: string; reason?: string }>;
   busyApprove?: boolean;
 };
+/** A duplicate-order pair the insurer spotted on-chain on an insured agent (parametric AM10 trigger). */
+export type Detection = {
+  payer: string; policyId: bigint; owner: string; mandateId: string; amount: bigint; at: number;
+  orders: [string, string]; paymentTxs: [string, string]; receiptTxs: [string, string];
+  status: 'open' | 'filed'; claimId?: bigint;
+};
 type Disclosure = { claimId: string; account: string; doc: object };
 
 /**
@@ -110,7 +121,7 @@ export class InsurerService {
   private paying = new Map<string, number>(); // quoteId -> reserved at (ms)
   /** Quotes whose premium settled: their reservation never lapses. */
   private settled = new Set<string>();
-  private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string }[] = [];
+  private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string; /** SKUs of the AP2 intent it was bought under */ skus?: string[] }[] = [];
   /** Premiums that settled but whose policy is not on-chain yet; the quote travels with them. */
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
   /** Paid premiums that can never become a policy (e.g. mandate revoked meanwhile): refund manually. */
@@ -129,6 +140,11 @@ export class InsurerService {
   private disclosures: { claimId: string; account: string; hash: string }[] = [];
   private payouts: { claimId: string; to: string; amount: bigint; tx: string }[] = [];
   private premiumsIn = 0n;
+  /** Parametric monitoring: receipts seen on-chain in the last duplicate window, and what was found. */
+  private recent: SeenReceipt[] = [];
+  private detections: Detection[] = [];
+  /** Agents whose purchases are paused by the circuit breaker (payer -> reason, since). */
+  private holds = new Map<string, { reason: string; at: number; published?: boolean }>();
 
   constructor(private deps: InsurerDeps, snapshot?: string) {
     if (snapshot) {
@@ -149,6 +165,8 @@ export class InsurerService {
       this.premiumsIn = s.premiumsIn ?? 0n;
       this.refunds = s.refunds ?? [];
       this.objectionsBy = new Map(Object.entries(s.objectionsBy ?? {}));
+      this.detections = s.detections ?? [];
+      this.holds = new Map(Object.entries(s.holds ?? {}));
     }
   }
 
@@ -158,6 +176,7 @@ export class InsurerService {
       policies: this.policies, unissued: this.unissued, needsRefund: this.needsRefund, claims: [...this.claims.values()].map(({ busy, busyApprove, ...r }) => r),
       fraud: Object.fromEntries(this.fraud), pendingDisclosures: this.pendingDisclosures, disclosures: this.disclosures,
       payouts: this.payouts, premiumsIn: this.premiumsIn, refunds: this.refunds, objectionsBy: Object.fromEntries(this.objectionsBy),
+      detections: this.detections, holds: Object.fromEntries(this.holds),
     }));
   }
 
@@ -266,7 +285,7 @@ export class InsurerService {
       deductible: DEDUCTIBLE, premium: q.premium, premiumTx, validUntilMs: BigInt(this.deps.now() + days * DAY_MS),
     };
     const record = (id: bigint) => {
-      this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period' });
+      this.policies.push({ policyId: id, quoteId, premiumTx, holder: q.owner, payer: q.payer, limit: params.limit, until: Number(params.validUntilMs), kind: q.request.order ? 'order' : 'period', ...(q.request.ap2?.skus?.length ? { skus: q.request.ap2.skus } : {}) });
       this.premiumsIn += q.premium;
       this.consume(quoteId);
       this.save();
@@ -355,27 +374,29 @@ export class InsurerService {
   }
 
   /** Assesses a filed claim against the on-chain receipts it cites, and records the outcome. */
-  async assessClaim(claimId: bigint, receiptTxs: string[]): Promise<Assessment> {
+  async assessClaim(claimId: bigint, receiptTxs: string[], evidence?: ClaimEvidence): Promise<Assessment> {
     if (this.claims.has(claimId) || this.assessing.has(claimId)) throw new Error('claim already assessed');
     this.assessing.add(claimId);
     try {
-      return await this.assessOnce(claimId, receiptTxs);
+      return await this.assessOnce(claimId, receiptTxs, evidence);
     } finally {
       this.assessing.delete(claimId);
     }
   }
 
-  private async assessOnce(claimId: bigint, receiptTxs: string[]): Promise<Assessment> {
+  private async assessOnce(claimId: bigint, receiptTxs: string[], evidence?: ClaimEvidence): Promise<Assessment> {
     const c = await this.deps.cover.claim(claimId);
     if (!c) throw new Error('unknown claim');
     const p = await this.deps.cover.policy(c.policyId);
     if (!p) throw new Error('unknown policy');
     const e = await this.deps.mandateEntry(p.mandate.owner, p.mandate.id);
     const receipts = [];
+    const recorderOf = new Map<string, string>(); // order -> account that recorded its receipt
     for (const tx of receiptTxs.slice(0, 4)) {
       const r = await this.deps.registryEvents(tx);
       for (const ev of r?.events ?? []) {
         if (ev.type !== 'Receipt') continue;
+        if (r!.sender) recorderOf.set(ev.order + ev.paymentTx, r!.sender);
         // Per-order cover: the shop records sha256(orderRef + payment tx) as the receipt order.
         const matchesOrderRef = typeof p.kind === 'object' ? ev.order === await sha256Hex(p.kind.order + ev.paymentTx) : undefined;
         receipts.push({ order: ev.order, amount: ev.amount, at: r!.at, mandateId: ev.id, owner: ev.owner, paymentTx: ev.paymentTx, matchesOrderRef });
@@ -383,22 +404,33 @@ export class InsurerService {
     }
     // No double cover: orders paid, approved or still open under ANY policy of the same mandate.
     const paidOrders = [...this.claims.values()].filter((x) => x.mandateId === p.mandate.id && x.verdict !== 'rejected' && (x.paid || x.verdict === 'approved' || x.assessment.ok)).flatMap((x) => x.orders);
+    // The off-chain evidence counts only if it is exactly what the claimant committed to on-chain.
+    const ev = evidence && (await evidenceHash(evidence).catch(() => '')) === c.evidence ? evidence : undefined;
+    const delivery = [];
+    for (const d of ev?.delivery?.slice(0, 2) ?? []) {
+      const signer = recorderOf.get(d.note.order + d.note.paymentTx);
+      if (signer && this.deps.verifyDelivery && await this.deps.verifyDelivery(d, signer).catch(() => false)) delivery.push(d.note);
+    }
+    const local = this.policies.find((x) => x.premiumTx === p.premiumTx);
     const a = assess({
+      reason: ev?.reason, delivery, intentSkus: local?.skus,
       claim: { kind: c.kind, amount: c.amount, orders: c.orders },
       policy: { validFromMs: Number(p.validFromMs), validUntilMs: Number(p.validUntilMs), limit: p.limit, paidOut: p.paidOut, deductible: p.deductible, mandateId: p.mandate.id, owner: p.mandate.owner, orderRef: typeof p.kind === 'object' ? p.kind.order : undefined },
       receipts, priorPaidOrders: paidOrders, incidentFiled: (e?.incidents ?? 0n) > 0n,
     });
     await this.deps.cover.assess(claimId, a.ok, await sha256Hex(a.reason), this.deps.operator);
     const rec: ClaimRecord = {
-      claimId, policyId: c.policyId, holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
+      claimId, policyId: c.policyId, reason: ev?.reason, holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
       assessment: a, receiptTxs, orders: c.orders, mandateId: p.mandate.id,
       // any earlier claim on these orders that was not approved (rejected, failed or still undecided) makes this a re-filing: a human decides
       appealOf: [...this.claims.values()].find((x) => x.verdict !== 'approved' && !x.paid && x.mandateId === p.mandate.id && x.orders.some((o) => c.orders.includes(o)))?.claimId,
     };
     const limit = this.deps.autoPayLimit;
-    // Automatic only where the chain proves the loss: not for appeals, not for wrong items (a receipt cannot show the item was wrong).
-    if (a.ok && limit !== undefined && a.payout <= limit && !this.flagged(rec) && rec.appealOf === undefined && c.kind !== 'WrongItem') rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
+    // Automatic only where the chain proves the loss: not for appeals, not for wrong items, not for
+    // outside-intent orders (the goods were delivered: a human checks they are returned).
+    if (a.ok && limit !== undefined && a.payout <= limit && !this.flagged(rec) && rec.appealOf === undefined && c.kind !== 'WrongItem' && ev?.reason !== 'AM20') rec.autoPayAt = this.deps.now() + (this.deps.autoPayDelayMs ?? 120_000);
     this.claims.set(claimId, rec);
+    for (const d of this.detections) if (d.status === 'open' && d.orders.every((o) => c.orders.includes(o))) Object.assign(d, { status: 'filed', claimId });
     this.save();
 
     if (a.noEvidence) {
@@ -420,6 +452,51 @@ export class InsurerService {
       this.save();
     }
     return a;
+  }
+
+  /**
+   * Parametric monitoring. Feed it every kuasa-registry receipt as blocks finalize. A duplicate pair
+   * on an agent with live period cover becomes a detection the agent can file with one call (the
+   * contract only accepts claims signed by a party to the policy), and trips the circuit breaker: the
+   * agent's purchases are paused at every guard that honours insurer holds until the owner resumes.
+   */
+  async onReceipts(seen: SeenReceipt[]): Promise<Detection[]> {
+    const now = Math.max(this.deps.now(), ...seen.map((r) => r.at));
+    const known = new Set(this.recent.map((r) => r.receiptTx + r.order));
+    this.recent = [...this.recent, ...seen.filter((r) => !known.has(r.receiptTx + r.order))].filter((r) => now - r.at <= 2 * DUPLICATE_WINDOW_MS);
+    const used = new Set([...this.detections.flatMap((d) => d.orders), ...[...this.claims.values()].flatMap((c) => c.orders)]);
+    const found: Detection[] = [];
+    for (const d of findDuplicates(this.recent, used)) {
+      const e = await this.deps.mandateEntry(d.owner, d.mandateId).catch(() => null);
+      const v = e && this.deps.coverOf ? await this.deps.coverOf(e.payer).catch(() => null) : null;
+      if (!e || !v || v.policyId === null || v.periodRemaining <= 0n) continue; // not insured with us
+      const det: Detection = { ...d, payer: e.payer, policyId: v.policyId, status: 'open' };
+      this.detections.push(det);
+      found.push(det);
+      if (!this.holds.has(e.payer)) this.holds.set(e.payer, { reason: 'duplicate-orders', at: this.deps.now() });
+    }
+    if (found.length) { this.save(); await this.publishHolds(); }
+    return found;
+  }
+
+  /** Publishes holds not yet on-chain (a failed publication is retried on the next call). */
+  async publishHolds() {
+    for (const [payer, h] of this.holds) {
+      if (h.published || !this.deps.hold) continue;
+      try { await this.deps.hold(payer, h.reason); h.published = true; this.save(); } catch { /* next round */ }
+    }
+  }
+
+  detectionsOf = (payer: string) => this.detections.filter((d) => d.payer === payer);
+  holdOf = (payer: string) => this.holds.get(payer) ?? null;
+
+  /** The owner resumed the agent: lift the hold. */
+  async clearHold(payer: string) {
+    if (!this.holds.has(payer)) return false;
+    await this.deps.unhold?.(payer);
+    this.holds.delete(payer);
+    this.save();
+    return true;
   }
 
   /** Any party to the claim (filer, policy holder, paid account) with a rejected no-evidence claim. */
@@ -614,6 +691,8 @@ export class InsurerService {
       disclosures: this.disclosures,
       fraudCounts: Object.fromEntries(this.fraud),
       refunds: this.refunds,
+      detections: this.detections,
+      holds: Object.fromEntries(this.holds),
     };
   }
 

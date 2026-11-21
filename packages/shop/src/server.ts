@@ -18,11 +18,11 @@ import { CONCORDIUM_TESTNET_CAIP2, toConcordiumFacilitatorSigner } from '@x402/c
 import { ExactConcordiumScheme as FacilitatorScheme } from '@x402/concordium/exact/facilitator';
 import { ExactConcordiumScheme as ServerScheme } from '@x402/concordium/exact/server';
 import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, claimKey, connect, KuasaCover, KuasaRegistry, registerData, TESTNET, wallet } from '@kuasa/chain';
-import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer, verifyPayerProof } from '@kuasa/merchant';
+import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer, signDeliveryNote, verifyPayerProof } from '@kuasa/merchant';
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4021);
-const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string; shopAgent?: string };
+const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string; shopAgent?: string; insurerAgent?: string };
 const merchant = JSON.parse(readFileSync(new URL('accounts/merchant.json', ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const payTo = merchant.find((a) => a.credNumber === 0)!.address;
 const sponsor = merchant.find((a) => a.credNumber === 1)!;
@@ -42,6 +42,10 @@ const catalog: Record<string, { name: string; price: bigint } & Offer> = {
   '/shop/vape/mint': { name: 'Mint e-liquid 10ml', price: 10n * UNIT, category: 'vape', requirements: { minAge: 18, residencyIn: EU } },
 };
 
+/** Staged warehouse mis-picks for the demo: route -> what actually gets packed. */
+const mispick = new Map<string, string>();
+const recorderWallet = wallet(sponsor.address, sponsor.key);
+
 const grpc = connect();
 const registry = new KuasaRegistry(grpc, BigInt(state.registry));
 const guard = new KuasaGuard({
@@ -51,6 +55,8 @@ const guard = new KuasaGuard({
   localOrigin: `http://localhost:${PORT}`, // demo: documents are served by this same process
   agents: new Cis8004Registry(grpc),
   cover: state.cover ? new KuasaCover(grpc, BigInt(state.cover)) : undefined,
+  // the insurer's circuit breaker, read from its CIS-8004 entry
+  holdOf: state.insurerAgent ? (payer) => cis8004GetMetadata(grpc, state.insurerAgent!, `kuasa:hold:${payer}`) : undefined,
 });
 
 const grpcCfg = { host: TESTNET.grpc.host, port: TESTNET.grpc.port, useTls: true };
@@ -70,7 +76,13 @@ server.onBeforeVerify((async (ctx: Parameters<typeof guard.beforeVerify>[0]) => 
   audit.append({ kind: 'guard-decision', payer, payTo: ctx.requirements.payTo, amount: ctx.requirements.amount, outcome: r ? 'refused' : 'allowed', reason: r?.message });
   return r;
 }) as never)
-  .onAfterSettle((async (ctx: Parameters<typeof guard.afterSettle>[0]) => { await guard.afterSettle(ctx); saveReceipts(); audit.append({ kind: 'settled', paymentTx: ctx.result.transaction, amount: ctx.requirements.amount }); }) as never)
+  .onAfterSettle((async (ctx: Parameters<typeof guard.afterSettle>[0]) => {
+    await guard.afterSettle(ctx);
+    // Fulfilment scan: what was actually packed for this order (a staged mis-pick ships something else).
+    const r = guard.receipts.find((x) => x.paymentTx === ctx.result.transaction);
+    const wrong = r?.route ? mispick.get(r.route) : undefined;
+    if (r && wrong) { r.shipped = wrong; mispick.delete(r.route!); }
+    saveReceipts(); audit.append({ kind: 'settled', paymentTx: ctx.result.transaction, amount: ctx.requirements.amount }); }) as never)
   .onSettleFailure(guard.settleFailed as never)
   .onAfterVerify(guard.afterVerify as never)
   .onVerifyFailure(guard.verifyFailed as never)
@@ -133,6 +145,29 @@ app.get('/payments/:payer', async (req, res) => {
   const ok = await verifyPayerProof({ header: (n) => req.header(n), payer, audience: `http://localhost:${PORT}`, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false);
   if (!ok) return json(res, { error: 'payer proof required' }, 401);
   json(res, guard.receipts.filter((r) => r.payer === payer).slice(-20).map(({ route, amount, paymentTx, at }) => ({ item: route, amount, paymentTx, at: at && new Date(at).toISOString() })));
+});
+
+/**
+ * Signed delivery note for one of the buyer's orders: ordered vs. shipped item, signed by the account
+ * that recorded the receipt on-chain. It is the evidence for a wrong-item or outside-intent claim.
+ */
+app.get('/delivery/:paymentTx', async (req, res) => {
+  const r = guard.receipts.find((x) => x.paymentTx === req.params.paymentTx);
+  if (!r?.payer || !r.route) return json(res, { error: 'unknown order' }, 404);
+  const ok = await verifyPayerProof({ header: (n) => req.header(n), payer: r.payer, audience: `http://localhost:${PORT}`, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false);
+  if (!ok) return json(res, { error: 'payer proof required' }, 401);
+  const note = { v: 1 as const, order: r.order, paymentTx: r.paymentTx, ordered: r.route, shipped: r.shipped ?? r.route, at: r.at ?? 0 };
+  json(res, await signDeliveryNote(note, sponsor.address, recorderWallet.signer));
+});
+
+const loopback = (req: express.Request) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '');
+/** Demo only (loopback): the warehouse mis-picks the next order of `route` and ships `ship` instead. */
+app.post('/demo/mispick', express.json(), (req, res) => {
+  const { route, ship } = req.body ?? {};
+  if (!loopback(req)) return json(res, { error: 'forbidden' }, 403);
+  if (!catalog[route] || !catalog[ship] || route === ship) return json(res, { error: 'route and ship must be two different catalog paths' }, 400);
+  mispick.set(route, ship);
+  json(res, { staged: { route, ship } });
 });
 
 app.get('/kuasa-log', (req, res) => !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, audit: audit.anchors(), unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));

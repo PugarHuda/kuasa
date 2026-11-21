@@ -12,12 +12,26 @@ const base: AssessInput = {
   receipts: [receipt('o1')],
   priorPaidOrders: [],
   incidentFiled: false,
+  delivery: [{ order: 'o1', paymentTx: 'p1', ordered: '/shop/wine/rioja', shipped: '/shop/vape/mint' }],
 };
 const run = (over: Omit<Partial<AssessInput>, 'claim'> & { claim?: Partial<AssessInput['claim']> } = {}) =>
   assess({ ...base, ...over, claim: { ...base.claim, ...over.claim } });
 
-test('WrongItem: one matching receipt, payout = amount - deductible', () => {
-  assert.deepEqual(run(), { ok: true, reason: 'receipt matched on-chain', payout: 23n * EUR, noEvidence: false });
+test('WI10 wrong item: receipt + merchant-signed note showing another item, payout = amount - deductible', () => {
+  assert.deepEqual(run(), { ok: true, reason: 'WI10 wrong item shipped: receipt matched on-chain, merchant-signed delivery note verified', payout: 23n * EUR, noEvidence: false });
+  assert.match(run({ delivery: undefined }).reason, /delivery note/);
+  assert.match(run({ delivery: [{ order: 'o1', paymentTx: 'p1', ordered: '/shop/wine/rioja', shipped: '/shop/wine/rioja' }] }).reason, /ordered item .* was shipped/);
+  assert.match(run({ delivery: [{ order: 'other', paymentTx: 'p1', ordered: 'a', shipped: 'b' }] }).reason, /delivery note/, 'note must be for the claimed order');
+  assert.match(run({ reason: 'AM10' }).reason, /does not fit a WrongItem/);
+});
+
+test('AM20 outside the user intent (prompt injection): needs the policy AP2 SKUs and a note for an item outside them', () => {
+  const am20 = { claim: { kind: 'AgentMistake' as const }, reason: 'AM20' as const, intentSkus: ['/shop/groceries/bread'] };
+  assert.equal(run(am20).ok, true);
+  assert.match(run(am20).reason, /^AM20/);
+  assert.match(run({ ...am20, intentSkus: undefined }).reason, /AP2 intent/);
+  assert.match(run({ ...am20, intentSkus: ['/shop/wine/rioja'] }).reason, /inside the user/);
+  assert.match(run({ ...am20, delivery: [] }).reason, /delivery note/);
 });
 
 test('AgentMistake needs two matching receipts', () => {

@@ -204,3 +204,11 @@ test('a payment that fails verification or is canceled releases its reservation'
   await g.verifiedCanceled({ paymentPayload: { payload: payload(1) } });
   assert.equal(await pay(1), undefined, 'released when canceled before settlement');
 });
+
+test('insurer circuit breaker: a hold on the payer refuses every purchase; a cleared hold or none allows it; no answer fails closed', async () => {
+  const why = async (holdOf: (p: string) => Promise<string | null>) => ((await buy(makeGuard({}, undefined, { holdOf }))) as { reasons?: string[] }).reasons?.join('; ') ?? 'ok';
+  assert.match(await why(async () => 'hold;reason=duplicate-orders;at=1'), /paused by the insurer \(reason=duplicate-orders\)/);
+  assert.equal(await why(async () => 'clear;by=owner;at=2'), 'ok');
+  assert.equal(await why(async () => null), 'ok');
+  assert.match(await why(async () => { throw new Error('502'); }), /hold check unavailable/);
+});

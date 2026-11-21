@@ -4,7 +4,7 @@
  *   cover-quote <limit> [days] | cover-buy <limit> [days] | cover-status | buy-covered <path>
  *   claim <AgentMistake|WrongItem|MerchantLoss> <amount> <paymentTx...>
  */
-import type { ClaimKind } from '@kuasa/core';
+import { type ClaimKind, REASON_CODES, type ReasonCode } from '@kuasa/core';
 import { KuasaAgent } from './client.js';
 
 const [name = 'alice', cmd = 'catalog', ...args] = process.argv.slice(2);
@@ -23,6 +23,10 @@ const run: Record<string, () => Promise<unknown>> = {
   'cover-buy': () => agent.coverBuy(eur(args[0]), Number(args[1] ?? 30)),
   'cover-status': () => agent.coverStatus(),
   claim: () => agent.fileClaim(args[0] as ClaimKind, args.slice(2), eur(args[1])),
+  // claim-reason <AM10|AM20|WI10|ML10> <amount> <paymentTx...>
+  detections: () => agent.detections(),
+  'claim-detected': () => agent.claimDetected(),
+  'claim-reason': () => agent.fileClaim(REASON_CODES[args[0] as ReasonCode].kind, args.slice(2), eur(args[1]), '', undefined, args[0] as ReasonCode),
 };
 if (!run[cmd]) {
   console.error(`unknown command ${cmd}; one of ${Object.keys(run).join(', ')}`);

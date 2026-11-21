@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AccountAddress } from '@concordium/web-sdk';
-import type { Claim, Mandate, MandateEntry, Policy, RegistryEvent } from '@kuasa/core';
+import { type Claim, type ClaimEvidence, evidenceHash, type Mandate, type MandateEntry, type Policy, type RegistryEvent } from '@kuasa/core';
 import { InsurerService, type InsurerDeps } from '../src/service.js';
 
 const addr = (n: number) => AccountAddress.fromBuffer(new Uint8Array(32).fill(n).buffer).address;
@@ -28,7 +28,7 @@ function harness(over: Partial<InsurerDeps> = {}) {
   let mEntry = entry();
   const policies = new Map<bigint, Policy>();
   const claims = new Map<bigint, Claim>();
-  const events = new Map<string, { at: number; events: RegistryEvent[] }>();
+  const events = new Map<string, { at: number; events: RegistryEvent[]; sender?: string }>();
   const disclosures: object[] = [];
   const deps: InsurerDeps = {
     now: () => 1_000_000,
@@ -48,6 +48,7 @@ function harness(over: Partial<InsurerDeps> = {}) {
       markFraud: async (id) => { calls.push(`markFraud:${id}`); return { hash: 'tx', summary: {} }; },
     },
     registryEvents: async (tx) => events.get(tx) ?? null,
+    verifyDelivery: async (d, signer) => d.signer === signer && d.sig === 'ok',
     treasuryBalance: async () => 1_000n * EUR,
     pay: async (to, amount) => { calls.push(`pay:${to}:${amount}`); return 'payout-tx'; },
     txOutcome: async () => 'success',
@@ -118,13 +119,21 @@ test('premium settled, issuance failed -> unissued + retry', async () => {
   assert.equal(t.svc.state().policies.length, 1);
 });
 
+/** WI10 evidence: the shop (recorder) signed a delivery note showing another item was shipped. */
+const wrongItemEvidence = async (order: string, paymentTx = h(9), signer = SHOP) => {
+  const doc: ClaimEvidence = { v: 2, reason: 'WI10', paymentTxs: [paymentTx], note: '', delivery: [{ note: { v: 1, order, paymentTx, ordered: '/shop/wine/rioja', shipped: '/shop/vape/mint', at: 1 }, signer, sig: 'ok' }] };
+  return { doc, hash: await evidenceHash(doc) };
+};
+const receiptEvent = (order: string) => ({ at: 1_000_500, sender: SHOP, events: [{ type: 'Receipt' as const, owner: OWNER, id: h(7), order, paymentTx: h(9), amount: 24n * EUR, spent: 24n * EUR }] });
+
 async function filedClaim(t: ReturnType<typeof harness>, withEvidence: boolean, id: bigint, kind: 'WrongItem' | 'MerchantLoss' = 'WrongItem') {
   if (kind === 'MerchantLoss') t.setEntry(entry({ incidents: 1n }));
   const q = await quoteOk(t.svc);
   const pid = await t.svc.issue(q.quoteId, h(9));
-  t.claims.set(id, { policyId: pid!, claimant: PAYER, kind, amount: 24n * EUR, evidence: h(12), orders: [h(10 + Number(id))], status: { tag: 'Filed' }, payout: 0n });
-  if (withEvidence) t.events.set(`r${id}`, { at: 1_000_500, events: [{ type: 'Receipt', owner: OWNER, id: h(7), order: h(10 + Number(id)), paymentTx: h(9), amount: 24n * EUR, spent: 24n * EUR }] });
-  return t.svc.assessClaim(id, [`r${id}`]);
+  const ev = kind === 'WrongItem' ? await wrongItemEvidence(h(10 + Number(id))) : undefined;
+  t.claims.set(id, { policyId: pid!, claimant: PAYER, kind, amount: 24n * EUR, evidence: ev?.hash ?? h(12), orders: [h(10 + Number(id))], status: { tag: 'Filed' }, payout: 0n });
+  if (withEvidence) t.events.set(`r${id}`, receiptEvent(h(10 + Number(id))));
+  return t.svc.assessClaim(id, [`r${id}`], ev?.doc);
 }
 
 test('approve pays the agent payer and records the payout', async () => {
@@ -507,9 +516,10 @@ test('a claim on a refunded policy is never paid', async () => {
   now += 1000;
   await t.svc.refundCancelled();
   // a claim filed before the cancellation shows up late
-  t.claims.set(5n, { policyId: id, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: h(12), orders: [h(15)], status: { tag: 'Filed' }, payout: 0n });
-  t.events.set('r5', { at: 1_000_500, events: [{ type: 'Receipt', owner: OWNER, id: h(7), order: h(15), paymentTx: h(9), amount: 24n * EUR, spent: 24n * EUR }] });
-  await t.svc.assessClaim(5n, ['r5']);
+  const ev = await wrongItemEvidence(h(15));
+  t.claims.set(5n, { policyId: id, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: ev.hash, orders: [h(15)], status: { tag: 'Filed' }, payout: 0n });
+  t.events.set('r5', receiptEvent(h(15)));
+  await t.svc.assessClaim(5n, ['r5'], ev.doc);
   const d = await t.svc.decide(5n, true);
   assert.equal(d.paid, undefined);
   assert.match(d.reason ?? '', /refunded/);
@@ -522,8 +532,9 @@ test('appeal: re-filing the orders of a rejected claim is an appeal, always deci
   await filedClaim(t, true, 0n); // WrongItem on order h(10)
   await t.svc.decide(0n, false); // a human rejected it
   // the agent re-files the same order with more evidence
-  t.claims.set(1n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: h(13), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
-  await t.svc.assessClaim(1n, ['r0']);
+  const ev = await wrongItemEvidence(h(10));
+  t.claims.set(1n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: ev.hash, orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(1n, ['r0'], ev.doc);
   const rec = t.svc.state().claims.find((c) => c.claimId === 1n)!;
   assert.equal(rec.appealOf, 0n);
   assert.equal(rec.autoPayAt, undefined, 'appeals are never paid automatically');
@@ -531,6 +542,36 @@ test('appeal: re-filing the orders of a rejected claim is an appeal, always deci
   await t.svc.runAutoPay();
   assert.ok(!t.calls.some((c) => c.startsWith('pay:')));
   assert.equal((await t.svc.decide(1n, true)).paid, 'payout-tx', 'a human can uphold the appeal');
+});
+
+test('WI10 evidence counts only if its hash is the on-chain evidence and the receipt recorder signed the note', async () => {
+  const t = harness();
+  assert.equal((await filedClaim(t, true, 0n)).ok, true);
+  const ev = await wrongItemEvidence(h(11));
+  const q = await quoteOk(t.svc);
+  const pid = (await t.svc.issue(q.quoteId, h(8)))!;
+  t.events.set('r1', receiptEvent(h(11)));
+  t.claims.set(1n, { policyId: pid, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: h(12), orders: [h(11)], status: { tag: 'Filed' }, payout: 0n });
+  assert.match((await t.svc.assessClaim(1n, ['r1'], ev.doc)).reason, /delivery note/, 'evidence swapped after filing is ignored');
+  const forged = await wrongItemEvidence(h(11), h(9), OWNER); // signed by someone other than the recorder
+  t.claims.set(2n, { policyId: pid, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: forged.hash, orders: [h(11)], status: { tag: 'Filed' }, payout: 0n });
+  assert.match((await t.svc.assessClaim(2n, ['r1'], forged.doc)).reason, /delivery note/, 'only the receipt recorder can sign');
+});
+
+test('AM20 (outside the AP2 intent) uses the SKUs the policy was bought under and is never paid automatically', async () => {
+  const t = harness({ autoPayLimit: 50n * EUR, ap2Merchant: (name: string) => ({ 'Kuasa demo shop': SHOP, 'Kuasa Cover': TREASURY } as Record<string, string>)[name] });
+  const ap2 = { user_cart_confirmation_required: false, natural_language_description: 'a loaf of bread', merchants: ['Kuasa demo shop', 'Kuasa Cover'], skus: ['/shop/groceries/bread'], intent_expiry: '2099-01-01T00:00:00Z' };
+  const q = await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30, ap2 });
+  assert.ok(!('refused' in q), 'refused' in q ? q.refused : '');
+  const pid = (await t.svc.issue(q.quoteId, h(9)))!;
+  const doc: ClaimEvidence = { v: 2, reason: 'AM20', paymentTxs: [h(9)], note: 'a page told the agent to buy wine', delivery: [{ note: { v: 1, order: h(10), paymentTx: h(9), ordered: '/shop/wine/rioja', shipped: '/shop/wine/rioja', at: 1 }, signer: SHOP, sig: 'ok' }] };
+  t.events.set('r0', receiptEvent(h(10)));
+  t.claims.set(0n, { policyId: pid, claimant: PAYER, kind: 'AgentMistake', amount: 24n * EUR, evidence: await evidenceHash(doc), orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  const a = await t.svc.assessClaim(0n, ['r0'], doc);
+  assert.equal(a.ok, true, a.reason);
+  assert.match(a.reason, /^AM20/);
+  assert.equal(t.svc.state().claims[0].autoPayAt, undefined);
+  assert.equal(t.svc.state().claims[0].reason, 'AM20');
 });
 
 test('wrong-item claims are never paid automatically (a receipt cannot prove the item was wrong)', async () => {
@@ -643,4 +684,42 @@ test('v2: automatic approval goes through the contract; if the contract refuses,
   assert.equal(rec.held, true);
   assert.equal(rec.autoPayAt, undefined);
   assert.ok(!u.calls.some((c) => c.startsWith('pay:')));
+});
+
+test('parametric: a duplicate pair on an insured agent becomes a detection and a published hold; filing marks it, the owner lifts the hold', async () => {
+  const holds: string[] = [];
+  let failHold = true, insured = false;
+  const t = harness({
+    coverOf: async () => (insured ? { periodRemaining: 100n * EUR, policyId: 0n } : { periodRemaining: 0n, policyId: null }),
+    hold: async (payer, reason) => { if (failHold) throw new Error('502'); holds.push(`hold:${payer}:${reason}`); },
+    unhold: async (payer) => { holds.push(`clear:${payer}`); },
+  });
+  const q = await quoteOk(t.svc);
+  const pid = (await t.svc.issue(q.quoteId, h(9)))!;
+  insured = true;
+  const seen = (order: number, at: number) => ({ owner: OWNER, mandateId: h(7), order: h(order), paymentTx: h(order + 50), amount: 3n * EUR, at, receiptTx: h(order + 100) });
+  assert.deepEqual(await t.svc.onReceipts([seen(20, 1_000_000)]), []);
+  const [d] = await t.svc.onReceipts([seen(21, 1_060_000)]);
+  assert.deepEqual(d.orders, [h(20), h(21)]);
+  assert.equal(d.payer, PAYER);
+  assert.deepEqual(holds, [], 'publication failed');
+  failHold = false;
+  await t.svc.publishHolds();
+  assert.deepEqual(holds, [`hold:${PAYER}:duplicate-orders`]);
+  assert.deepEqual(await t.svc.onReceipts([seen(20, 1_000_000), seen(21, 1_060_000)]), [], 'the same receipts again find nothing new');
+  // the agent files the detection (AM10): the insurer links the claim and the detection
+  for (const o of [20, 21]) t.events.set(`r${o}`, { at: 1_000_500, sender: SHOP, events: [{ type: 'Receipt', owner: OWNER, id: h(7), order: h(o), paymentTx: h(o + 50), amount: 3n * EUR, spent: 3n * EUR }] });
+  t.claims.set(0n, { policyId: pid, claimant: PAYER, kind: 'AgentMistake', amount: 3n * EUR, evidence: h(1), orders: d.orders, status: { tag: 'Filed' }, payout: 0n });
+  assert.equal((await t.svc.assessClaim(0n, ['r20', 'r21'])).ok, true);
+  assert.equal(t.svc.detectionsOf(PAYER)[0].status, 'filed');
+  assert.equal(t.svc.detectionsOf(PAYER)[0].claimId, 0n);
+  assert.equal(await t.svc.clearHold(PAYER), true);
+  assert.equal(t.svc.holdOf(PAYER), null);
+  assert.deepEqual(holds.at(-1), `clear:${PAYER}`);
+});
+
+test('parametric: duplicates of an uninsured agent are not ours to act on', async () => {
+  const t = harness({ coverOf: async () => ({ periodRemaining: 0n, policyId: null }), hold: async () => { throw new Error('must not hold'); } });
+  const seen = (order: number, at: number) => ({ owner: OWNER, mandateId: h(7), order: h(order), paymentTx: h(order + 50), amount: 3n * EUR, at, receiptTx: h(order + 100) });
+  assert.deepEqual(await t.svc.onReceipts([seen(20, 1_000_000), seen(21, 1_060_000)]), []);
 });

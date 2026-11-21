@@ -4,5 +4,5 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "node --import tsx --test test/*.test.ts", "typecheck": "tsc -p ." },
-  "dependencies": {}
+  "dependencies": { "@kuasa/core": "workspace:*" }
 }

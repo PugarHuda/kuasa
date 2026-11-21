@@ -74,6 +74,14 @@ app.post('/api/claims/:id/assess', async (req, res) => {
   return r ? res.status(r.status).type('json').send(await r.text()) : json(res, { error: 'insurer offline' }, 502);
 });
 
+/** The owner resumes an agent the insurer's circuit breaker paused (by agent name, e.g. alice). */
+app.post('/api/resume/:name', async (req, res) => {
+  const m = loadState().mandates[req.params.name];
+  if (!m) return json(res, { error: 'unknown agent' }, 404);
+  const r = await insurer(`/holds/${m.payer}/clear`, { method: 'POST', body: '{}' }).catch(() => null);
+  return r ? res.status(r.status).type('json').send(await r.text()) : json(res, { error: 'insurer offline' }, 502);
+});
+
 /** A human approves a drafted lawful-disclosure request before it is anchored on the claim. */
 app.post('/api/disclosures/:id/approve', async (req, res) => {
   if (!isClaimId(req.params.id)) return json(res, { error: 'bad request' }, 400);
