@@ -196,7 +196,8 @@ const svc = new InsurerService({
       for (let id = 0n; id < 10_000n; id++) {
         const cl = await book.claim(id);
         if (!cl) break;
-        if (cl.status.tag === 'Paid' || cl.status.tag === 'Approved') orders.push(...cl.orders);
+        // anything the other insurer has not turned down: filed, assessed, approved or paid (first claim wins)
+        if (cl.status.tag !== 'Rejected' && cl.status.tag !== 'Fraud') orders.push(...cl.orders);
       }
     }
     return orders;

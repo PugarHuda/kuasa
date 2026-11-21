@@ -874,6 +874,16 @@ export class InsurerService {
           rec.final = true;
           return { decided: true, reason: rec.payoutBlocked };
         }
+        // other insurance, checked again right before money moves: another insurer may have taken a claim
+        // on these orders since the assessment; an unreadable book means wait, never pay blind
+        if (this.deps.otherInsurersOrders) {
+          const other = await this.deps.otherInsurersOrders().catch(() => null);
+          if (!other) return { decided: true, reason: "another insurer's book is unreadable: payout waits (approve again to retry)" };
+          if (rec.orders.some((o) => other.includes(o))) {
+            rec.payoutBlocked = 'another insurer has a claim on these orders (other insurance): a human decides';
+            return { decided: true, reason: rec.payoutBlocked };
+          }
+        }
         if ((await this.deps.treasuryBalance()) < amount) {
           rec.payoutBlocked = 'insufficient pool: approved, payout pending';
           return { decided: true, reason: rec.payoutBlocked };

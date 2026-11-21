@@ -166,6 +166,14 @@ test('market, other insurance: an order another insurer already paid or approved
   assert.equal(dup.ok, false);
   const down = harness({ otherInsurersOrders: async () => { throw new Error('node busy'); } });
   await assert.rejects(filedClaim(down, true, 0n), /node busy/, 'fails closed when another book is unreadable');
+  // another insurer takes a claim on the same order after our assessment: the payout stops
+  let elsewhere: string[] = [];
+  const late = harness({ otherInsurersOrders: async () => elsewhere });
+  assert.equal((await filedClaim(late, true, 0n)).ok, true);
+  elsewhere = [h(10)];
+  const d = await late.svc.decide(0n, true);
+  assert.match(d.reason ?? '', /other insurance/);
+  assert.ok(!late.calls.some((c) => c.startsWith('pay:')), 'nothing paid');
 });
 
 test('approve pays the agent payer and records the payout', async () => {
