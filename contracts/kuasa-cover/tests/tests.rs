@@ -12,6 +12,7 @@ const MANDATE_ID: HashSha2256 = HashSha2256([7; 32]);
 const ORDER_A: HashSha2256 = HashSha2256([10; 32]);
 const ORDER_B: HashSha2256 = HashSha2256([11; 32]);
 const EUR: u64 = 1_000_000;
+const BOND: Amount = Amount::from_ccd(1);
 
 /// Registry params, serialised exactly like kuasa-registry's IssueParams.
 #[derive(concordium_std::Serial)]
@@ -59,7 +60,7 @@ fn setup() -> T {
     }
     let registry = deploy(&mut chain, "../kuasa-registry/concordium-out/module.wasm.v1", "init_kuasa", OwnedParameter::empty());
     let cover = deploy(&mut chain, "concordium-out/module.wasm.v1", "init_kuasa_cover",
-        OwnedParameter::from_serial(&InitParams { operator: OPERATOR, registry, auto_pay_limit: 25 * EUR, objection_window_ms: 60_000 }).unwrap());
+        OwnedParameter::from_serial(&InitParams { operator: OPERATOR, registry, auto_pay_limit: 25 * EUR, objection_window_ms: 60_000, objection_bond: BOND }).unwrap());
     let mut t = T { chain, registry, cover };
     let issue = RegistryIssue {
         id: MANDATE_ID, payer: PAYER, agent_registry: ContractAddress::new(12802, 0), agent_token: "ee04".into(),
@@ -70,8 +71,12 @@ fn setup() -> T {
 }
 
 fn upd<P: concordium_std::Serial>(chain: &mut Chain, c: ContractAddress, from: AccountAddress, name: &str, p: &P) -> Result<ContractInvokeSuccess, ContractInvokeError> {
+    upd_paying(chain, c, from, name, p, Amount::zero())
+}
+
+fn upd_paying<P: concordium_std::Serial>(chain: &mut Chain, c: ContractAddress, from: AccountAddress, name: &str, p: &P, amount: Amount) -> Result<ContractInvokeSuccess, ContractInvokeError> {
     chain.contract_update(SIGNER, from, Address::Account(from), Energy::from(50_000), UpdateContractPayload {
-        amount: Amount::zero(),
+        amount,
         address: c,
         receive_name: OwnedReceiveName::new_unchecked(name.into()),
         message: OwnedParameter::from_serial(p).unwrap(),
@@ -81,6 +86,11 @@ fn upd<P: concordium_std::Serial>(chain: &mut Chain, c: ContractAddress, from: A
 fn call<P: concordium_std::Serial>(t: &mut T, from: AccountAddress, name: &str, p: &P) -> Result<ContractInvokeSuccess, ContractInvokeError> {
     let c = t.cover;
     upd(&mut t.chain, c, from, &format!("kuasa_cover.{name}"), p)
+}
+
+fn pay<P: concordium_std::Serial>(t: &mut T, from: AccountAddress, name: &str, p: &P, amount: Amount) -> Result<ContractInvokeSuccess, ContractInvokeError> {
+    let c = t.cover;
+    upd_paying(&mut t.chain, c, from, &format!("kuasa_cover.{name}"), p, amount)
 }
 
 fn view<P: concordium_std::Serial, R: concordium_std::Deserial>(t: &T, name: &str, p: &P) -> R {
@@ -262,6 +272,9 @@ fn vectors() -> Vec<(&'static str, String)> {
         ("COVER_VIEW", raw(&t, "coverOf", to_bytes(&CoverQuery { payer: PAYER, order: None }))),
         ("POLICY_VIEW", raw(&t, "policy", to_bytes(&pid))),
         ("CLAIM_VIEW", raw(&t, "claim", to_bytes(&cid))),
+        ("SET_TERMS", hex(to_bytes(&SetTerms { policy_id: 3, terms: Terms { auto_pay_limit: 5 * EUR, objection_window_ms: 120_000, intent: Some(HashSha2256([4; 32])) } }))),
+        ("TERMS_VIEW", { call(&mut t, OPERATOR, "setTerms", &SetTerms { policy_id: pid, terms: Terms { auto_pay_limit: 5 * EUR, objection_window_ms: 120_000, intent: None } }).unwrap(); raw(&t, "terms", to_bytes(&pid)) }),
+        ("BOND_VIEW", { pay(&mut t, OWNER, "postBond", &PAYER, Amount::from_ccd(10)).unwrap(); raw(&t, "bondOf", to_bytes(&PAYER)) }),
     ]
 }
 
@@ -357,10 +370,112 @@ fn auto_approve_refuses_big_claims_and_wrong_items() {
 fn parties_can_object_inside_the_window_and_block_auto_approval() {
     let mut t = setup();
     let id = assessed_claim(&mut t, ClaimKind::AgentMistake, 24 * EUR);
-    assert!(call(&mut t, STRANGER, "objectClaim", &id).is_err(), "strangers cannot object");
-    call(&mut t, MERCHANT, "objectClaim", &id).unwrap(); // a recorder of the mandate (the merchant)
+    assert!(pay(&mut t, STRANGER, "objectClaim", &id, BOND).is_err(), "strangers cannot object");
+    assert!(call(&mut t, MERCHANT, "objectClaim", &id).is_err(), "v3: an objection needs its bond");
+    pay(&mut t, MERCHANT, "objectClaim", &id, BOND).unwrap(); // a recorder of the mandate (the merchant)
     t.chain.tick_block_time(Duration::from_millis(61_000)).unwrap();
-    assert!(call(&mut t, OWNER, "objectClaim", &id).is_err(), "window closed");
+    assert!(pay(&mut t, OWNER, "objectClaim", &id, BOND).is_err(), "window closed");
     assert!(call(&mut t, OPERATOR, "autoApprove", &id).is_err(), "objected claims need a human");
     call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: id, approve: true }).unwrap();
+}
+
+// ---- v3 ----------------------------------------------------------------------------------
+
+fn ccd(t: &T, a: AccountAddress) -> Amount { t.chain.account_balance_available(a).unwrap() }
+
+#[test]
+fn operator_files_detected_duplicates_for_the_agent() {
+    let mut t = setup();
+    issue(&mut t);
+    assert!(call(&mut t, STRANGER, "fileClaimFor", &claim(vec![ORDER_A, ORDER_B])).is_err(), "operator only");
+    let mut one = claim(vec![ORDER_A]);
+    assert!(call(&mut t, OPERATOR, "fileClaimFor", &one).is_err(), "a duplicate needs two orders");
+    one.kind = ClaimKind::WrongItem;
+    one.orders = vec![ORDER_A, ORDER_B];
+    assert!(call(&mut t, OPERATOR, "fileClaimFor", &one).is_err(), "only agent mistakes");
+    let id: u64 = call(&mut t, OPERATOR, "fileClaimFor", &claim(vec![ORDER_A, ORDER_B])).unwrap().parse_return_value().unwrap();
+    let c: Option<Claim> = view(&t, "claim", &id);
+    assert_eq!(c.unwrap().claimant, PAYER, "recorded for the agent payer");
+    assert!(call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A, ORDER_B])).is_err(), "the orders are taken");
+}
+
+#[test]
+fn policy_terms_only_tighten_the_rules() {
+    let mut t = setup();
+    issue(&mut t);
+    let loose = Terms { auto_pay_limit: 100 * EUR, objection_window_ms: 1_000, intent: Some(HashSha2256([5; 32])) };
+    assert!(call(&mut t, STRANGER, "setTerms", &SetTerms { policy_id: 0, terms: loose }).is_err(), "operator only");
+    call(&mut t, OPERATOR, "setTerms", &SetTerms { policy_id: 0, terms: loose }).unwrap();
+    assert!(call(&mut t, OPERATOR, "setTerms", &SetTerms { policy_id: 0, terms: loose }).is_err(), "set once");
+    let got: Option<Terms> = view(&t, "terms", &0u64);
+    assert_eq!(got, Some(loose));
+    // looser terms do not loosen anything: 39 due > 25 published limit, window stays 60 s
+    let mut c = claim(vec![ORDER_A, ORDER_B]);
+    c.amount = 40 * EUR;
+    let id: u64 = call(&mut t, PAYER, "fileClaim", &c).unwrap().parse_return_value().unwrap();
+    call(&mut t, OPERATOR, "assessClaim", &AssessParams { claim_id: id, ok: true, reason: HashSha2256([1; 32]) }).unwrap();
+    t.chain.tick_block_time(Duration::from_millis(30_000)).unwrap();
+    assert!(call(&mut t, OPERATOR, "autoApprove", &id).is_err(), "still inside the published window");
+    t.chain.tick_block_time(Duration::from_millis(31_000)).unwrap();
+    assert!(call(&mut t, OPERATOR, "autoApprove", &id).is_err(), "above the published limit");
+}
+
+#[test]
+fn stricter_terms_apply() {
+    let mut t = setup();
+    issue(&mut t);
+    call(&mut t, OPERATOR, "setTerms", &SetTerms { policy_id: 0, terms: Terms { auto_pay_limit: 5 * EUR, objection_window_ms: 120_000, intent: None } }).unwrap();
+    let mut c = claim(vec![ORDER_A, ORDER_B]);
+    c.amount = 10 * EUR; // due 9: fine under the published 25, not under this policy's 5
+    let id: u64 = call(&mut t, PAYER, "fileClaim", &c).unwrap().parse_return_value().unwrap();
+    call(&mut t, OPERATOR, "assessClaim", &AssessParams { claim_id: id, ok: true, reason: HashSha2256([1; 32]) }).unwrap();
+    t.chain.tick_block_time(Duration::from_millis(121_000)).unwrap();
+    assert!(call(&mut t, OPERATOR, "autoApprove", &id).is_err(), "the policy's own limit");
+}
+
+#[test]
+fn objection_bonds_return_when_upheld_and_go_to_the_operator_when_not() {
+    let mut t = setup();
+    let id = assessed_claim(&mut t, ClaimKind::AgentMistake, 24 * EUR);
+    let before = ccd(&t, MERCHANT);
+    pay(&mut t, MERCHANT, "objectClaim", &id, BOND).unwrap();
+    call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: id, approve: false }).unwrap();
+    assert!(before - ccd(&t, MERCHANT) < Amount::from_micro_ccd(100_000), "bond back (only fees spent)");
+
+    let mut t2 = setup();
+    let id2 = assessed_claim(&mut t2, ClaimKind::AgentMistake, 24 * EUR);
+    pay(&mut t2, MERCHANT, "objectClaim", &id2, BOND).unwrap();
+    let op = ccd(&t2, OPERATOR);
+    call(&mut t2, OPERATOR, "decideClaim", &DecideParams { claim_id: id2, approve: true }).unwrap();
+    assert!(ccd(&t2, OPERATOR) + Amount::from_micro_ccd(100_000) > op + BOND, "forfeited to the operator");
+}
+
+#[test]
+fn operator_bond_is_slashed_on_proven_fraud_and_locked_while_claims_are_open() {
+    let mut t = setup();
+    issue(&mut t);
+    pay(&mut t, OWNER, "postBond", &PAYER, Amount::from_ccd(10)).unwrap();
+    assert!(pay(&mut t, STRANGER, "postBond", &PAYER, Amount::from_ccd(1)).is_err(), "only the poster adds");
+    let b: Option<Bond> = view(&t, "bondOf", &PAYER);
+    assert_eq!(b, Some(Bond { poster: OWNER, amount: Amount::from_ccd(10) }));
+    let id: u64 = call(&mut t, PAYER, "fileClaim", &claim(vec![ORDER_A, ORDER_B])).unwrap().parse_return_value().unwrap();
+    assert!(call(&mut t, OWNER, "withdrawBond", &PAYER).is_err(), "a claim is open");
+    call(&mut t, OPERATOR, "decideClaim", &DecideParams { claim_id: id, approve: false }).unwrap();
+    assert!(call(&mut t, OWNER, "withdrawBond", &PAYER).is_err(), "rejected recently: may still be fraud");
+    let op = ccd(&t, OPERATOR);
+    call(&mut t, OPERATOR, "markFraud", &FraudParams { claim_id: id, disclosure: HashSha2256([6; 32]) }).unwrap();
+    assert!(ccd(&t, OPERATOR) + Amount::from_micro_ccd(100_000) > op + Amount::from_ccd(10), "slashed to the operator");
+    let gone: Option<Bond> = view(&t, "bondOf", &PAYER);
+    assert_eq!(gone, None);
+}
+
+#[test]
+fn bond_can_be_withdrawn_when_nothing_is_open() {
+    let mut t = setup();
+    issue(&mut t);
+    pay(&mut t, OWNER, "postBond", &PAYER, Amount::from_ccd(10)).unwrap();
+    assert!(call(&mut t, STRANGER, "withdrawBond", &PAYER).is_err(), "poster only");
+    let before = ccd(&t, OWNER);
+    call(&mut t, OWNER, "withdrawBond", &PAYER).unwrap();
+    assert!(ccd(&t, OWNER) + Amount::from_micro_ccd(100_000) > before + Amount::from_ccd(10));
 }

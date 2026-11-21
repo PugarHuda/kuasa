@@ -68,3 +68,19 @@ test('experience rating: paid claims raise the premium 20% each (max x2) and can
   const q = quote({ ...base, paidClaims: 1 });
   assert.ok(!('refused' in q) && q.factors.some((f) => f.name === 'claims history' && f.multiplier === 1.2));
 });
+
+test('roadmap factors: an operator bond lowers the period premium; order velocity raises per-order cover', () => {
+  const plain = quote({ ...base });
+  const bonded = quote({ ...base, bonded: true });
+  assert.ok(!('refused' in plain) && !('refused' in bonded));
+  assert.ok(bonded.premium < plain.premium);
+  assert.ok(bonded.factors.some((f) => f.name === 'operator bond'));
+  const calm = quote({ ...base, order: { amount: 20_000_000n }, recentOrders: 2 });
+  const fast = quote({ ...base, order: { amount: 20_000_000n }, recentOrders: 5 });
+  assert.ok(!('refused' in calm) && !('refused' in fast));
+  assert.equal(calm.premium, 300_000n);
+  assert.equal(fast.premium, 525_000n, '1.5% x (1 + 0.25 x 3)');
+  const loop = quote({ ...base, order: { amount: 20_000_000n }, recentOrders: 12 });
+  assert.ok(!('refused' in loop));
+  assert.equal(loop.premium, 600_000n, 'capped at x2');
+});

@@ -142,3 +142,27 @@ export function decodeRegistryEvent(bytes: Uint8Array): RegistryEvent | null {
     default: return null;
   }
 }
+
+/** v3: per-policy terms (they can only tighten the contract's published rules). */
+export type PolicyTerms = { autoPayLimit: bigint; objectionWindowMs: bigint; intent: string | null };
+export const encodeSetTerms = (policyId: bigint, t: PolicyTerms) => {
+  const w = new W().u64(policyId).u64(t.autoPayLimit).u64(t.objectionWindowMs);
+  return (t.intent ? w.u8(1).hash(t.intent) : w.u8(0)).done();
+};
+export function decodeTerms(bytes: Uint8Array): PolicyTerms | null {
+  const r = new R(bytes);
+  if (r.u8() === 0) { r.end(); return null; }
+  const t = { autoPayLimit: r.u64(), objectionWindowMs: r.u64(), intent: r.u8() === 1 ? r.hash() : null };
+  r.end();
+  return t;
+}
+/** v3: an agent operator bond in microCCD. */
+export type OperatorBond = { poster: string; amount: bigint };
+export const encodeAccount = (a: string) => new W().account(a).done();
+export function decodeBond(bytes: Uint8Array): OperatorBond | null {
+  const r = new R(bytes);
+  if (r.u8() === 0) { r.end(); return null; }
+  const b = { poster: r.account(), amount: r.u64() };
+  r.end();
+  return b;
+}

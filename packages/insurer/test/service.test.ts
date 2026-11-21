@@ -763,3 +763,124 @@ test('resuming an agent confirms its earlier purchases: they never trip the brea
   assert.equal((await t.svc.onReceipts([seen(23, 1_040_000)])).length, 0, 'pairs only with purchases the owner confirmed: nothing');
   assert.equal((await t.svc.onReceipts([seen(24, 1_050_000)])).length, 1, 'two new duplicates after the resume do trip it');
 });
+
+// ---- roadmap: v3 parametric filing, terms, merchant-paid cover, giveback ----
+
+test('v3 parametric: the insurer files the detected duplicate itself and assesses it', async () => {
+  const filed: string[] = [];
+  let insured = false;
+  const t = harness({ coverOf: async () => (insured ? { periodRemaining: 100n * EUR, policyId: 0n } : { periodRemaining: 0n, policyId: null }), hold: async () => {} });
+  const q = await quoteOk(t.svc);
+  const pid = (await t.svc.issue(q.quoteId, h(9)))!;
+  insured = true;
+  t.svc['deps'].cover.fileClaimFor = async (p) => {
+    filed.push(p.orders.join(','));
+    t.claims.set(3n, { policyId: p.policyId, claimant: PAYER, kind: 'AgentMistake', amount: p.amount, evidence: p.evidence, orders: p.orders, status: { tag: 'Filed' }, payout: 0n });
+    return { hash: 'tx', id: 3n };
+  };
+  for (const o of [20, 21]) t.events.set(h(o + 100), { at: 1_000_500, sender: SHOP, events: [{ type: 'Receipt', owner: OWNER, id: h(7), order: h(o), paymentTx: h(o + 50), amount: 3n * EUR, spent: 3n * EUR }] });
+  const seen = (order: number, at: number) => ({ owner: OWNER, mandateId: h(7), order: h(order), paymentTx: h(order + 50), amount: 3n * EUR, at, receiptTx: h(order + 100) });
+  await t.svc.onReceipts([seen(20, 1_000_000), seen(21, 1_060_000)]);
+  assert.deepEqual(filed, [`${h(20)},${h(21)}`]);
+  const d = t.svc.detectionsOf(PAYER)[0];
+  assert.equal(d.status, 'filed');
+  assert.equal(d.filedBy, 'insurer');
+  const c = t.svc.state().claims.find((x) => x.claimId === 3n)!;
+  assert.equal(c.assessment.ok, true, c.assessment.reason);
+  assert.equal(c.reason, 'AM10');
+  assert.equal(pid, 0n);
+});
+
+test('v3 terms: the owner-signed intent is anchored on the policy; incidents halve the automatic limit', async () => {
+  const terms: unknown[] = [];
+  const t = harness({
+    autoPayLimit: 10n * EUR, ap2Merchant: (name: string) => ({ 'Kuasa demo shop': SHOP, 'Kuasa Cover': TREASURY } as Record<string, string>)[name],
+    verifyAp2Owner: async () => true,
+  });
+  t.svc['deps'].cover.setTerms = async (id, x) => { terms.push([id, x]); return { hash: 'terms-tx' }; };
+  const ap2 = { user_cart_confirmation_required: false, natural_language_description: 'bread', merchants: ['Kuasa demo shop', 'Kuasa Cover'], skus: ['/shop/groceries/bread'], intent_expiry: '2099-01-01T00:00:00Z', user_authorization: 'sig' };
+  const q = await t.svc.quote({ mandateUrl: 'x', limit: 100n * EUR, days: 30, ap2 });
+  assert.ok(!('refused' in q));
+  await t.svc.issue(q.quoteId, h(9));
+  for (let i = 0; i < 50 && !t.svc.state().policies[0].terms; i++) await new Promise((r) => setTimeout(r, 5));
+  const [[id, x]] = terms as [bigint, { autoPayLimit: bigint; intent: string }][];
+  assert.equal(id, 0n);
+  assert.equal(x.autoPayLimit, 10n * EUR);
+  assert.match(x.intent, /^[0-9a-f]{64}$/);
+  assert.equal(t.svc.state().policies[0].terms?.tx, 'terms-tx');
+  // an agent with incidents gets half the automatic limit
+  const t2 = harness({ autoPayLimit: 10n * EUR });
+  const seen2: { autoPayLimit: bigint }[] = [];
+  t2.svc['deps'].cover.setTerms = async (_id, y) => { seen2.push(y); return { hash: 'x' }; };
+  t2.setEntry(entry({ incidents: 1n }));
+  await t2.svc.issue((await quoteOk(t2.svc)).quoteId, h(9));
+  for (let i = 0; i < 50 && !seen2.length; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(seen2[0].autoPayLimit, 5n * EUR);
+});
+
+test('merchant-paid cover: the sponsor signs and pays; the policy covers the agent; nobody else may pay', async () => {
+  const proofs: string[] = [];
+  const t = harness({ verifyPayer: async (who) => { proofs.push(who); return who === SHOP; } });
+  const q = await t.svc.quote({ mandateUrl: 'x', limit: 20n * EUR, days: 1, order: { ref: h(3), amount: 20n * EUR }, sponsor: SHOP });
+  assert.ok(!('refused' in q), 'refused' in q ? q.refused : '');
+  assert.deepEqual(proofs, [SHOP]);
+  assert.match((await t.svc.checkPurchase(q.quoteId, OWNER, q.premium))!, /payer/);
+  assert.equal(await t.svc.checkPurchase(q.quoteId, SHOP, q.premium), null);
+  await t.svc.issue(q.quoteId, h(9));
+  assert.equal(t.svc.state().policies[0].payer, PAYER, 'the agent is insured');
+});
+
+test('giveback: a claim-free policy that ended returns a share of its premium, once', async () => {
+  let now = 1_000_000;
+  const t = harness({ now: () => now, givebackBps: 1_000n });
+  const q = await quoteOk(t.svc);
+  await t.svc.issue(q.quoteId, h(9));
+  await t.svc.givebackExpired();
+  assert.ok(!t.calls.some((c) => c.startsWith('pay:')), 'still running');
+  now += 31 * 86_400_000;
+  await t.svc.givebackExpired();
+  await t.svc.givebackExpired();
+  const pays = t.calls.filter((c) => c.startsWith('pay:'));
+  assert.deepEqual(pays, [`pay:${PAYER}:${q.premium / 10n}`]);
+  // a policy with a claim gets nothing back
+  const t2 = harness({ now: () => now, givebackBps: 1_000n });
+  await filedClaim(t2, true, 0n);
+  now += 62 * 86_400_000;
+  await t2.svc.givebackExpired();
+  assert.ok(!t2.calls.some((c) => c.startsWith('pay:')));
+});
+
+test('appeals panel: independent jurors vote; a majority decides the appeal like a human would; parties cannot judge', async () => {
+  const [J1, J2, J3] = [addr(31), addr(32), addr(33)];
+  const t = harness({ jurors: [J1, J2, J3, PAYER] });
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, false); // a human rejected it
+  const ev = await wrongItemEvidence(h(10));
+  t.claims.set(1n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: ev.hash, orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(1n, ['r0'], ev.doc);
+  await assert.rejects(t.svc.panelVote(0n, J1, true), /only appeals/);
+  await assert.rejects(t.svc.panelVote(1n, addr(40), true), /not a juror/);
+  await assert.rejects(t.svc.panelVote(1n, PAYER, true), /party to the claim/);
+  assert.equal((await t.svc.panelVote(1n, J1, true)).decided, false);
+  await assert.rejects(t.svc.panelVote(1n, J1, true), /already voted/);
+  assert.equal((await t.svc.panelVote(1n, J2, false)).decided, false);
+  const r = await t.svc.panelVote(1n, J3, true); // 3 of 4 jurors needed: J1, J3 yes ... not yet
+  assert.equal(r.decided, false);
+  assert.deepEqual(t.svc.openAppeals().map((a) => a.claimId), [1n]);
+});
+
+test('appeals panel: a majority approves and the appeal is paid', async () => {
+  const [J1, J2, J3] = [addr(31), addr(32), addr(33)];
+  const t = harness({ jurors: [J1, J2, J3] });
+  await filedClaim(t, true, 0n);
+  await t.svc.decide(0n, false);
+  const ev = await wrongItemEvidence(h(10));
+  t.claims.set(1n, { policyId: 0n, claimant: PAYER, kind: 'WrongItem', amount: 24n * EUR, evidence: ev.hash, orders: [h(10)], status: { tag: 'Filed' }, payout: 0n });
+  await t.svc.assessClaim(1n, ['r0'], ev.doc);
+  await t.svc.panelVote(1n, J1, true);
+  const r = await t.svc.panelVote(1n, J2, true);
+  assert.equal(r.decided, true);
+  assert.equal('paid' in r && r.paid, 'payout-tx');
+  assert.equal(t.svc.state().claims.find((c) => c.claimId === 1n)!.decidedBy, 'panel');
+  assert.deepEqual(t.svc.openAppeals(), []);
+});

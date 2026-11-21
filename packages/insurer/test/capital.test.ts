@@ -49,3 +49,27 @@ test('a transaction reserved as a premium can never become a capital deposit', (
   assert.throws(() => l.deposit('lp', 5n * 1_000_000n, 'premium-tx'), /already recorded/);
   assert.equal(new CapitalLedger(l.snapshot()).snapshot().txs.includes('premium-tx'), true, 'persisted');
 });
+
+test('risk-specific staking: class capital pays its class first, earns 1.5x weight, and one provider backs one class', async () => {
+  const { capitalClassOf } = await import('../src/capital.js');
+  const memo = (t: string) => Buffer.from([0x60 + t.length, ...Buffer.from(t)]).toString('hex');
+  assert.equal(capitalClassOf(memo('kuasa capital')), 'general');
+  assert.equal(capitalClassOf(memo('kuasa capital:WI')), 'WI');
+  assert.equal(capitalClassOf(memo('kuasa capital:XX')), null);
+  const l = new CapitalLedger();
+  l.deposit('general', 60n * EUR, 'a');
+  l.deposit('wi', 20n * EUR, 'b', 0, 'WI');
+  assert.throws(() => l.deposit('wi', 1n * EUR, 'c'), /backs WI/);
+  l.onPremium(9n * EUR); // weights 60x2 : 20x3 = 2 : 1
+  const b1 = Object.fromEntries(l.balances().map((x) => [x.provider, x]));
+  assert.equal(b1.general.premiums, 6n * EUR);
+  assert.equal(b1.wi.premiums, 3n * EUR);
+  l.onPayout(5n * EUR, 'WI'); // wrong-item loss: the WI backers pay first
+  l.onPayout(4n * EUR, 'AM'); // nobody backs AM: shared pro rata (66 : 18)
+  const b2 = Object.fromEntries(l.balances().map((x) => [x.provider, x]));
+  assert.equal(b2.wi.losses, 5n * EUR + (4n * EUR * 18n) / 84n);
+  l.onPayout(40n * EUR, 'WI'); // beyond the WI capital: the rest is shared
+  const b3 = Object.fromEntries(l.balances().map((x) => [x.provider, x]));
+  assert.equal(b3.wi.balance, 0n, 'first loss exhausted');
+  assert.equal(b3.general.balance + b3.wi.balance, 80n * EUR + 9n * EUR - 49n * EUR);
+});

@@ -32,7 +32,8 @@ console.log('2. shop objection', JSON.stringify(obj));
 const { cover } = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { cover: string };
 const book = new KuasaCover(connect(), BigInt(cover));
 if (await book.rules()) {
-  const r = await book.objectClaim(BigInt(claim.claimId!), wallet(recorder.address, recorder.key));
+  // v3: an objection locks the contract's objection bond (CCD), returned if the claim is rejected
+  const r = await book.objectClaim(BigInt(claim.claimId!), wallet(recorder.address, recorder.key), (await book.objectionBond()) ?? 0n);
   console.log('   objection recorded on-chain (objectClaim)', r.hash);
 }
 

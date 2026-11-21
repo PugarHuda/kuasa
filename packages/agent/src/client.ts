@@ -189,8 +189,10 @@ export class KuasaAgent {
   // ---- Kuasa Cover ---------------------------------------------------------------------------
 
   /** ap2: the user's AP2 Intent Mandate, if this agent works under one (the insurer checks the mandate sits inside it). */
-  async coverQuote(limit: bigint, days = 30, order?: { ref: string; amount: bigint }, ap2?: object) {
+  /** sponsor: this client's payer pays the premium for the mandate's agent (merchant-paid cover). */
+  async coverQuote(limit: bigint, days = 30, order?: { ref: string; amount: bigint }, ap2?: object, sponsor = false) {
     const u = new URL('/cover/quote', this.insurerUrl);
+    if (sponsor) u.searchParams.set('sponsor', this.opts.payer);
     if (order) {
       u.searchParams.set('order', order.ref);
       u.searchParams.set('amount', String(order.amount));
@@ -239,6 +241,11 @@ export class KuasaAgent {
   /** Period cover (option A): insure this agent for `days` up to `limit`. */
   async coverBuy(limit: bigint, days = 30, ap2?: object) {
     return this.buyQuote(await this.coverQuote(limit, days, undefined, ap2));
+  }
+
+  /** Merchant-paid cover: buy per-order cover for another agent's order (this client pays, that agent is insured). */
+  async sponsorOrderCover(order: { ref: string; amount: bigint }) {
+    return this.buyQuote(await this.coverQuote(0n, 1, order, undefined, true));
   }
 
   /** Per-order cover (option B): quote the order at the shop, insure exactly it, then buy with the order reference. */

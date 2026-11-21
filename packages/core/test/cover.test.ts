@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { AccountAddress } from '@concordium/web-sdk';
 import {
   decodeClaim, decodeCoverView, decodePolicy, decodeRegistryEvent, encodeAssess, encodeCoverQuery, encodeDecide,
-  encodeFileClaim, encodeFraud, encodeIssuePolicy, encodePayout, type IssuePolicyParams,
+  encodeFileClaim, encodeFraud, encodeIssuePolicy, encodePayout, type IssuePolicyParams, decodeBond, decodeTerms, encodeSetTerms,
 } from '../src/index.js';
 
 const V: Record<string, string> = JSON.parse(readFileSync(new URL('./cover-vectors.json', import.meta.url), 'utf8'));
@@ -52,4 +52,11 @@ test('decodeRegistryEvent reads a kuasa-registry Receipt event', () => {
     type: 'Receipt', owner: OWNER, id: h(7), order: h(10), paymentTx: h(9), amount: 24n * EUR, spent: 24n * EUR,
   });
   assert.equal(decodeRegistryEvent(unhex('09')), null, 'unknown tags are ignored');
+});
+
+test('v3 codecs match the contract: setTerms, terms view, bond view', () => {
+  assert.equal(hex(encodeSetTerms(3n, { autoPayLimit: 5n * EUR, objectionWindowMs: 120_000n, intent: h(4) })), V.SET_TERMS);
+  assert.deepEqual(decodeTerms(unhex(V.TERMS_VIEW)), { autoPayLimit: 5n * EUR, objectionWindowMs: 120_000n, intent: null });
+  assert.deepEqual(decodeBond(unhex(V.BOND_VIEW)), { poster: OWNER, amount: 10_000_000n });
+  assert.equal(decodeBond(unhex('00')), null);
 });

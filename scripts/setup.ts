@@ -90,6 +90,14 @@ if (process.argv.includes('--cover-v2') && !(state as { coverV1?: string }).cove
   state.coverModuleRef = undefined;
   save();
 }
+// --cover-v3 deploys v3 (filing for the agent, per-policy terms, bonded objections, operator bonds);
+// v2 is kept as coverV2. Policy and claim layouts are unchanged, so every book reads the same way.
+if (process.argv.includes('--cover-v3') && !(state as { coverV2?: string }).coverV2) {
+  Object.assign(state, { coverV2: state.cover, coverV2ModuleRef: state.coverModuleRef });
+  state.cover = undefined as never;
+  state.coverModuleRef = undefined;
+  save();
+}
 if (!state.cover) {
   const source = new Uint8Array(readFileSync(new URL('../contracts/kuasa-cover/concordium-out/module.wasm.v1', import.meta.url)));
   if (!state.coverModuleRef) {
@@ -100,10 +108,12 @@ if (!state.cover) {
     save();
     log('cover module', state.coverModuleRef, r.hash);
   }
-  // InitParams { operator, registry, auto_pay_limit: u64, objection_window_ms: u64 } (v2)
+  // InitParams { operator, registry, auto_pay_limit: u64, objection_window_ms: u64, objection_bond: Amount } (v3)
   const AUTO_PAY_LIMIT = BigInt(process.env.KUASA_AUTOPAY_LIMIT ?? 10_000_000);
   const OBJECTION_WINDOW_MS = BigInt(process.env.KUASA_AUTOPAY_DELAY_MS ?? 120_000);
-  const init = new Uint8Array([...insurerOperator.address.decodedAddress, ...new Uint8Array(new BigUint64Array([BigInt(state.registry), 0n, AUTO_PAY_LIMIT, OBJECTION_WINDOW_MS]).buffer)]);
+  // v3 appends objection_bond: Amount (microCCD)
+  const OBJECTION_BOND = BigInt(process.env.KUASA_OBJECTION_BOND_MICROCCD ?? 1_000_000);
+  const init = new Uint8Array([...insurerOperator.address.decodedAddress, ...new Uint8Array(new BigUint64Array([BigInt(state.registry), 0n, AUTO_PAY_LIMIT, OBJECTION_WINDOW_MS, OBJECTION_BOND]).buffer)]);
   const r = await submit(grpc, Transaction.initContract({
     amount: sdk.CcdAmount.zero(), moduleRef: sdk.ModuleReference.fromHexString(state.coverModuleRef),
     initName: sdk.ContractName.fromString('kuasa_cover'), param: sdk.Parameter.fromBuffer(ab(init)),

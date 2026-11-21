@@ -7,6 +7,10 @@
 //! the EUDemo pool is an insurer treasury account and this contract keeps the books. Once
 //! Protocol-Level Locks: Enhanced ship, the pool moves into a lock whose release is authorised
 //! by `claimsAuthorized` below.
+//!
+//! v3 adds: claims the operator files on the agent's behalf (parametric duplicate detection),
+//! per-policy terms that can only tighten the published rules, bonded objections (CCD), and an
+//! agent operator bond that is slashed when fraud is proven. Policy and Claim layouts are unchanged.
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
 use concordium_std::*;
@@ -43,6 +47,36 @@ pub struct InitParams {
     pub auto_pay_limit: u64,
     /// v2: how long after the assessment parties can object before an automatic approval.
     pub objection_window_ms: u64,
+    /// v3: CCD an objector must lock with an objection (returned if the claim is rejected).
+    pub objection_bond: Amount,
+}
+
+/// v3: bond rules (separate view, so the v2 `rules` view keeps its layout).
+#[derive(Serialize, SchemaType, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BondRules {
+    pub objection_bond: Amount,
+}
+
+/// v3: per-policy terms. They can only tighten the published rules (lower limit, longer window).
+#[derive(Serialize, SchemaType, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Terms {
+    pub auto_pay_limit: u64,
+    pub objection_window_ms: u64,
+    /// sha256 of the owner-signed AP2 intent the policy was bought under, if any.
+    pub intent: Option<HashSha2256>,
+}
+
+#[derive(Serialize, SchemaType, Clone, Copy, Debug)]
+pub struct SetTerms {
+    pub policy_id: u64,
+    pub terms: Terms,
+}
+
+/// v3: a bond posted for an agent payer by its operator (the poster).
+#[derive(Serialize, SchemaType, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Bond {
+    pub poster: AccountAddress,
+    pub amount: Amount,
 }
 
 /// The published automation rules, enforced by `autoApprove` and `objectClaim`.
@@ -187,6 +221,14 @@ pub struct State<S = StateApi> {
     rules: AutoRules,
     assessed_at: StateMap<u64, Timestamp, S>,
     objected: StateSet<u64, S>,
+    bond_rules: BondRules,
+    terms: StateMap<u64, Terms, S>,
+    /// claim -> objectors and the CCD each locked
+    objection_bonds: StateMap<u64, Vec<(AccountAddress, Amount)>, S>,
+    /// agent payer -> operator bond
+    bonds: StateMap<AccountAddress, Bond, S>,
+    /// claim -> when it was rejected (a bond cannot leave within 30 days of a rejection)
+    rejected_at: StateMap<u64, Timestamp, S>,
 }
 
 #[derive(Debug, PartialEq, Eq, Reject, Serialize, SchemaType)]
@@ -205,6 +247,9 @@ pub enum Error {
     RegistryCall,
     LogFull,
     LogMalformed,
+    BondTooSmall,
+    BondLocked,
+    TransferFailed,
 }
 
 impl From<LogError> for Error {
@@ -233,6 +278,11 @@ fn init(ctx: &InitContext, state_builder: &mut StateBuilder) -> InitResult<State
         rules: AutoRules { auto_pay_limit: p.auto_pay_limit, objection_window_ms: p.objection_window_ms },
         assessed_at: state_builder.new_map(),
         objected: state_builder.new_set(),
+        bond_rules: BondRules { objection_bond: p.objection_bond },
+        terms: state_builder.new_map(),
+        objection_bonds: state_builder.new_map(),
+        bonds: state_builder.new_map(),
+        rejected_at: state_builder.new_map(),
     })
 }
 
@@ -257,6 +307,18 @@ pub enum Event {
     ClaimObjected { claim_id: u64, by: AccountAddress },
     #[concordium(tag = 8)]
     ClaimAutoApproved { claim_id: u64 },
+    #[concordium(tag = 9)]
+    ClaimFiledFor { claim_id: u64, by: AccountAddress },
+    #[concordium(tag = 10)]
+    TermsSet { policy_id: u64, terms: Terms },
+    #[concordium(tag = 11)]
+    ObjectionBondSettled { claim_id: u64, to: AccountAddress, amount: Amount },
+    #[concordium(tag = 12)]
+    BondPosted { payer: AccountAddress, poster: AccountAddress, amount: Amount },
+    #[concordium(tag = 13)]
+    BondSlashed { payer: AccountAddress, claim_id: u64, amount: Amount },
+    #[concordium(tag = 14)]
+    BondWithdrawn { payer: AccountAddress, amount: Amount },
 }
 
 fn sender_account(ctx: &ReceiveContext) -> CResult<AccountAddress> {
@@ -334,6 +396,24 @@ fn issue_policy(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
 fn file_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<u64> {
     let p: FileClaim = ctx.parameter_cursor().get()?;
     let claimant = sender_account(ctx)?;
+    file(ctx, host, logger, p, claimant)
+}
+
+/// v3, parametric: the operator files a duplicate-order claim (AgentMistake) it detected on-chain,
+/// on behalf of the agent. The claimant recorded is the agent payer, who is also the only possible
+/// recipient; `ClaimFiledFor` shows who filed it. Assessment and decision work as for any claim.
+#[receive(contract = "kuasa_cover", name = "fileClaimFor", parameter = "FileClaim", return_value = "u64", error = "Error", mutable, enable_logger)]
+fn file_claim_for(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<u64> {
+    only_operator(ctx, host)?;
+    let p: FileClaim = ctx.parameter_cursor().get()?;
+    ensure!(p.kind == ClaimKind::AgentMistake && p.orders.len() == 2, Error::InvalidParams);
+    let payer = host.state().policies.get(&p.policy_id).ok_or(Error::NotFound)?.agent_payer;
+    let id = file(ctx, host, logger, p, payer)?;
+    logger.log(&Event::ClaimFiledFor { claim_id: id, by: sender_account(ctx)? })?;
+    Ok(id)
+}
+
+fn file(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger, p: FileClaim, claimant: AccountAddress) -> CResult<u64> {
     ensure!(!p.orders.is_empty() && p.orders.len() <= 2 && p.amount > 0, Error::InvalidParams);
     let now = ctx.metadata().slot_time();
     let (mandate_key, payer, holder) = {
@@ -405,23 +485,46 @@ fn decide_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
         for o in orders {
             state.claimed_orders.remove(&(policy_id, o));
         }
+        let _ = state.rejected_at.insert(p.claim_id, ctx.metadata().slot_time());
     }
     logger.log(&Event::ClaimDecided { claim_id: p.claim_id, approve: p.approve })?;
+    // Objection bonds: an upheld objection (claim rejected) gets its bond back; a failed one
+    // (claim approved anyway) forfeits it to the operator, for the pool.
+    let bonds = host.state().objection_bonds.get(&p.claim_id).map(|b| b.clone()).unwrap_or_default();
+    let operator = host.state().operator;
+    for (by, amount) in bonds {
+        let to = if p.approve { operator } else { by };
+        host.invoke_transfer(&to, amount).map_err(|_| Error::TransferFailed)?;
+        logger.log(&Event::ObjectionBondSettled { claim_id: p.claim_id, to, amount })?;
+    }
+    host.state_mut().objection_bonds.remove(&p.claim_id);
     Ok(())
+}
+
+/// The rules that apply to a policy: its own terms where they are stricter, the published rules otherwise.
+fn effective_rules(host: &Host<State>, policy_id: u64) -> AutoRules {
+    let r = host.state().rules;
+    match host.state().terms.get(&policy_id) {
+        Some(t) => AutoRules { auto_pay_limit: r.auto_pay_limit.min(t.auto_pay_limit), objection_window_ms: r.objection_window_ms.max(t.objection_window_ms) },
+        None => r,
+    }
 }
 
 fn window_end(host: &Host<State>, claim_id: u64) -> CResult<Timestamp> {
     let at = host.state().assessed_at.get(&claim_id).map(|t| *t).ok_or(Error::WrongStatus)?;
-    at.checked_add(Duration::from_millis(host.state().rules.objection_window_ms)).ok_or(Error::InvalidParams)
+    let policy_id = host.state().claims.get(&claim_id).ok_or(Error::NotFound)?.policy_id;
+    at.checked_add(Duration::from_millis(effective_rules(host, policy_id).objection_window_ms)).ok_or(Error::InvalidParams)
 }
 
 /// During the objection window a party to the claim (policy holder, agent payer, claimant, or a
 /// recorder of the mandate, i.e. the merchant) can object; an objected claim is never approved
 /// automatically, only by a human decision.
-#[receive(contract = "kuasa_cover", name = "objectClaim", parameter = "u64", error = "Error", mutable, enable_logger)]
-fn object_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
+/// v3: the objector locks at least `objection_bond` CCD with the objection.
+#[receive(contract = "kuasa_cover", name = "objectClaim", parameter = "u64", error = "Error", mutable, payable, enable_logger)]
+fn object_claim(ctx: &ReceiveContext, host: &mut Host<State>, amount: Amount, logger: &mut Logger) -> CResult<()> {
     let id: u64 = ctx.parameter_cursor().get()?;
     let by = sender_account(ctx)?;
+    ensure!(amount >= host.state().bond_rules.objection_bond, Error::BondTooSmall);
     let (policy_id, claimant) = {
         let c = host.state().claims.get(&id).ok_or(Error::NotFound)?;
         ensure!(matches!(c.status, ClaimStatus::Assessed { ok: true, .. }), Error::WrongStatus);
@@ -435,6 +538,9 @@ fn object_claim(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     let party = by == holder || by == payer || by == claimant || read_mandate(host, &mandate)?.recorders.contains(&by);
     ensure!(party, Error::Unauthorized);
     let _ = host.state_mut().objected.insert(id);
+    if amount > Amount::zero() {
+        host.state_mut().objection_bonds.entry(id).or_insert_with(Vec::new).modify(|v| v.push((by, amount)));
+    }
     logger.log(&Event::ClaimObjected { claim_id: id, by })?;
     Ok(())
 }
@@ -455,7 +561,7 @@ fn auto_approve(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     };
     ensure!(kind != ClaimKind::WrongItem, Error::Unauthorized);
     let deductible = host.state().policies.get(&policy_id).ok_or(Error::NotFound)?.deductible;
-    ensure!(amount.saturating_sub(deductible) <= host.state().rules.auto_pay_limit, Error::OverLimit);
+    ensure!(amount.saturating_sub(deductible) <= effective_rules(host, policy_id).auto_pay_limit, Error::OverLimit);
     host.state_mut().claims.get_mut(&id).ok_or(Error::NotFound)?.status = ClaimStatus::Approved;
     logger.log(&Event::ClaimAutoApproved { claim_id: id })?;
     Ok(())
@@ -498,7 +604,91 @@ fn mark_fraud(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger)
     let mut c = host.state_mut().claims.get_mut(&p.claim_id).ok_or(Error::NotFound)?;
     ensure!(c.status == ClaimStatus::Rejected, Error::WrongStatus);
     c.status = ClaimStatus::Fraud { disclosure: p.disclosure };
+    let policy_id = c.policy_id;
+    drop(c);
     logger.log(&Event::ClaimFraud { claim_id: p.claim_id, disclosure: p.disclosure })?;
+    // Proven fraud costs the agent's operator its bond, paid to the operator for the pool.
+    let payer = host.state().policies.get(&policy_id).ok_or(Error::NotFound)?.agent_payer;
+    let bond = host.state().bonds.get(&payer).map(|b| *b);
+    if let Some(b) = bond {
+        host.state_mut().bonds.remove(&payer);
+        let operator = host.state().operator;
+        host.invoke_transfer(&operator, b.amount).map_err(|_| Error::TransferFailed)?;
+        logger.log(&Event::BondSlashed { payer, claim_id: p.claim_id, amount: b.amount })?;
+    }
+    Ok(())
+}
+
+/// v3: the operator sets a policy's terms once, right after issuing it. They can only tighten the
+/// published rules (`effective_rules` takes the stricter value of each).
+#[receive(contract = "kuasa_cover", name = "setTerms", parameter = "SetTerms", error = "Error", mutable, enable_logger)]
+fn set_terms(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
+    only_operator(ctx, host)?;
+    let p: SetTerms = ctx.parameter_cursor().get()?;
+    ensure!(host.state().policies.get(&p.policy_id).is_some(), Error::NotFound);
+    ensure!(host.state().terms.get(&p.policy_id).is_none(), Error::WrongStatus);
+    let _ = host.state_mut().terms.insert(p.policy_id, p.terms);
+    logger.log(&Event::TermsSet { policy_id: p.policy_id, terms: p.terms })?;
+    Ok(())
+}
+
+#[receive(contract = "kuasa_cover", name = "terms", parameter = "u64", return_value = "Option<Terms>", error = "Error")]
+fn view_terms(ctx: &ReceiveContext, host: &Host<State>) -> CResult<Option<Terms>> {
+    let id: u64 = ctx.parameter_cursor().get()?;
+    Ok(host.state().terms.get(&id).map(|t| *t))
+}
+
+#[receive(contract = "kuasa_cover", name = "bondRules", return_value = "BondRules", error = "Error")]
+fn view_bond_rules(_ctx: &ReceiveContext, host: &Host<State>) -> CResult<BondRules> {
+    Ok(host.state().bond_rules)
+}
+
+/// v3: an agent operator bonds its agent payer with CCD. Only the first poster may add to it.
+#[receive(contract = "kuasa_cover", name = "postBond", parameter = "AccountAddress", error = "Error", mutable, payable, enable_logger)]
+fn post_bond(ctx: &ReceiveContext, host: &mut Host<State>, amount: Amount, logger: &mut Logger) -> CResult<()> {
+    let payer: AccountAddress = ctx.parameter_cursor().get()?;
+    let poster = sender_account(ctx)?;
+    ensure!(amount > Amount::zero(), Error::InvalidParams);
+    let total = match host.state().bonds.get(&payer).map(|b| *b) {
+        Some(b) => {
+            ensure!(b.poster == poster, Error::Unauthorized);
+            b.amount + amount
+        }
+        None => amount,
+    };
+    let _ = host.state_mut().bonds.insert(payer, Bond { poster, amount: total });
+    logger.log(&Event::BondPosted { payer, poster, amount })?;
+    Ok(())
+}
+
+#[receive(contract = "kuasa_cover", name = "bondOf", parameter = "AccountAddress", return_value = "Option<Bond>", error = "Error")]
+fn view_bond(ctx: &ReceiveContext, host: &Host<State>) -> CResult<Option<Bond>> {
+    let payer: AccountAddress = ctx.parameter_cursor().get()?;
+    Ok(host.state().bonds.get(&payer).map(|b| *b))
+}
+
+/// v3: the poster takes the bond back, but not while a claim on this payer's policies is open
+/// (filed, assessed or approved and unpaid) or was rejected less than 30 days ago (it may still
+/// be marked as fraud).
+#[receive(contract = "kuasa_cover", name = "withdrawBond", parameter = "AccountAddress", error = "Error", mutable, enable_logger)]
+fn withdraw_bond(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> CResult<()> {
+    let payer: AccountAddress = ctx.parameter_cursor().get()?;
+    let b = host.state().bonds.get(&payer).map(|b| *b).ok_or(Error::NotFound)?;
+    ensure!(b.poster == sender_account(ctx)?, Error::Unauthorized);
+    let now = ctx.metadata().slot_time();
+    let policies = host.state().by_payer.get(&payer).map(|v| v.clone()).unwrap_or_default();
+    for (id, c) in host.state().claims.iter() {
+        if !policies.contains(&c.policy_id) {
+            continue;
+        }
+        let open = matches!(c.status, ClaimStatus::Filed | ClaimStatus::Assessed { .. } | ClaimStatus::Approved);
+        let recent = c.status == ClaimStatus::Rejected
+            && host.state().rejected_at.get(&*id).map(|t| t.checked_add(Duration::from_millis(CLAIMS_WINDOW_MS)).map(|e| now < e).unwrap_or(true)).unwrap_or(true);
+        ensure!(!open && !recent, Error::BondLocked);
+    }
+    host.state_mut().bonds.remove(&payer);
+    host.invoke_transfer(&b.poster, b.amount).map_err(|_| Error::TransferFailed)?;
+    logger.log(&Event::BondWithdrawn { payer, amount: b.amount })?;
     Ok(())
 }
 

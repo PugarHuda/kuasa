@@ -21,6 +21,10 @@ export type RiskInput = {
   paidClaims?: number;
   /** Per-order top-up cover instead of period cover. */
   order?: { amount: bigint };
+  /** v3: the agent's operator posted a CCD bond on the cover contract (slashed on proven fraud). */
+  bonded?: boolean;
+  /** Orders this mandate placed in the insurer's recent on-chain window (order velocity, Radar-style). */
+  recentOrders?: number;
 };
 
 export type Factor = { name: string; multiplier: number; reason: string };
@@ -36,8 +40,16 @@ export function quote(input: RiskInput): Quote | { refused: string } {
   if (input.order) {
     if (input.order.amount <= 0n) return { refused: 'order amount must be positive' };
     const pct = (input.order.amount * TOP_UP_BPS) / BPS;
-    const premium = pct > TOP_UP_MIN ? pct : TOP_UP_MIN;
-    return { premium, factors: [{ name: 'order top-up', multiplier: 1, reason: '1.5% of the order, minimum 0.10' }] };
+    const base = pct > TOP_UP_MIN ? pct : TOP_UP_MIN;
+    const factors: Factor[] = [{ name: 'order top-up', multiplier: 1, reason: '1.5% of the order, minimum 0.10' }];
+    // Per-order risk scoring: an agent buying fast (a loop, an injection) is riskier per order.
+    const n = input.recentOrders ?? 0;
+    if (n >= 3) {
+      const v = BPS + 2_500n * BigInt(n - 2) > 20_000n ? 20_000n : BPS + 2_500n * BigInt(n - 2);
+      factors.push({ name: 'order velocity', multiplier: Number(v) / 10_000, reason: `${n} orders on this mandate in the last minutes` });
+      return { premium: (base * v + BPS / 2n) / BPS, factors };
+    }
+    return { premium: base, factors };
   }
   if (input.limit <= 0n) return { refused: 'limit must be positive' };
   if (!Number.isInteger(input.days) || input.days <= 0 || input.days > 365) return { refused: 'days must be 1..365' };
@@ -58,6 +70,7 @@ export function quote(input: RiskInput): Quote | { refused: string } {
   applied.push({ name: 'category', bps: cat, reason: `riskiest category in mandate: ${input.mandate.categories.join(', ')}` });
 
   if (input.provenAgeAndResidency) applied.push({ name: 'proven attributes', bps: 9_000n, reason: 'owner proved age and residency with a ZK proof bound to the agent' });
+  if (input.bonded) applied.push({ name: 'operator bond', bps: 9_000n, reason: 'the agent operator bonded the agent with CCD, slashed on proven fraud' });
   if (input.ownerKind === 'business') applied.push({ name: 'business owner', bps: 8_500n, reason: 'LEI-verified business principal' });
   if (input.incidents > 0) applied.push({ name: 'incidents', bps: BPS + 2_500n * BigInt(input.incidents), reason: `${input.incidents} incident(s) on the mandate` });
   const paid = input.paidClaims ?? 0;

@@ -8,7 +8,7 @@ import {
   type ClaimKind, type CoverView, decodeClaim, decodeCoverView, decodePolicy, decodeRegistryEvent, encodeAssess, encodeCoverQuery,
   encodeDecide, encodeFileClaim, encodeFraud, encodeIssuePolicy, encodePayout, encodeU64, type IssuePolicyParams, type RegistryEvent,
   decodeViewResult, encodeIncident, encodeIssue, encodeMandateKey, encodeReceipt, encodeRevoke,
-  type IssueParams, type MandateEntry,
+  type IssueParams, type MandateEntry, decodeBond, decodeTerms, encodeAccount, encodeSetTerms, type PolicyTerms,
 } from '@kuasa/core';
 
 export const TESTNET = {
@@ -103,9 +103,9 @@ export class KuasaRegistry {
     return decodeViewResult(new Uint8Array(ReturnValue.toBuffer(res.returnValue)));
   }
 
-  private async update(method: string, param: Uint8Array, from: Wallet, sponsor?: Wallet) {
+  private async update(method: string, param: Uint8Array, from: Wallet, sponsor?: Wallet, microCcd = 0n) {
     const tx = Transaction.updateContract(
-      { amount: CcdAmount.zero(), address: this.address, receiveName: ReceiveName.fromString(`kuasa.${method}`), message: Parameter.fromBuffer(ab(param)) },
+      { amount: CcdAmount.fromMicroCcd(microCcd), address: this.address, receiveName: ReceiveName.fromString(`kuasa.${method}`), message: Parameter.fromBuffer(ab(param)) },
       Energy.create(30_000),
     ) as Transaction.Builder;
     const r = await submit(this.grpc, tx, from, sponsor);
@@ -159,9 +159,9 @@ export class KuasaCover {
     } catch { return null; }
   };
 
-  private async update(method: string, param: Uint8Array, from: Wallet, sponsor?: Wallet) {
+  private async update(method: string, param: Uint8Array, from: Wallet, sponsor?: Wallet, microCcd = 0n) {
     const tx = Transaction.updateContract(
-      { amount: CcdAmount.zero(), address: this.address, receiveName: ReceiveName.fromString(`kuasa_cover.${method}`), message: Parameter.fromBuffer(ab(param)) },
+      { amount: CcdAmount.fromMicroCcd(microCcd), address: this.address, receiveName: ReceiveName.fromString(`kuasa_cover.${method}`), message: Parameter.fromBuffer(ab(param)) },
       Energy.create(60_000),
     ) as Transaction.Builder;
     const r = await submit(this.grpc, tx, from, sponsor);
@@ -182,8 +182,18 @@ export class KuasaCover {
   cancelPolicy = (policyId: bigint, holder: Wallet) => this.update('cancelPolicy', encodeU64(policyId), holder);
   /** v2: automatic approval, accepted by the contract only within its published rules. */
   autoApprove = (claimId: bigint, operator: Wallet) => this.update('autoApprove', encodeU64(claimId), operator);
-  /** v2: a party to the claim objects during the objection window (signed by that party). */
-  objectClaim = (claimId: bigint, party: Wallet) => this.update('objectClaim', encodeU64(claimId), party);
+  /** A party to the claim objects during the objection window (v3: locking `bondMicroCcd`). */
+  objectClaim = (claimId: bigint, party: Wallet, bondMicroCcd = 0n) => this.update('objectClaim', encodeU64(claimId), party, undefined, bondMicroCcd);
+  /** v3: the operator files a detected duplicate-order claim for the agent (parametric). */
+  fileClaimFor = (p: { policyId: bigint; kind: ClaimKind; amount: bigint; evidence: string; orders: string[] }, operator: Wallet) => this.update('fileClaimFor', encodeFileClaim(p), operator);
+  /** v3: a policy's own terms, set once by the operator; stricter values win. */
+  setTerms = (policyId: bigint, t: PolicyTerms, operator: Wallet) => this.update('setTerms', encodeSetTerms(policyId, t), operator);
+  terms = async (policyId: bigint) => decodeTerms(await this.invoke('terms', encodeU64(policyId)));
+  /** v3: CCD an objector must lock (null on v1/v2). */
+  objectionBond = async (): Promise<bigint | null> => { try { const b = await this.invoke('bondRules', new Uint8Array()); return new DataView(b.buffer, b.byteOffset, 8).getBigUint64(0, true); } catch { return null; } };
+  postBond = (payer: string, microCcd: bigint, poster: Wallet) => this.update('postBond', encodeAccount(payer), poster, undefined, microCcd);
+  withdrawBond = (payer: string, poster: Wallet) => this.update('withdrawBond', encodeAccount(payer), poster);
+  bondOf = async (payer: string) => { try { return decodeBond(await this.invoke('bondOf', encodeAccount(payer))); } catch { return null; } };
 
   /** issuePolicy / fileClaim ids: the first u64 of the PolicyIssued (tag 0) / ClaimFiled (tag 1) event. */
   static idFromEvents(summary: unknown, index: bigint): bigint | null {

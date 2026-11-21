@@ -38,6 +38,10 @@ export type InsurerDeps = {
     markFraud(claimId: bigint, disclosureHex: string, operator?: Wallet): Promise<TxResult>;
     /** v2 contracts: automatic approval, accepted only within the contract's published rules. */
     autoApprove?(claimId: bigint, operator?: Wallet): Promise<TxResult>;
+    /** v3: file a detected duplicate-order claim for the agent (fully parametric). */
+    fileClaimFor?(p: { policyId: bigint; kind: 'AgentMistake'; amount: bigint; evidence: string; orders: string[] }): Promise<TxResult & { id: bigint | null }>;
+    /** v3: a policy's own terms (can only tighten the contract's rules). */
+    setTerms?(policyId: bigint, t: { autoPayLimit: bigint; objectionWindowMs: bigint; intent: string | null }): Promise<TxResult>;
     /** The policy already issued for this premium payment, if any (premium_tx is unique per premium). */
     policyByPremiumTx(premiumTx: string): Promise<bigint | null>;
   };
@@ -48,6 +52,8 @@ export type InsurerDeps = {
   treasuryBalance(): Promise<bigint>;
   /** Claims already paid to this agent payer (on-chain), for experience rating. */
   paidClaims?(payer: string): Promise<number>;
+  /** v3: the agent operator's CCD bond on the cover contract (null if none). */
+  bondOf?(payer: string): Promise<{ poster: string; amount: bigint } | null>;
   /** On-chain cover of this payer now (the contract's coverOf view): one live period policy per payer. */
   coverOf?(payer: string): Promise<{ periodRemaining: bigint; policyId: bigint | null }>;
   /** Circuit breaker: publish (or lift) a purchase hold on an agent payer that merchants' guards honour. */
@@ -70,6 +76,10 @@ export type InsurerDeps = {
   autoPayLimit?: bigint;
   /** Objection window before an automatic payout (default 2 minutes). */
   autoPayDelayMs?: number;
+  /** Appeals panel (Kleros-style): independent juror accounts; a majority decides an appeal. */
+  jurors?: string[];
+  /** Share of the premium returned when a policy ends with no claim (basis points; unset = none). */
+  givebackBps?: bigint;
 };
 
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
@@ -80,6 +90,8 @@ const fromSnapshot = (s: string) => JSON.parse(s, (_k, x) => (x && typeof x === 
 const canonical = (a: string) => { try { return Buffer.from(AccountAddress.fromBase58(a).decodedAddress.slice(0, 29)).toString('hex'); } catch { return undefined; } };
 
 export type QuoteRequest = { mandateUrl: string; limit: bigint; days: number; order?: { ref: string; amount: bigint }; proof?: unknown;
+  /** Merchant-paid cover: this account (e.g. the shop) pays the premium; the policy still covers the agent. */
+  sponsor?: string;
   /** The user's AP2 Intent Mandate, when the agent works under one: the Kuasa mandate must sit inside it. */
   ap2?: Ap2IntentMandate };
 export type StoredQuote = Quote & {
@@ -96,9 +108,11 @@ type ClaimRecord = {
   payoutTx?: string;
   paid?: string; amountPaid?: bigint; recordPending?: boolean;
   /** Tiered autonomy: paid automatically at this time unless a human holds it first. */
-  autoPayAt?: number; held?: boolean; decidedBy?: 'auto'; /** v2: the on-chain autoApprove tx */ autoApproveTx?: string;
-  /** Re-filed orders of an earlier rejected claim: an appeal, always decided by a human. */
+  autoPayAt?: number; held?: boolean; decidedBy?: 'auto' | 'panel'; /** v2: the on-chain autoApprove tx */ autoApproveTx?: string;
+  /** Re-filed orders of an earlier rejected claim: an appeal, decided by a human or by the appeals panel. */
   appealOf?: bigint;
+  /** Appeals panel votes (juror account, verdict). */
+  panel?: { by: string; approve: boolean; at: number }[];
   /** Objections raised during the objection window (each holds the claim for a human). */
   objections?: { by: string; reason: string; at: number }[];
   /** Why an approved claim is not paid (e.g. insufficient pool); `final` when it never will be. */
@@ -112,6 +126,7 @@ export type Detection = {
   orders: [string, string]; paymentTxs: [string, string]; receiptTxs: [string, string];
   /** dismissed: the owner resumed the agent, confirming these purchases were intended */
   status: 'open' | 'filed' | 'dismissed'; claimId?: bigint;
+  /** v3: filed by the insurer itself (fileClaimFor), or why that failed */ filedBy?: 'insurer'; fileError?: string;
 };
 type Disclosure = { claimId: string; account: string; doc: object };
 
@@ -126,7 +141,9 @@ export class InsurerService {
   private paying = new Map<string, number>(); // quoteId -> reserved at (ms)
   /** Quotes whose premium settled: their reservation never lapses. */
   private settled = new Set<string>();
-  private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string; /** SKUs of the AP2 intent it was bought under */ skus?: string[] }[] = [];
+  private policies: { policyId: bigint; quoteId: string; premiumTx: string; holder: string; payer: string; limit: bigint; until: number; kind: string; /** SKUs of the AP2 intent it was bought under */ skus?: string[];
+    /** v3 terms set on-chain for this policy, or why they could not be */ terms?: { autoPayLimit: bigint; objectionWindowMs: bigint; intent: string | null; tx?: string; error?: string };
+    /** premium share returned at the end of a claim-free policy */ giveback?: { amount: bigint; tx?: string } }[] = [];
   /** Premiums that settled but whose policy is not on-chain yet; the quote travels with them. */
   private unissued: { quoteId: string; premiumTx: string; error: string; quote?: StoredQuote }[] = [];
   /** Paid premiums that can never become a policy (e.g. mandate revoked meanwhile): refund manually. */
@@ -194,7 +211,8 @@ export class InsurerService {
   async quote(req: QuoteRequest): Promise<StoredQuote | { refused: string }> {
     const fresh = await this.price(req);
     if ('refused' in fresh) return fresh;
-    if (!(await this.deps.verifyPayer(fresh.payer, req.proof).catch(() => false))) return { refused: 'payer proof required: sign the request with the agent payer key' };
+    const signer = req.sponsor ?? fresh.payer;
+    if (!(await this.deps.verifyPayer(signer, req.proof).catch(() => false))) return { refused: req.sponsor ? 'sponsor proof required: sign the request with the sponsor account key' : 'payer proof required: sign the request with the agent payer key' };
     req = { ...req, proof: undefined }; // not kept
     const quoteId = await sha256Hex(canonicalJson({ ...req, limit: String(req.limit), order: req.order && { ...req.order, amount: String(req.order.amount) }, at: this.deps.now(), n: Math.random() }));
     const stored: StoredQuote = { ...fresh, quoteId, request: req, expires: this.deps.now() + QUOTE_TTL_MS };
@@ -241,6 +259,8 @@ export class InsurerService {
       provenAgeAndResidency: proven, ownerKind: m.principal.kind, incidents: Number(e.incidents), receipts: Number(e.receipts),
       paidClaims: this.deps.paidClaims ? await this.deps.paidClaims(m.agent.payer) : 0,
       order: req.order && { amount: req.order.amount },
+      bonded: !!(this.deps.bondOf && ((await this.deps.bondOf(m.agent.payer).catch(() => null))?.amount ?? 0n) >= 10_000_000n),
+      recentOrders: this.recent.filter((r) => r.mandateId === id).length,
     };
     const q = quote(input);
     if ('refused' in q) return q;
@@ -253,7 +273,7 @@ export class InsurerService {
   async checkPurchase(quoteId: string, payer: string, amount: bigint): Promise<string | null> {
     const q = this.quotes.get(quoteId);
     if (!q || q.expires < this.deps.now()) return 'unknown or expired quote';
-    if (payer !== q.payer) return 'payer is not the agent this quote is for';
+    if (payer !== q.payer && payer !== q.request.sponsor) return 'payer is not the agent (or the sponsor) this quote is for';
     this.dropStaleReservations();
     if (this.paying.has(quoteId)) return 'this quote is already being paid';
     // coverOf only sees issued policies: a period premium in flight or paid-but-unissued for this payer blocks another one.
@@ -298,6 +318,7 @@ export class InsurerService {
       this.premiumsIn += q.premium;
       this.consume(quoteId);
       this.save();
+      void this.setTerms(id, q); // v3; never blocks issuance
       return id;
     };
     const issued = async () => this.deps.cover.policyByPremiumTx(premiumTx).catch(() => null);
@@ -487,6 +508,7 @@ export class InsurerService {
       if (!this.holds.has(e.payer)) this.holds.set(e.payer, { reason: 'duplicate-orders', at: this.deps.now() });
     }
     if (found.length) { this.save(); await this.publishHolds(); }
+    for (const d of found) await this.fileDetected(d);
     return found;
   }
 
@@ -515,6 +537,99 @@ export class InsurerService {
     this.recent = this.recent.filter((r) => r.at > (this.confirmedBefore.get(r.mandateId) ?? 0));
     this.save();
     return true;
+  }
+
+  /**
+   * v3 per-policy terms: anchor the owner-signed AP2 intent on the policy, and halve the automatic
+   * payout limit for agents with incidents. Only set when there is something to tighten.
+   */
+  private async setTerms(policyId: bigint, q: StoredQuote) {
+    if (!this.deps.cover.setTerms) return;
+    const rec = this.policies.find((p) => p.policyId === policyId);
+    const limit = this.deps.autoPayLimit ?? 0n;
+    const risky = q.factors.some((f) => f.name === 'incidents');
+    const intent = q.ownerSignedIntent && q.request.ap2 ? await sha256Hex(canonicalJson(q.request.ap2)) : null;
+    if (!rec || (!intent && !risky)) return;
+    const t = { autoPayLimit: risky ? limit / 2n : limit, objectionWindowMs: BigInt(this.deps.autoPayDelayMs ?? 120_000), intent };
+    try {
+      rec.terms = { ...t, tx: (await this.deps.cover.setTerms(policyId, t)).hash };
+    } catch (e) {
+      rec.terms = { ...t, error: (e as Error).message };
+    }
+    this.save();
+  }
+
+  /** v3: file a detection on the agent's behalf and assess it at once (fully parametric). */
+  private async fileDetected(d: Detection) {
+    if (!this.deps.cover.fileClaimFor) return;
+    const evidence: ClaimEvidence = { v: 2, reason: 'AM10', paymentTxs: [...d.paymentTxs], note: 'detected on-chain and filed by the insurer' };
+    try {
+      const r = await this.deps.cover.fileClaimFor({ policyId: d.policyId, kind: 'AgentMistake', amount: d.amount, evidence: await evidenceHash(evidence), orders: [...d.orders] });
+      if (r.id === null) throw new Error(`claim id missing in tx ${r.hash}`);
+      d.filedBy = 'insurer';
+      await this.assessClaim(r.id, [...d.receiptTxs], evidence);
+    } catch (e) {
+      d.fileError = (e as Error).message; // the agent can still file it (claimDetected)
+      this.save();
+    }
+  }
+
+  /**
+   * Giveback: a policy that ended (expired, not cancelled) without any claim returns a share of
+   * its premium to the agent payer. Run periodically.
+   */
+  async givebackExpired() {
+    const bps = this.deps.givebackBps;
+    if (!bps) return;
+    const now = this.deps.now();
+    for (const rec of this.policies) {
+      if (rec.giveback || rec.until > now || this.refunded(rec.policyId)) continue;
+      if ([...this.claims.values()].some((c) => c.policyId === rec.policyId)) { rec.giveback = { amount: 0n }; continue; }
+      const p = await this.deps.cover.policy(rec.policyId).catch(() => null);
+      if (!p || p.status !== 'Active' || p.paidOut > 0n || p.premiumTx !== rec.premiumTx) continue;
+      const amount = (p.premium * bps) / 10_000n;
+      if (amount <= 0n) { rec.giveback = { amount: 0n }; continue; }
+      rec.giveback = { amount }; // before paying: never twice
+      this.save();
+      try {
+        rec.giveback.tx = await this.deps.pay(rec.payer, amount, `kuasa giveback policy ${rec.policyId}`);
+      } catch {
+        rec.giveback = undefined; // retried next round
+      }
+      this.save();
+    }
+  }
+
+  /**
+   * Appeals panel: a juror (an independent account named in the panel, never a party to the claim)
+   * votes on an appeal; the first verdict to reach a majority of the panel decides it, exactly as a
+   * human decision would (payout included). The caller has verified the juror's signature.
+   */
+  async panelVote(claimId: bigint, juror: string, approve: boolean) {
+    const jurors = this.deps.jurors ?? [];
+    const rec = this.claims.get(claimId);
+    if (!jurors.includes(juror)) throw new Error('not a juror on the appeals panel');
+    if (!rec) throw new Error('unknown claim');
+    if (rec.appealOf === undefined) throw new Error('only appeals go to the panel');
+    if (rec.verdict || rec.paid) throw new Error('already decided');
+    if ([rec.claimant, rec.holder, rec.recipient].includes(juror)) throw new Error('a party to the claim cannot judge it');
+    rec.panel ??= [];
+    if (rec.panel.some((v) => v.by === juror)) throw new Error('this juror already voted');
+    rec.panel.push({ by: juror, approve, at: this.deps.now() });
+    this.save();
+    const need = Math.floor(jurors.length / 2) + 1;
+    const yes = rec.panel.filter((v) => v.approve).length;
+    const no = rec.panel.length - yes;
+    if (yes < need && no < need) return { decided: false as const, yes, no, need };
+    rec.decidedBy = 'panel';
+    const d = await this.decide(claimId, yes >= need);
+    return { ...d, by: 'panel' as const, approve: yes >= need, yes, no, need };
+  }
+
+  /** Appeals waiting for a decision, with the panel's votes so far. */
+  openAppeals() {
+    return [...this.claims.values()].filter((c) => c.appealOf !== undefined && !c.verdict && !c.paid)
+      .map((c) => ({ claimId: c.claimId, appealOf: c.appealOf, assessment: c.assessment, votes: c.panel ?? [], jurors: this.deps.jurors ?? [] }));
   }
 
   /** Any party to the claim (filer, policy holder, paid account) with a rejected no-evidence claim. */

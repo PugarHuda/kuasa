@@ -71,7 +71,7 @@ export async function verifyEvmAgent(d: { message?: unknown; signature?: unknown
   ]);
   // The published status only points at a policy; it counts only if that policy is this agent's.
   const policyId = coverMeta?.value_text?.match(/^policy=(\d+);/)?.[1];
-  const coverIdx = BigInt(coverMeta?.value_text?.match(/;cover=(d+)./)?.[1] ?? COVER_V1); // statuses before v2 named no contract
+  const coverIdx = BigInt(coverMeta?.value_text?.match(/;cover=(\d+)\./)?.[1] ?? COVER_V1); // statuses before v2 named no contract
   const found = policyId && COVERS.includes(coverIdx) ? decodePolicy(await viewCover('policy', encodeU64(BigInt(policyId)), coverIdx)) : null;
   const policy = found && coverBindsToAgent(found, agent) ? found : null;
   const cover = policy ? await coverOf(policy.agentPayer, coverIdx) : null;

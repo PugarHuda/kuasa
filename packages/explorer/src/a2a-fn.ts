@@ -5,7 +5,8 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleA2a } from '../../insurer/src/a2a.js';
-import { coverOf, riskOf, solvencyNow } from './chain.js';
+import { coverOf, riskOf, scan, solvencyNow } from './chain.js';
+import { feedbackFor } from './erc8004.js';
 import { verifyEvmAgent } from './evm.js';
 
 const skills = {
@@ -13,6 +14,8 @@ const skills = {
   risk: async (d: Record<string, unknown>) => riskOf(String(d.payer ?? '')),
   // Cross-chain: an agent on an EVM chain proves its Ethereum key; we answer with its Concordium badge and cover.
   'verify-evm-agent': async (d: Record<string, unknown>) => verifyEvmAgent(d),
+  // Portable reputation: this agent's claim outcomes as ERC-8004 Reputation Registry feedback entries.
+  'erc8004-feedback': async (d: Record<string, unknown>) => ({ payer: String(d.payer ?? ''), standard: 'ERC-8004 reputation feedback (score 0-100, tag1, tag2, evidence pointer)', feedback: feedbackFor(String(d.payer ?? ''), (await scan()).books) }),
   'cover-status': async (d: Record<string, unknown>) => ({ onChain: await coverOf(String(d.payer ?? '')) }),
   quote: async () => { throw new Error('quotes need the insurer service (payer proof, then x402 checkout); see github.com/PugarHuda/kuasa/blob/main/docs/INTEGRATIONS.md'); },
 };
