@@ -193,15 +193,18 @@ test('market, contribution is bounded by the verified loss, not the amount claim
 
 test('owner rules (Stripe Radar style): only a policy holder sets them; spend above the hourly limit pauses the agent', async () => {
   const t = harness({ coverOf: async () => ({ periodRemaining: 0n, policyId: null }) });
-  assert.throws(() => t.svc.setRule(PAYER, OWNER, 5n * EUR), /holder of a policy/);
+  assert.throws(() => t.svc.setRule(PAYER, OWNER, 5n * EUR), /holder of a live policy/);
   await t.svc.issue((await quoteOk(t.svc)).quoteId, h(9));
-  assert.throws(() => t.svc.setRule(PAYER, addr(40), 5n * EUR), /holder of a policy/);
+  assert.throws(() => t.svc.setRule(PAYER, addr(40), 5n * EUR), /holder of a live policy/);
   t.svc.setRule(PAYER, OWNER, 5n * EUR);
   const r = (o: string, at: number, amount: bigint) => ({ owner: OWNER, mandateId: h(7), order: o, paymentTx: h(50 + at), amount, at: 1_000_000 + at, receiptTx: `t${o}` });
   await t.svc.onReceipts([r('a', 1, 3n * EUR)]);
   assert.equal(t.svc.holdOf(PAYER), null, '3 of 5 spent');
   await t.svc.onReceipts([r('b', 2, 4n * EUR)]); // 7 > 5 (different amounts: not a duplicate)
   assert.equal(t.svc.holdOf(PAYER)?.reason, 'owner-rule');
+  // a rule outlives nothing: once its setter's policy has ended it no longer applies
+  const later = harness({ now: () => 4_000_000_000_000 + 1 });
+  assert.throws(() => later.svc.setRule(PAYER, OWNER, 1n), /live policy/);
 });
 
 test('approve pays the agent payer and records the payout', async () => {

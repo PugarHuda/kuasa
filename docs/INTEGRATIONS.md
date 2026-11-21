@@ -116,3 +116,19 @@ PORT=4024 KUASA_PROFILE=insurer2 KUASA_COVER_INDEX=<index> KUASA_STATE_FILE=insu
 ```
 
 Agents only buy from insurers their owner allowed: the mandate's `merchants` must list the insurer's pool and its `recorders` the insurer's operator (`setup.ts --reissue <name>` after `market-insurer.ts`).
+
+## Find insurers on-chain
+
+`KuasaAgent.discoverMarket(rootToken, allowedPools)` reads `kuasa:market` from the first insurer's CIS-8004 entry, then each listed entry's `kuasa:insurer` (`name;cover;pool;operator;price;url;evm`), keeps only entries owned by the pool they advertise, and only pools the agent's mandate names. `KuasaAgent.fromDemoMarket(name)` builds a demo agent that way; `coverBuyBest` buys the cheapest offer, `coverBuySyndicated` splits a limit across free capacity.
+
+## Owner rules
+
+```http
+POST /rules/<agent payer>          (x-kuasa-payer* proof signed by a policy holder)
+{"maxSpendPerHour": "5000000"}     (0 removes the rule)
+GET  /rules/<agent payer>
+```
+
+## Behind a public URL
+
+Run a Cloudflare tunnel to a service and give it the URL, so signed requests addressed to the public origin are accepted: `KUASA_INSURER_PUBLIC_URL` (insurer) or `KUASA_SHOP_PUBLIC_URL` (shop). Console-only endpoints stay closed: they require a loopback connection with a `localhost` Host header.

@@ -591,6 +591,7 @@ export class InsurerService {
       const e = await this.deps.mandateEntry(sample.owner, mandateId).catch(() => null);
       const rule = e && this.rules.get(e.payer);
       if (!e || !rule || this.holds.has(e.payer)) continue;
+      if (!this.holdsLivePolicy(e.payer, rule.by)) { this.rules.delete(e.payer); continue; } // its setter's cover ended: the rule goes too
       const spent = this.spendLog.filter((r) => r.mandateId === mandateId && r.at > (this.confirmedBefore.get(mandateId) ?? 0)).reduce((a, r) => a + r.amount, 0n);
       if (spent > rule.maxSpendPerHour) { this.holds.set(e.payer, { reason: 'owner-rule', at: this.deps.now() }); ruleHeld = true; }
     }
@@ -612,8 +613,15 @@ export class InsurerService {
    * the insurer pauses the agent through the same circuit breaker merchants honour. Only the holder of a
    * policy on that agent may set it (the caller has verified the holder's signature). 0 removes it.
    */
+  /** A live (unexpired, not refunded) policy on this agent held by this account. */
+  private holdsLivePolicy(payer: string, holder: string) {
+    return this.policies.some((p) => p.payer === payer && p.holder === holder && p.until > this.deps.now() && !(p as { refunded?: unknown }).refunded);
+  }
+
   setRule(payer: string, holder: string, maxSpendPerHour: bigint) {
-    if (!this.policies.some((p) => p.payer === payer && p.holder === holder)) throw new Error('only the holder of a policy on this agent sets its rules');
+    if (!this.holdsLivePolicy(payer, holder)) throw new Error('only the holder of a live policy on this agent sets its rules');
+    const cur = this.rules.get(payer);
+    if (cur && cur.by !== holder && this.holdsLivePolicy(payer, cur.by)) throw new Error('this rule belongs to another policy holder');
     if (maxSpendPerHour < 0n) throw new Error('the limit must not be negative');
     if (maxSpendPerHour === 0n) this.rules.delete(payer); else this.rules.set(payer, { maxSpendPerHour, by: holder, at: this.deps.now() });
     this.save();
