@@ -7,7 +7,7 @@ import { experienceBps, solvency } from '@kuasa/cover';
 export const COVER_V1 = 13066n;
 /** Every kuasa-cover book, oldest first; the last is the current one: v1 (history), v2, v3. */
 /** The market: other insurers, each its own instance of the same kuasa-cover v3 module with its own pool. */
-export const MARKET = [{ name: 'Kuasa Re', cover: 13108n, pool: '3QLQkD8ZK4NDKEgQmxrwXkESkw3wwztrtF1sjjbYkGpHEsFcLo' }];
+export const MARKET = [{ name: 'Kuasa Re', cover: 13108n, pool: '3QLQkD8ZK4NDKEgQmxrwXkESkw3wwztrtF1sjjbYkGpHEsFcLo', token: [0x6b, 0x05, 0, 0, 0, 0, 0, 0] }];
 export const COVERS = [COVER_V1, 13100n, 13105n, ...MARKET.map((m) => m.cover)];
 /** Kuasa Cover's current book (its claim decisions are published on its CIS-8004 entry). */
 export const CURRENT = 13105n;
@@ -15,7 +15,34 @@ export const CURRENT = 13105n;
 export const claimKey = (kind: 'decision' | 'attest', cover: bigint, id: number | bigint) =>
   cover === COVER_V1 ? `kuasa:${kind}:${id}` : `kuasa:${kind}:${cover}:${id}`;
 export const POOL = '3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut';
-const grpc = new ConcordiumGRPCWebClient('https://grpc.testnet.concordium.com', 20000);
+/**
+ * The public node rate-limits busy IPs with HTTP 429, which a browser sees as a failed fetch (no CORS
+ * header on the error): retry those with backoff, like the services do (@kuasa/chain withRetry).
+ */
+function withRetry<T extends object>(client: T, delays = [800, 1_600, 3_200, 6_400]): T {
+  const transient = (e: unknown) => /429|UNAVAILABLE|Failed to fetch|NetworkError|ERR_FAILED/i.test(`${(e as { code?: string })?.code ?? ''} ${(e as Error)?.message ?? ''}`);
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      const v = Reflect.get(target, prop, receiver);
+      if (typeof v !== 'function') return v;
+      return (...args: unknown[]) => {
+        const first = v.apply(receiver, args);
+        if (!(first instanceof Promise)) return first;
+        return (async () => {
+          let p: Promise<unknown> = first;
+          for (let i = 0; ; i++) {
+            try { return await p; } catch (e) {
+              if (i >= delays.length || !transient(e)) throw e;
+              await new Promise((r) => setTimeout(r, delays[i] * (0.75 + Math.random() / 2)));
+              p = v.apply(receiver, args);
+            }
+          }
+        })();
+      };
+    },
+  });
+}
+const grpc = withRetry(new ConcordiumGRPCWebClient('https://grpc.testnet.concordium.com', 20000));
 
 export async function viewCover(method: string, param: Uint8Array, cover = CURRENT) {
   const r = await grpc.invokeContract({ contract: ContractAddress.create(cover, 0n), method: ReceiveName.fromString(`kuasa_cover.${method}`), parameter: Parameter.fromBuffer(param.slice().buffer as ArrayBuffer) });
@@ -49,7 +76,7 @@ export async function scan() {
   };
 }
 
-async function eudemoOf(account: string) {
+export async function eudemoOf(account: string) {
   const info = await grpc.getAccountInfo(AccountAddress.fromBase58(account));
   const t = (info as unknown as { accountTokens?: { id: unknown; state: { balance: { value: bigint | string } } }[] }).accountTokens?.find((x) => String(x.id) === 'EUDemo');
   return t ? BigInt(t.state.balance.value) : 0n;
@@ -93,15 +120,23 @@ async function metadata(token: number[], key: string) {
 const fields = (v: string | null) => (v ? Object.fromEntries(v.split(';').map((kv) => kv.split('=') as [string, string])) : null);
 
 /** The insurer publishes each claim decision on its CIS-8004 entry: by=auto|human;verdict=...;paid=... */
+/** Each insurer publishes on its own CIS-8004 entry. */
+const tokenOf = (cover: bigint) => MARKET.find((m) => m.cover === cover)?.token ?? INSURER_TOKEN;
+/** An insurer's self-description on its own entry (kuasa:insurer: cover, pool, operator, price, url). */
+export async function insurerInfo(cover: bigint) { return fields(await metadata(tokenOf(cover), 'kuasa:insurer')); }
 export async function decisionOf(claimId: number, cover = CURRENT) {
-  const f = fields(await metadata(INSURER_TOKEN, claimKey('decision', cover, claimId)));
+  const f = fields(await metadata(tokenOf(cover), claimKey('decision', cover, claimId)));
   return f ? { by: f.by as 'auto' | 'human' | 'panel' | undefined, verdict: f.verdict, reason: f.reason } : null;
 }
 
 /** Circuit breaker: the insurer's purchase hold on an agent payer (kuasa:hold:<payer>), if one is in force. */
 export async function holdOf(payer: string) {
-  const v = await metadata(INSURER_TOKEN, `kuasa:hold:${payer}`);
-  return v?.startsWith('hold') ? fields(v) : null;
+  // any insurer on the market may pause an agent it insures
+  for (const t of [INSURER_TOKEN, ...MARKET.map((m) => m.token)]) {
+    const v = await metadata(t, `kuasa:hold:${payer}`);
+    if (v?.startsWith('hold')) return fields(v);
+  }
+  return null;
 }
 
 const SHOP_TOKEN = [0xf3, 0x04, 0, 0, 0, 0, 0, 0]; // the demo shop's CIS-8004 agent token

@@ -45,7 +45,11 @@ if (process.env.KUASA_COVER_INDEX) state.cover = process.env.KUASA_COVER_INDEX;
  * only its own book and does not write to the first insurer's CIS-8004 entry.
  */
 const PROFILE = process.env.KUASA_PROFILE ?? 'insurer';
-if (PROFILE !== 'insurer') { state.coverV1 = undefined; state.coverV2 = undefined; state.insurerAgent = undefined; }
+if (PROFILE !== 'insurer') {
+  state.coverV1 = undefined; state.coverV2 = undefined;
+  // its own CIS-8004 entry (owned by its pool): decisions and holds are published there (scripts/market-directory.ts)
+  state.insurerAgent = ((state as { market?: { cover: string; agent?: string }[] }).market ?? []).find((m) => m.cover === process.env.KUASA_COVER_INDEX)?.agent;
+}
 const accounts = JSON.parse(readFileSync(new URL(`accounts/${PROFILE}.json`, ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const treasuryAcc = accounts.find((a) => a.credNumber === 0)!;
 const operatorAcc = accounts.find((a) => a.credNumber === 1)!;
@@ -190,23 +194,24 @@ const svc = new InsurerService({
   givebackBps: BigInt(process.env.KUASA_GIVEBACK_BPS ?? 1_000),
   // market: this insurer's own pricing on top of the shared risk model (basis points; 10000 = as modelled)
   priceBps: BigInt(process.env.KUASA_PRICE_BPS ?? 10_000),
-  // only claims for the same agent count: double recovery needs the same insured, and anyone else listing
-  // these orders at another insurer (order squatting) must not block this agent's payout
-  otherInsurersOrders: async (agentPayer) => {
+  // contribution: only the same agent's claims count (double recovery needs the same insured; anyone else
+  // listing these orders elsewhere cannot reduce this agent's payout), and only what was paid or approved
+  otherInsurersPaid: async (agentPayer, mine) => {
     const others = [fileCover, ...((state as { market?: { cover: string }[] }).market ?? []).map((m) => m.cover)].filter((c) => BigInt(c) !== coverIndex);
-    const orders: string[] = [];
+    let paid = 0n;
     for (const c of others) {
       const book = new KuasaCover(grpc, BigInt(c));
       const payerOf = new Map<bigint, string | undefined>();
       for (let id = 0n; id < 10_000n; id++) {
         const cl = await book.claim(id);
         if (!cl) break;
-        if (cl.status.tag === 'Rejected' || cl.status.tag === 'Fraud') continue; // turned down there
+        if (cl.status.tag !== 'Paid' && cl.status.tag !== 'Approved') continue;
+        if (!cl.orders.some((o) => mine.includes(o))) continue;
         if (!payerOf.has(cl.policyId)) payerOf.set(cl.policyId, (await book.policy(cl.policyId))?.agentPayer);
-        if (payerOf.get(cl.policyId) === agentPayer) orders.push(...cl.orders); // filed, assessed, approved or paid there
+        if (payerOf.get(cl.policyId) === agentPayer) paid += cl.status.tag === 'Paid' ? cl.payout : cl.amount; // approved: counted at its full claim until paid
       }
     }
-    return orders;
+    return paid;
   },
   autoPayDelayMs: AUTO_PAY_DELAY_MS,
   pay: (to, amount, memo) => treasuryPay(to, amount, memo), // submitted; txOutcome confirms it

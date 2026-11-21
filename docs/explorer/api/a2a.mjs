@@ -7729,11 +7729,36 @@ function solvency({ pool, now, policies, claims }) {
 
 // src/chain.ts
 var COVER_V1 = 13066n;
-var MARKET = [{ name: "Kuasa Re", cover: 13108n, pool: "3QLQkD8ZK4NDKEgQmxrwXkESkw3wwztrtF1sjjbYkGpHEsFcLo" }];
+var MARKET = [{ name: "Kuasa Re", cover: 13108n, pool: "3QLQkD8ZK4NDKEgQmxrwXkESkw3wwztrtF1sjjbYkGpHEsFcLo", token: [107, 5, 0, 0, 0, 0, 0, 0] }];
 var COVERS = [COVER_V1, 13100n, 13105n, ...MARKET.map((m) => m.cover)];
 var CURRENT = 13105n;
 var POOL = "3z1Xbe1xvT256jjptnBBPNQzESMM3xv8CYV45gEDu4PnkLmBut";
-var grpc = new ConcordiumGRPCWebClient("https://grpc.testnet.concordium.com", 2e4);
+function withRetry(client, delays = [800, 1600, 3200, 6400]) {
+  const transient = (e) => /429|UNAVAILABLE|Failed to fetch|NetworkError|ERR_FAILED/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`);
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      const v = Reflect.get(target, prop, receiver);
+      if (typeof v !== "function") return v;
+      return (...args) => {
+        const first = v.apply(receiver, args);
+        if (!(first instanceof Promise)) return first;
+        return (async () => {
+          let p = first;
+          for (let i = 0; ; i++) {
+            try {
+              return await p;
+            } catch (e) {
+              if (i >= delays.length || !transient(e)) throw e;
+              await new Promise((r) => setTimeout(r, delays[i] * (0.75 + Math.random() / 2)));
+              p = v.apply(receiver, args);
+            }
+          }
+        })();
+      };
+    }
+  });
+}
+var grpc = withRetry(new ConcordiumGRPCWebClient("https://grpc.testnet.concordium.com", 2e4));
 async function viewCover(method, param, cover = CURRENT) {
   const r = await grpc.invokeContract({ contract: ContractAddress.create(cover, 0n), method: ReceiveName.fromString(`kuasa_cover.${method}`), parameter: Parameter.fromBuffer(param.slice().buffer) });
   if (r.tag !== "success" || !r.returnValue) throw new Error(`${method} failed`);

@@ -11,8 +11,8 @@ import { connect, KuasaCover } from '@kuasa/chain';
 const show = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? String(x) : x));
 const st = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { cover: string; market: { url: string; cover: string }[]; mandates: Record<string, { payer: string }> };
 const LIMIT = BigInt(process.argv[2] ?? '90') * 1_000_000n;
-const bob = KuasaAgent.fromDemo('bob');
-for (const at of ['http://localhost:4023', ...st.market.map((m) => m.url)]) {
+const { agent: bob, market } = await KuasaAgent.fromDemoMarket('bob'); // insurers from the on-chain market directory
+for (const at of market.map((m) => m.url)) {
   const s = await (await fetch(`${at}/solvency`)).json() as { pool: string; exposure: string };
   console.log(`1. ${at}: pool ${s.pool}, live limits ${s.exposure}, free ${BigInt(s.pool) - BigInt(s.exposure)}`);
 }

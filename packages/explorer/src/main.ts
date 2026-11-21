@@ -5,7 +5,7 @@
  */
 import { type Claim, type Policy } from '@kuasa/core';
 import { quote, solvency } from '@kuasa/cover';
-import { attestationOf, COVER_V1, coverOf, CURRENT, decisionOf, holdOf, MARKET, POOL, poolBalance, scan } from './chain.js';
+import { attestationOf, COVER_V1, coverOf, CURRENT, decisionOf, eudemoOf, holdOf, insurerInfo, MARKET, POOL, poolBalance, scan } from './chain.js';
 
 const LABELS: Record<string, string> = {
   '4WmdhhLRPTk92STxiaXQFFNyJFLaM6k5kRq1ryFN8xjho1aq3s': 'Alice (owner)',
@@ -55,14 +55,18 @@ const ref = (r: Ref | undefined, i: number) => {
   return m ? `${m.name.replace('Kuasa ', '')} #${r.id}` : `#${r.id}`;
 };
 let policyRefs: Ref[] = [], claimRefs: Ref[] = [];
+const ratio = (paid: bigint, premiums: bigint) => (premiums === 0n ? '–' : `${(Number((paid * 1000n) / premiums) / 10).toFixed(1)}%`);
+let liveRatio = '–';
 function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (Awaited<ReturnType<typeof decisionOf>>)[] = [], attests: (string | null)[] = []) {
   const now = Date.now();
   const s = solvency({ pool, now, policies, claims: claims.map((c) => ({ status: c.status.tag })) });
   $('stats').innerHTML = [
     ['Pool', eur(s.pool)], ['Live exposure', eur(s.exposure)], ['Coverage', s.coverage === null ? '–' : `×${s.coverage}`],
     ['Live policies', String(s.livePolicies)], ['Premiums in', eur(s.premiums)], ['Paid out', eur(s.paidOut)],
-    // claims paid / premiums earned: the number an insurer and its regulator watch first
-    ['Loss ratio', s.premiums === 0n ? '–' : `${(Number((s.paidOut * 1000n) / s.premiums) / 10).toFixed(1)}%`],
+    // claims paid / premiums earned: the number an insurer and its regulator watch first. The early books
+    // (v1, v2) were the build-up, with demo claims staged on purpose; v3 and the market are the live book.
+    ['Loss ratio (all books)', ratio(s.paidOut, s.premiums)],
+    ['Loss ratio (v3 + market)', liveRatio],
   ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   // Pool vs the cover it owes: one series, the title names it, values labelled.
   const max = s.pool > s.exposure ? s.pool : s.exposure;
@@ -93,6 +97,24 @@ function render(policies: Policy[], claims: Claim[], pool: bigint, decisions: (A
     <div class="legend">${cats.map((c) => `<span><i style="background:${c.color}"></i>${c.label} (${c.n})</span>`).join('')}</div>${byClass(claims, decisions)}`;
   renderTimelines(claims, decisions, attests);
   $('updated').textContent = `Read from Concordium testnet at ${new Date().toLocaleTimeString()}`;
+}
+
+/** The market table: one row per insurer, from its own book, its pool and its self-description. */
+async function renderMarket(books: Awaited<ReturnType<typeof scan>>['books']) {
+  const rows = [{ name: 'Kuasa Cover', cover: CURRENT, pool: POOL }, ...MARKET];
+  const html: string[] = [];
+  for (const r of rows) {
+    const b = books.find((x) => x.cover === r.cover);
+    if (!b) continue;
+    const [bal, info] = await Promise.all([eudemoOf(r.pool).catch(() => 0n), insurerInfo(r.cover).catch(() => null)]);
+    // Kuasa Cover's pool also backs its earlier books: its exposure counts all of them
+    const own = r.cover === CURRENT ? books.filter((x) => !MARKET.some((m) => m.cover === x.cover)) : [b];
+    const s = solvency({ pool: bal, now: Date.now(), policies: own.flatMap((x) => x.policies), claims: own.flatMap((x) => x.claims).map((c) => ({ status: c.status.tag })) });
+    const free = s.pool > s.exposure ? s.pool - s.exposure : 0n;
+    const lb = solvency({ pool: 0n, now: Date.now(), policies: b.policies, claims: b.claims.map((c) => ({ status: c.status.tag })) });
+    html.push(`<tr><td>${esc(r.name)}</td><td class="mono"><a href="https://ccdexplorer.io/testnet/instance/${r.cover}/0" target="_blank" rel="noopener">&lt;${r.cover},0&gt;</a></td><td>${info?.price ? `×${Number(info.price) / 10_000}` : '–'}</td><td class="n">${eur(s.pool)}</td><td class="n">${eur(s.exposure)}</td><td class="n">${eur(free)}</td><td class="n">${b.policies.length}</td><td class="n">${ratio(lb.paidOut, lb.premiums)}</td></tr>`);
+  }
+  $('market').innerHTML = html.join('') || '<tr><td colspan="8" class="muted">–</td></tr>';
 }
 
 /** Paid out per risk class (reason-code family from the published decision): what each class of capital carries. */
@@ -156,8 +178,12 @@ function calc() {
 
 async function load() {
   try {
-    const [{ policies, claims, policyRefs: pr, claimRefs: cr }, pool] = await Promise.all([scan(), poolBalance()]);
+    const [{ policies, claims, policyRefs: pr, claimRefs: cr, books }, pool] = await Promise.all([scan(), poolBalance()]);
     policyRefs = pr; claimRefs = cr;
+    const live = books.filter((b) => b.cover >= CURRENT);
+    const liveS = solvency({ pool: 0n, now: Date.now(), policies: live.flatMap((b) => b.policies), claims: live.flatMap((b) => b.claims).map((c) => ({ status: c.status.tag })) });
+    liveRatio = ratio(liveS.paidOut, liveS.premiums);
+    void renderMarket(books);
     render(policies, claims, pool);
     // decisions are read after the first paint (one registry read per claim)
     const decisions: Awaited<ReturnType<typeof decisionOf>>[] = [];

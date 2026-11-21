@@ -12,7 +12,7 @@ import { Transaction } from '@concordium/web-sdk/transactions';
 import { CONCORDIUM_TESTNET_CAIP2 } from '@x402/concordium';
 import { ExactConcordiumScheme } from '@x402/concordium/exact/client';
 import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from '@x402/fetch';
-import { connect } from '@kuasa/chain';
+import { cis8004GetMetadata, connect } from '@kuasa/chain';
 import { type ClaimEvidence, type ClaimKind, defaultReason, encodeFileClaim, evidenceHash, REASON_CODES, type ReasonCode, type SignedDeliveryNote } from '@kuasa/core';
 import { type AgentRegistry, Cis8004Registry, makePayerProof } from '@kuasa/merchant';
 
@@ -86,6 +86,36 @@ export class KuasaAgent {
     // market: the other insurers set up on this testnet (state.market), if any
     const market = (JSON.parse(readFileSync(new URL('state.json', root), 'utf8')) as { market?: { url: string }[] }).market ?? [];
     return new KuasaAgent({ shopUrl, insurerUrl, mandateUrl: `${shopUrl}/kuasa/mandate/${name}.json`, payer: acc.address, payerKey: acc.key, scope, agents: new Cis8004Registry(connect()), insurers: market.map((m) => m.url) });
+  }
+
+  /**
+   * The market from the chain: the directory (`kuasa:market` on a known insurer's CIS-8004 entry) lists
+   * insurer entries; each entry's `kuasa:insurer` is written by its owner, so an insurer counts only if
+   * its entry is owned by the pool it advertises, and only if this agent's mandate names that pool.
+   */
+  static async discoverMarket(rootToken: string, allowedPools: string[], grpc = connect()) {
+    const list = (await cis8004GetMetadata(grpc, rootToken, 'kuasa:market'))?.split(',').filter(Boolean) ?? [];
+    const registry = new Cis8004Registry(grpc);
+    const out: { token: string; name: string; cover: string; pool: string; url: string; price: number }[] = [];
+    for (const token of list) {
+      const v = await cis8004GetMetadata(grpc, token, 'kuasa:insurer');
+      if (!v) continue;
+      const f = Object.fromEntries(v.split(';').map((kv) => kv.split('=') as [string, string]));
+      const owner = (await registry.agentOf(token).catch(() => null))?.owner;
+      if (!f.pool || owner !== f.pool || !allowedPools.includes(f.pool)) continue; // not self-attested by its pool, or not allowed
+      out.push({ token, name: f.name ?? token, cover: f.cover, pool: f.pool, url: f.url, price: Number(f.price ?? 10_000) });
+    }
+    return out;
+  }
+
+  /** A demo agent whose insurers come from the on-chain market directory (filtered by its mandate). */
+  static async fromDemoMarket(name: string, shopUrl?: string) {
+    const root = new URL('../../../.kuasa/', import.meta.url);
+    const st = JSON.parse(readFileSync(new URL('state.json', root), 'utf8')) as { insurerAgent: string };
+    const base = KuasaAgent.fromDemo(name, shopUrl);
+    const market = await KuasaAgent.discoverMarket(st.insurerAgent, base.opts.scope.merchants ?? []);
+    const [first, ...rest] = market.map((m) => m.url);
+    return { agent: new KuasaAgent({ ...base.opts, ...(first ? { insurerUrl: first } : {}), insurers: rest }), market };
   }
 
   private get insurerUrl() { return this.opts.insurerUrl ?? 'http://localhost:4023'; }

@@ -11,7 +11,7 @@ import { connect, KuasaCover } from '@kuasa/chain';
 
 const show = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? String(x) : x));
 const st = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { cover: string; market: { name: string; cover: string }[]; mandates: Record<string, { payer: string }> };
-const teen = KuasaAgent.fromDemo('teen');
+const { agent: teen } = await KuasaAgent.fromDemoMarket('teen'); // insurers from the on-chain market directory
 const payer = st.mandates.teen.payer;
 const LIMIT = 20_000_000n;
 

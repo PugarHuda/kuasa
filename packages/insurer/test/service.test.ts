@@ -159,21 +159,23 @@ async function filedClaim(t: ReturnType<typeof harness>, withEvidence: boolean, 
   return t.svc.assessClaim(id, [`r${id}`], ev?.doc);
 }
 
-test('market, other insurance: an order another insurer already paid or approved is not paid again', async () => {
-  const fresh = await filedClaim(harness({ otherInsurersOrders: async () => [] }), true, 0n);
-  assert.equal(fresh.ok, true, fresh.reason);
-  const dup = await filedClaim(harness({ otherInsurersOrders: async (payer) => (payer === PAYER ? [h(10)] : []) }), true, 0n);
-  assert.equal(dup.ok, false);
-  const down = harness({ otherInsurersOrders: async () => { throw new Error('node busy'); } });
+test('market, contribution: each insurer pays only what other insurers have not paid of the same loss (syndicated shares still pay)', async () => {
+  const full = await filedClaim(harness({ otherInsurersPaid: async () => 0n }), true, 0n);
+  assert.equal(full.ok, true, full.reason);
+  const share = await filedClaim(harness({ otherInsurersPaid: async (payer) => (payer === PAYER ? 20n * EUR : 0n) }), true, 0n); // 24 lost, 20 paid elsewhere
+  assert.equal(share.ok, true, share.reason);
+  assert.equal(share.payout, 4n * EUR);
+  const done = await filedClaim(harness({ otherInsurersPaid: async () => 24n * EUR }), true, 0n);
+  assert.match(done.reason, /paid in full by another insurer/);
+  const down = harness({ otherInsurersPaid: async () => { throw new Error('node busy'); } });
   await assert.rejects(filedClaim(down, true, 0n), /node busy/, 'fails closed when another book is unreadable');
-  // another insurer takes a claim on the same order after our assessment: the payout stops
-  let elsewhere: string[] = [];
-  const late = harness({ otherInsurersOrders: async () => elsewhere });
+  // another insurer pays part of it after our assessment: we pay only the rest
+  let elsewhere = 0n;
+  const late = harness({ otherInsurersPaid: async () => elsewhere });
   assert.equal((await filedClaim(late, true, 0n)).ok, true);
-  elsewhere = [h(10)];
-  const d = await late.svc.decide(0n, true);
-  assert.match(d.reason ?? '', /other insurance/);
-  assert.ok(!late.calls.some((c) => c.startsWith('pay:')), 'nothing paid');
+  elsewhere = 20n * EUR;
+  await late.svc.decide(0n, true);
+  assert.deepEqual(late.calls.filter((c) => c.startsWith('pay:')), [`pay:${PAYER}:${4n * EUR}`]);
 });
 
 test('approve pays the agent payer and records the payout', async () => {

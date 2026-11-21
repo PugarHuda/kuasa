@@ -22,7 +22,7 @@ import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, type Offer, signDeliveryNo
 
 const ROOT = new URL('../../../.kuasa/', import.meta.url);
 const PORT = Number(process.env.PORT ?? 4021);
-const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string; shopAgent?: string; insurerAgent?: string; market?: { name: string; cover: string }[] };
+const state = JSON.parse(readFileSync(new URL('state.json', ROOT), 'utf8')) as { registry: string; cover?: string; shopAgent?: string; insurerAgent?: string; market?: { name: string; cover: string; agent?: string }[] };
 const merchant = JSON.parse(readFileSync(new URL('accounts/merchant.json', ROOT), 'utf8')).accounts as { credNumber: number; address: string; key: string }[];
 const payTo = merchant.find((a) => a.credNumber === 0)!.address;
 const sponsor = merchant.find((a) => a.credNumber === 1)!;
@@ -75,7 +75,16 @@ const guard = new KuasaGuard({
   agents: new Cis8004Registry(grpc),
   cover: state.cover ? marketCover([state.cover, ...(state.market ?? []).map((m) => m.cover)]) : undefined,
   // the insurer's circuit breaker, read from its CIS-8004 entry
-  holdOf: state.insurerAgent ? (payer) => cis8004GetMetadata(grpc, state.insurerAgent!, `kuasa:hold:${payer}`) : undefined,
+  // every insurer on the market can pause an agent it insures: a hold on any of their entries counts
+  holdOf: state.insurerAgent ? async (payer) => {
+    let last: string | null = null;
+    for (const t of [state.insurerAgent!, ...(state.market ?? []).flatMap((m) => (m.agent ? [m.agent] : []))]) {
+      const v = await cis8004GetMetadata(grpc, t, `kuasa:hold:${payer}`);
+      if (v?.startsWith('hold')) return v;
+      last = v ?? last;
+    }
+    return last;
+  } : undefined,
 });
 
 const grpcCfg = { host: TESTNET.grpc.host, port: TESTNET.grpc.port, useTls: true };

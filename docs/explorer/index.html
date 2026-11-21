@@ -98,6 +98,14 @@
   </section>
 
   <section>
+    <h2>The market</h2>
+    <div class="panel scroll">
+      <p class="muted" style="margin:0 0 10px">Each insurer runs its own instance of the same kuasa-cover module, with its own pool and price, and describes itself on its own CIS-8004 entry (<span class="mono">kuasa:insurer</span>, written by the pool that owns the entry). Agents find them there and buy the cheapest cover with free capacity, or split it.</p>
+      <table><thead><tr><th>Insurer</th><th>Contract</th><th>Price</th><th class="n">Pool</th><th class="n">Live limits</th><th class="n">Free capacity</th><th class="n">Policies</th><th class="n">Loss ratio</th></tr></thead><tbody id="market"><tr><td colspan="8" class="muted">Reading testnet…</td></tr></tbody></table>
+    </div>
+  </section>
+
+  <section>
     <h2>Claim timeline</h2>
     <div class="panel">
       <label class="muted" for="claim-pick">Claim </label><select id="claim-pick"><option>Reading testnet…</option></select>

@@ -98,10 +98,12 @@ export type InsurerDeps = {
   /** Market: this insurer's pricing over the shared risk model (basis points, e.g. 9000 = 10% cheaper). */
   priceBps?: bigint;
   /**
-   * Market, "other insurance" clause: orders that another insurer on the market has paid or approved a
-   * claim for (read from their cover contracts). They count as already covered, so one loss is paid once.
+   * Market, contribution (the "other insurance" clause of co-insurance and syndicated cover): what other
+   * insurers on the market have paid, or approved to pay, this same agent for any of these orders. Each
+   * insurer pays only the part of the loss not paid elsewhere, up to its own limit: one loss is paid
+   * once in total, and every share of a syndicated policy still pays its part.
    */
-  otherInsurersOrders?(agentPayer: string): Promise<string[]>;
+  otherInsurersPaid?(agentPayer: string, orders: string[]): Promise<bigint>;
 };
 
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
@@ -487,8 +489,6 @@ export class InsurerService {
     }
     // No double cover: orders paid, approved or still open under ANY policy of the same mandate.
     const paidOrders = [...this.claims.values()].filter((x) => x.mandateId === p.mandate.id && x.verdict !== 'rejected' && (x.paid || x.verdict === 'approved' || x.assessment.ok)).flatMap((x) => x.orders);
-    // fails closed: if another insurer's book cannot be read, the claim is not assessed now (retried later)
-    if (this.deps.otherInsurersOrders) paidOrders.push(...await this.deps.otherInsurersOrders(p.agentPayer));
     // The off-chain evidence counts only if it is exactly what the claimant committed to on-chain.
     const knownCode = !!evidence && Object.hasOwn(REASON_CODES, evidence.reason);
     const ev = evidence && knownCode && (await evidenceHash(evidence).catch(() => '')) === c.evidence ? evidence : undefined;
@@ -498,12 +498,19 @@ export class InsurerService {
       if (signer && this.deps.verifyDelivery && await this.deps.verifyDelivery(d, signer).catch(() => false)) delivery.push(d.note);
     }
     const local = this.policies.find((x) => x.premiumTx === p.premiumTx);
-    const a = assess({
+    let a = assess({
       reason: ev?.reason, delivery, intentSkus: local?.skus,
       claim: { kind: c.kind, amount: c.amount, orders: c.orders },
       policy: { validFromMs: Number(p.validFromMs), validUntilMs: Number(p.validUntilMs), limit: p.limit, paidOut: p.paidOut, deductible: p.deductible, mandateId: p.mandate.id, owner: p.mandate.owner, orderRef: typeof p.kind === 'object' ? p.kind.order : undefined },
       receipts, priorPaidOrders: paidOrders, incidentFiled: (e?.incidents ?? 0n) > 0n,
     });
+    // contribution; fails closed: if another insurer's book cannot be read, the claim is not assessed now
+    if (a.ok && this.deps.otherInsurersPaid) {
+      const elsewhere = await this.deps.otherInsurersPaid(p.agentPayer, c.orders);
+      const room = c.amount - elsewhere;
+      if (room <= 0n) a = { ok: false, reason: 'already paid in full by another insurer on the market (contribution)', payout: 0n, noEvidence: false };
+      else if (elsewhere > 0n && a.payout > room) a = { ...a, payout: room, reason: `${a.reason}; ${elsewhere} already paid by another insurer on the market (contribution)` };
+    }
     await this.deps.cover.assess(claimId, a.ok, await sha256Hex(a.reason), this.deps.operator);
     const rec: ClaimRecord = {
       claimId, policyId: c.policyId, reason: ev?.reason, ...(ev ? { evidenceDoc: ev } : {}), compelling: this.compellingEvidence(e, p.mandate.id, c.orders, ev?.reason), holder: p.holder, claimant: c.claimant, recipient: c.kind === 'MerchantLoss' ? c.claimant : p.agentPayer,
@@ -868,21 +875,25 @@ export class InsurerService {
       if (!rec.paid && !rec.payoutTx) {
         const policy = await this.deps.cover.policy(rec.policyId);
         const remaining = policy ? policy.limit - policy.paidOut : 0n;
-        const amount = rec.assessment.payout < remaining ? rec.assessment.payout : remaining;
+        let amount = rec.assessment.payout < remaining ? rec.assessment.payout : remaining;
         if (amount <= 0n) {
           rec.payoutBlocked = 'policy limit exhausted';
           rec.final = true;
           return { decided: true, reason: rec.payoutBlocked };
         }
-        // other insurance, checked again right before money moves: another insurer may have taken a claim
-        // on these orders since the assessment; an unreadable book means wait, never pay blind
-        if (this.deps.otherInsurersOrders && policy) {
-          const other = await this.deps.otherInsurersOrders(policy.agentPayer).catch(() => null);
-          if (!other) return { decided: true, reason: "another insurer's book is unreadable: payout waits (approve again to retry)" };
-          if (rec.orders.some((o) => other.includes(o))) {
-            rec.payoutBlocked = 'another insurer has a claim on these orders (other insurance): a human decides';
+        // contribution, checked again right before money moves: another insurer may have paid part of this
+        // loss since the assessment; pay only what is left of it. An unreadable book means wait, never pay blind.
+        // ponytail: two insurers paying in the same seconds can still overlap; a cross-book lock needs a shared contract
+        if (this.deps.otherInsurersPaid && policy && onChain) {
+          const elsewhere = await this.deps.otherInsurersPaid(policy.agentPayer, rec.orders).catch(() => null);
+          if (elsewhere === null) return { decided: true, reason: "another insurer's book is unreadable: payout waits (approve again to retry)" };
+          const room = onChain.amount - elsewhere;
+          if (room <= 0n) {
+            rec.payoutBlocked = 'paid in full by another insurer on the market (contribution)';
+            rec.final = true;
             return { decided: true, reason: rec.payoutBlocked };
           }
+          if (amount > room) amount = room;
         }
         if ((await this.deps.treasuryBalance()) < amount) {
           rec.payoutBlocked = 'insufficient pool: approved, payout pending';
