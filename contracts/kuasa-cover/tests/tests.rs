@@ -498,3 +498,26 @@ fn bond_can_be_withdrawn_when_nothing_is_open() {
     call(&mut t, OWNER, "withdrawBond", &PAYER).unwrap();
     assert!(ccd(&t, OWNER) + Amount::from_micro_ccd(100_000) > before + Amount::from_ccd(10));
 }
+
+#[test]
+fn payouts_are_capped_by_the_claim_and_an_exhausted_limit_still_closes_claims() {
+    let mut t = setup();
+    issue(&mut t);
+    let approve = |t: &mut T, orders: Vec<HashSha2256>, amount: u64| -> u64 {
+        let mut c = claim(orders);
+        c.amount = amount;
+        let id: u64 = call(t, PAYER, "fileClaim", &c).unwrap().parse_return_value().unwrap();
+        call(t, OPERATOR, "assessClaim", &AssessParams { claim_id: id, ok: true, reason: HashSha2256([1; 32]) }).unwrap();
+        call(t, OPERATOR, "decideClaim", &DecideParams { claim_id: id, approve: true }).unwrap();
+        id
+    };
+    let pay = |t: &mut T, id: u64, amount: u64| call(t, OPERATOR, "recordPayout", &PayoutParams { claim_id: id, payout_tx: HashSha2256([2; 32]), amount });
+    let a = approve(&mut t, vec![ORDER_A], 100 * EUR);
+    let b = approve(&mut t, vec![ORDER_B], 24 * EUR);
+    assert!(pay(&mut t, b, 25 * EUR).is_err(), "never more than was claimed");
+    assert!(pay(&mut t, b, 0).is_err(), "zero only once the limit is used up");
+    pay(&mut t, a, 100 * EUR).unwrap();
+    pay(&mut t, b, 0).unwrap(); // the limit is used up: the claim closes instead of staying Approved for ever
+    let c: Option<Claim> = view(&t, "claim", &b);
+    assert!(matches!(c.unwrap().status, ClaimStatus::Paid { .. }));
+}

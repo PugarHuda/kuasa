@@ -3,43 +3,31 @@
 The form opens Mon 23 Nov, 06:59 GMT+7. The deadline is Thu 10 Dec, 06:59 GMT+7 (9 Dec, 23:59 UTC).
 
 ## Description
-Kuasa Cover is insurance for AI agent commerce, on Concordium.
+Kuasa Cover is insurance for AI agent commerce, on Concordium. Escrow protects you from bad sellers. Kuasa Cover protects you from your own agent.
 
-AI agents can pay on their own now. When one makes a mistake, nobody carries the loss: it orders twice, gets the wrong item, or harms a merchant. Kuasa Cover makes agent commerce insurable.
+**The problem**
+- AI agents now pay on their own. When one orders twice, buys the wrong item or harms a merchant, nobody carries the loss.
+- Shops cannot tell an accountable agent from an anonymous script.
 
 **How it works**
-1. **The owner verifies once.** The owner uses Concordium ID and gives the agent a mandate: budget, per-order limit, categories, merchants and expiry. The mandate carries a Verify & Access zero-knowledge proof (18+, EU resident) bound to that one agent.
-2. **The agent insures itself.** It buys cover over x402 in EUDemo, an allow-listed euro PLT. The premium is priced from on-chain facts and experience-rated.
-3. **Merchants check before taking payment.** They check the mandate, the proof, the agent's CIS-8004 entry, and that the order is insured.
-4. **Claims are paid from on-chain evidence.** The agent files them itself, with the fee sponsored. Claims of 10 EUDemo or less are paid automatically after an objection window, under rules the cover contract enforces. Larger ones need a human.
+1. **The owner verifies once.** Concordium ID plus a Verify & Access ZK proof (18+, EU resident) bound to one agent, with a signed mandate: budget, per-order limit, merchants, expiry.
+2. **The agent insures itself.** It buys cover over x402 in EUDemo (a PLT), priced from on-chain facts and its own claims history.
+3. **Shops check before taking payment:** mandate, proof, CIS-8004 badge, and that the order is insured.
+4. **Claims are paid from on-chain evidence.** Small claims pay automatically after an objection window, under rules the cover contract enforces; larger ones go to a human.
+5. **Prevention:** the insurer watches every block and pauses an agent that pays twice, or breaks a rule its owner signed, at every shop.
 
-**The demo agent is real.** Claude, given only the Kuasa MCP tools and no step hints, read the shop's refusal, bought the smallest cover that fit, and completed the purchase. Later it found a double charge and filed the claim itself.
+**What is live on testnet** (every step with its transactions: https://kuasa-explorer.vercel.app/evidence.html)
+- A real Claude agent with only the Kuasa MCP tools was refused, insured itself, bought, then found a double charge and filed the claim.
+- Two insurers in an open, bonded registry. An agent compares quotes on-chain and splits a large limit across them (Bob's 90 EUDemo: 80.36 + 9.64). Each loss is paid once.
+- An insurer that approves a claim and does not pay loses part of its bond to the claimant. Anyone can trigger it, no arbiter needed. The penalty sits in escrow, and a 2-of-3 juror multisig account can veto self-dealing (done live: one key was rejected by the node, two went through).
+- Paid claims are posted to the agent's ERC-8004 reputation on Ethereum Sepolia, and another insurer prices from it (x1.17 for an agent it never insured).
+- Merchants harmed by an agent claim on its cover; cancelled policies are refunded pro rata.
 
-**Each claim rests on three independent records**, all public on a live explorer:
-- the on-chain receipts;
-- the insurer's published decision (automatic or human);
-- the merchant's attestation that the orders are real. The fraud attempts show none.
+**Concordium components**
+Concordium ID and Verify & Access, Web3 ID, Agent Registry (CIS-8004) and the Verified by Concordium badge, CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, three smart contracts (kuasa-registry, kuasa-cover, kuasa-market) with cross-contract reads, registerData audit anchors (EU AI Act Art. 12), Privacy Guardians, MCP and A2A.
 
-**Evidence, not trust.** Claims carry chargeback-style reason codes. A wrong item is proven by the merchant's delivery note, signed by the same account that recorded the receipt on-chain. A purchase a prompt-injected agent made outside the owner's signed AP2 intent is covered as well.
-
-**The contract does more of the work (v3).** The insurer files a mistake it detected for the agent, and the contract pays it within its published rules, with nobody filing anything. Objections lock a CCD bond. Operators can bond their agents for a cheaper premium, and the bond is slashed into the pool if fraud is proven.
-
-**Prevention, not only payouts.** The insurer watches every finalized block. When an insured agent pays twice, it pauses that agent at every merchant guard until the owner resumes it, and the agent files the detected claim with one call. On testnet the shop refused the paused agent before any money moved, and the contract approved the automatic payout.
-
-**More integrations:**
-- The insurer is itself a badged agent with A2A skills, and the read-only skills are public.
-- Agents on EVM chains are covered too. An Ethereum key bound through CIS-8 lets an EVM merchant verify an agent's badge and cover from a signature. AgentKit agents can do it with their own wallet.
-- Fraud has consequences: a lawful-disclosure request for the identity provider and Privacy Guardians, anchored only after human review.
-
-**A market, not a single insurer.** Insurers join an open registry contract (kuasa-market) with a CCD bond. If an approved claim stays unpaid, anyone can slash that bond to pay the claimant: the registry reads the insurer's own cover contract, so no arbiter is needed. Judgement calls go to a Concordium account re-keyed to 2-of-3 juror keys. Two insurers are live. An agent finds them on-chain, keeps only those its owner's mandate names, and buys the cheapest cover. A limit no insurer can carry alone is split across their free capacity: Bob's 90 EUDemo went 80.36 to Kuasa Re and 9.64 to Kuasa Cover. Each insurer pays only what the others have not paid of the verified loss, so one loss is paid once.
-
-**Reputation that travels between chains.** Every paid claim is posted to the agent's ERC-8004 reputation on Ethereum Sepolia by the insurer itself (Alice's agent is agentId 11449). Another insurer reads that reputation back to price cover, with a two-way identity binding and trusted peers only: Kuasa Re charged Alice ×1.17 without ever having insured her.
-
-**Owners set the rules.** An owner can sign a rule such as "pause my agent above 5 EUDemo an hour", and the insurer enforces it through the same circuit breaker every shop honours. On testnet, Bob's agent was paused after a 24 EUDemo bottle and the shop refused its next purchase.
-
-**Both sides of the market.** A merchant harmed by an insured agent claims on that agent's cover; this was paid automatically on testnet. Cancelled policies get the unused premium back pro rata.
-
-Escrow protects you from bad sellers. Kuasa Cover protects you from your agent.
+**Path to production**
+Pools move into Protocol-Level Locks released only by the cover contract; EURQ replaces EUDemo; a licensed fronting insurer carries the risk while Kuasa acts as MGA and claims infrastructure. Details: https://github.com/PugarHuda/kuasa/blob/main/docs/PRODUCTION.md
 
 ## Code
 https://github.com/PugarHuda/kuasa

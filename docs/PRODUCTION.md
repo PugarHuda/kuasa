@@ -86,4 +86,32 @@ Ideas from other insurance, dispute and agent-trust systems, built into Kuasa Co
 | An open, bonded insurer registry | EigenLayer operator registry | `kuasa-market <13114,0>`: any insurer joins from its pool with a CCD bond, leaving takes 7 days, anyone can slash a bond when the insurer's own cover contract shows an approved claim still unpaid after the grace period (the market contract reads it directly; no arbiter), and an arbiter (a Concordium account re-keyed to 2-of-3 juror keys; in production a larger panel or a Kleros court) can slash by judgement. Agents discover insurers from it; ERC-8004 ratings count only from peers an insurer trusts (joining is open, so the registry alone is no trust anchor) | Live (both insurers bonded 10 CCD on v2; an unpaid approved claim slashed by a third party, no arbiter) |
 | Premium giveback | Lemonade | 10% of the premium back when a policy ends with no claim | Tested; live run started (Carol's 7-day policy #7 ends 28 November) |
 
-Still open: slashing tied to an on-chain proof that an approved claim went unpaid (today the arbiter decides), a real (larger) juror pool, the pool itself under protocol control (EUDemo is a protocol-level token, and as of protocol 9 only accounts hold and transfer PLTs, so a smart contract cannot hold the pool; the Protocol-Level Lock that would escrow it is on Concordium's roadmap. Today the pool is the treasury account plus an off-chain ledger, with every flow on-chain and the ledger audited), insurers beyond the two on testnet (each needs its own allow-listed pool account), and the card-network agent protocols ([docs/INTEGRATIONS.md](INTEGRATIONS.md#card-network-agent-protocols-visa-trusted-agent-protocol-mastercard-agent-pay)).
+Done since: slashing tied to an on-chain proof that an approved claim went unpaid (kuasa-market reads the insurer's own cover contract; the penalty waits in escrow that the 2-of-3 juror panel can veto). Still open: independent operators (see below), a real (larger) juror pool, the pool itself under protocol control (EUDemo is a protocol-level token, and as of protocol 9 only accounts hold and transfer PLTs, so a smart contract cannot hold the pool; the Protocol-Level Lock that would escrow it is on Concordium's roadmap. Today the pool is the treasury account plus an off-chain ledger, with every flow on-chain and the ledger audited), insurers beyond the two on testnet (each needs its own allow-listed pool account), and the card-network agent protocols ([docs/INTEGRATIONS.md](INTEGRATIONS.md#card-network-agent-protocols-visa-trusted-agent-protocol-mastercard-agent-pay)).
+
+## 7. From one operator to many
+
+On testnet one team runs every role, so the mechanisms can be shown end to end. What each role needs before mainnet:
+
+| Role | Testnet | Mainnet |
+|---|---|---|
+| Insurers | Kuasa Cover and Kuasa Re, both run by us | Any licensed carrier or MGA registers on kuasa-market with a bond; the registry already accepts anyone whose cover contract runs the audited module and names its own pool |
+| Jurors | Three keys held by us (teen #0, teen #1, investor #0) | Staked jurors from outside the team: insurers, merchants, owners' associations; the panel account re-keys to them with `UpdateCredentialKeys`, no contract change |
+| Capital providers | The investor persona | External depositors in the junior and senior tranches |
+| Keeper | GitHub Actions cron with a testnet key | Any account: every keeper call (settle, flag, slash, release) is permissionless |
+| Merchants | The demo shop | Shops that install the guard middleware |
+
+## 8. Security review of kuasa-cover (22 Nov)
+
+An independent review of `contracts/kuasa-cover` found no critical issue: status moves are final, a claim cannot be paid twice, payouts never exceed the policy limit, and state is updated before every transfer. Its findings, and what was done:
+
+| Finding | Status |
+|---|---|
+| A payout could exceed the claimed amount, using up cover other claims need | Fixed in code: `recordPayout` caps at the claim |
+| With the policy limit used up, an approved claim could never close, so kuasa-market could slash an honest insurer for it | Fixed in code: a zero payout closes it once the limit is exhausted |
+| A merchant's bogus MerchantLoss claim marked fraud would slash the agent's bond | Fixed in code: only fraud by the payer or holder costs the bond |
+| `recordPayout` is the operator's statement: a token payout cannot be checked by the contract, so an insurer could record a token payment to avoid the unpaid-claim slash | Open until the pool sits in a Protocol-Level Lock released by the contract (section 1). A floor at the claimed amount is not used because contribution between insurers legitimately pays less |
+| Objection bonds are released only when the claim is decided; objections are not limited per account | Open: one objection per account and a withdraw-after-timeout for objectors |
+| Order hashes are not checked against receipts at filing | Open: check them against kuasa-registry receipts |
+| The first poster of an agent bond owns it | Open: let only the payer post |
+
+The fixes ship with the next kuasa-cover deployment (25 contract tests pass). The live instances still run the reviewed code.

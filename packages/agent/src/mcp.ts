@@ -31,4 +31,8 @@ server.tool('appeal_claim', 'Appeal a rejected claim: re-file the same payments,
   { rejectedClaimId: z.string().regex(/^\d+$/), kind: z.enum(['AgentMistake', 'WrongItem']), amount: z.number().positive(), paymentTxs: z.array(z.string().regex(/^[0-9a-f]{64}$/)).min(1).max(2), reason: z.string().max(280) },
   async ({ rejectedClaimId, kind, amount, paymentTxs, reason }) => text(await agent.fileClaim(kind, paymentTxs, eur(amount), `appeal of #${rejectedClaimId}: ${reason}`)));
 
+// claim in chat: the owner asks once, the agent checks its own payments and files what it finds
+server.prompt('claim_my_mistakes', 'Check my recent purchases for mistakes (double charges, wrong items) and file an insurance claim for each one.', () => ({
+  messages: [{ role: 'user', content: { type: 'text', text: 'Check my recent purchases with kuasa_my_payments and cover_detected. For every mistake you find (two payments for the same item, an item outside my intent, a wrong item shipped), file a claim with file_claim using the right reason code, then tell me what you filed and when it will be paid. If you find nothing, say so.' } }],
+}));
 await server.connect(new StdioServerTransport());

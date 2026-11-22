@@ -1,0 +1,26 @@
+# Public keeper for kuasa-market: flags approved-but-unpaid claims, slashes them after the grace period
+# and releases escrowed slashes. Every call is permissionless and dry-run first (scripts/keeper.ts).
+name: keeper
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+concurrency: keeper
+jobs:
+  keep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter @kuasa/scripts...
+      - run: pnpm exec tsx keeper.ts
+        working-directory: scripts
+        env:
+          KUASA_MARKET: '13114'
+          KUASA_KEEPER_ADDRESS: ${{ secrets.KUASA_KEEPER_ADDRESS }}
+          KUASA_KEEPER_KEY: ${{ secrets.KUASA_KEEPER_KEY }}

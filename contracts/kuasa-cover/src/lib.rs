@@ -597,15 +597,18 @@ fn record_payout(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logg
     only_operator(ctx, host)?;
     let p: PayoutParams = ctx.parameter_cursor().get()?;
     let state = host.state_mut();
-    let policy_id = {
+    let (policy_id, claimed) = {
         let c = state.claims.get(&p.claim_id).ok_or(Error::NotFound)?;
         ensure!(c.status == ClaimStatus::Approved, Error::WrongStatus);
-        c.policy_id
+        (c.policy_id, c.amount)
     };
     {
         let mut policy = state.policies.get_mut(&policy_id).ok_or(Error::NotFound)?;
         let paid = policy.paid_out.checked_add(p.amount).ok_or(Error::OverLimit)?;
-        ensure!(p.amount > 0 && paid <= policy.limit, Error::OverLimit);
+        // never more than was claimed; zero only closes a claim whose policy limit is already used up
+        // (otherwise an approved claim could never leave Approved, and kuasa-market would slash for it)
+        let exhausted = policy.paid_out >= policy.limit;
+        ensure!(paid <= policy.limit && p.amount <= claimed && (p.amount > 0 || exhausted), Error::OverLimit);
         policy.paid_out = paid;
     }
     let payer = state.policies.get(&policy_id).ok_or(Error::NotFound)?.agent_payer;
@@ -633,7 +636,12 @@ fn mark_fraud(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger)
     if host.state().filed_for.contains(&p.claim_id) {
         return Ok(());
     }
-    let payer = host.state().policies.get(&policy_id).ok_or(Error::NotFound)?.agent_payer;
+    let (payer, holder) = host.state().policies.get(&policy_id).map(|p| (p.agent_payer, p.holder)).ok_or(Error::NotFound)?;
+    // only fraud by the agent's side: a merchant's bogus MerchantLoss claim never costs the agent its bond
+    let (claimant, kind) = host.state().claims.get(&p.claim_id).map(|c| (c.claimant, c.kind)).ok_or(Error::NotFound)?;
+    if kind == ClaimKind::MerchantLoss || (claimant != payer && claimant != holder) {
+        return Ok(());
+    }
     let bond = host.state().bonds.get(&payer).map(|b| *b);
     if let Some(b) = bond {
         host.state_mut().bonds.remove(&payer);

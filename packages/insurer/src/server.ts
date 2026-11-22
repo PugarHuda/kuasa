@@ -168,6 +168,21 @@ function publishDecision(claimId: bigint | string, by: 'auto' | 'human' | 'panel
     .then((existing) => (existing?.includes(`verdict=${verdict};`) ? undefined : cis8004SetMetadata(grpc, state.insurerAgent!, key, value, treasury)))
     .catch((e) => console.error('[insurer] publishing decision failed', String(claimId), (e as Error).message));
   if (paid) void postReputation(BigInt(claimId)).catch((e) => console.error('[insurer] ERC-8004 feedback failed', String(claimId), (e as Error).message));
+  if (paid) void publishRisk(BigInt(claimId)).catch((e) => console.error('[insurer] publishing risk failed', String(claimId), (e as Error).message));
+}
+
+/**
+ * Know-your-agent score: after a paid claim the agent's risk (claims-experience premium multiplier,
+ * paid claims across every book) goes on the insurer's CIS-8004 entry as kuasa:risk:<payer>, so a
+ * merchant can read it over the Agent Registry MCP without asking the insurer.
+ */
+async function publishRisk(claimId: bigint) {
+  if (!state.insurerAgent) return;
+  const c = await cover.claim(claimId);
+  const p = c && await cover.policy(c.policyId);
+  if (!p) return;
+  const r = await riskOf(p.agentPayer);
+  await cis8004SetMetadata(grpc, state.insurerAgent, `kuasa:risk:${p.agentPayer}`, `multiplier=${r.premiumMultiplier};paidClaims=${r.paidClaims};at=${Math.floor(Date.now() / 1000)}`, treasury);
 }
 
 /**

@@ -118,9 +118,9 @@ async function renderMarket(books: Awaited<ReturnType<typeof scan>>['books']) {
     const lb = solvency({ pool: 0n, now: Date.now(), policies: b.policies, claims: b.claims.map((c) => ({ status: c.status.tag })) });
     const reg = listed.find((x) => x.pool === r.pool);
     const bond = reg ? `${(Number(reg.bond) / 1e6).toLocaleString('en')} CCD${reg.exitAt !== null ? ' (leaving)' : ''}` : 'not listed';
-    html.push(`<tr><td>${esc(r.name)}</td><td class="n">${esc(bond)}</td><td class="mono"><a href="https://ccdexplorer.io/testnet/instance/${r.cover}/0" target="_blank" rel="noopener">&lt;${r.cover},0&gt;</a></td><td>${info?.price ? `×${Number(info.price) / 10_000}` : '–'}</td><td class="n">${eur(s.pool)}</td><td class="n">${eur(s.exposure)}</td><td class="n">${eur(free)}</td><td class="n">${b.policies.length}</td><td class="n">${ratio(lb.paidOut, lb.premiums)}</td></tr>`);
+    html.push(`<tr><td>${esc(r.name)}</td><td class="n">${esc(bond)}</td><td class="mono"><a href="https://ccdexplorer.io/testnet/instance/${r.cover}/0" target="_blank" rel="noopener">&lt;${r.cover},0&gt;</a></td><td>${info?.price ? `×${Number(info.price) / 10_000}` : '–'}</td><td class="n">${eur(s.pool)}</td><td class="n">${eur(s.exposure)}</td><td class="n">${eur(free)}</td><td class="n">${s.exposure > 0n ? `×${(Number(s.pool) / Number(s.exposure)).toFixed(2)}` : '–'}</td><td class="n">${b.policies.length}</td><td class="n">${ratio(lb.paidOut, lb.premiums)}</td></tr>`);
   }
-  $('market').innerHTML = html.join('') || '<tr><td colspan="9" class="muted">–</td></tr>';
+  $('market').innerHTML = html.join('') || '<tr><td colspan="10" class="muted">–</td></tr>';
 }
 
 /** Paid out per risk class (reason-code family from the published decision): what each class of capital carries. */
