@@ -24,7 +24,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import { handleA2a } from './a2a.js';
 import { CapitalLedger, capitalClassOf, type RiskClass } from './capital.js';
-import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, claimKey, COVER_V1, connect, finalizedHeight, registryReceiptsAt, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, TESTNET, wallet } from '@kuasa/chain';
+import { AuditLog, bigintJson, cis8004GetMetadata, cis8004SetMetadata, claimKey, COVER_V1, connect, finalizedHeight, registryReceiptsAt, KuasaCover, KuasaRegistry, registerData, registryEventsOfTx, submit, TESTNET, wallet } from '@kuasa/chain';
 import { canonicalJson, type ClaimEvidence, decodeMarketInsurers, evidenceHash, MandateSchema, mandateId, sha256Hex } from '@kuasa/core';
 import { Cis8004Registry, KuasaGuard, MANDATE_HEADER, MandateProofIdentity, safeFetchText, verifyAp2Intent, verifyDeliveryNote, verifyPayerProof } from '@kuasa/merchant';
 import { InsurerService } from './service.js';
@@ -304,6 +304,15 @@ const registryIndex = BigInt(state.registry);
 const coverIndex = BigInt(state.cover);
 const registry = new KuasaRegistry(grpc, registryIndex);
 const cover = new KuasaCover(grpc, coverIndex);
+/** kuasa-certificate for this cover contract (a CIS-2 token per policy, balance read live from the cover). */
+const CERTIFICATES: Record<string, string> = { '13105': '13120', '13108': '13121', ...((state as { certificates?: Record<string, string> }).certificates ?? {}) };
+function announceCertificate(policyId: bigint) {
+  const cert = process.env.KUASA_CERTIFICATE ?? CERTIFICATES[String(coverIndex)];
+  if (!cert) return;
+  const param = new Uint8Array([8, ...new Uint8Array(new BigUint64Array([policyId]).buffer)]); // TokenIdU64
+  void submit(grpc, Transaction.updateContract({ amount: sdk.CcdAmount.zero(), address: sdk.ContractAddress.create(BigInt(cert), 0n), receiveName: sdk.ReceiveName.fromString('kuasa_certificate.announce'), message: sdk.Parameter.fromBuffer(param.buffer) }, sdk.Energy.create(30_000)) as Transaction.Builder, operator)
+    .catch((e) => console.error('[insurer] certificate announce failed', String(policyId), (e as Error).message));
+}
 /** The version comes from configuration (any instance after v1 is v2); a v2 contract's rules are mandatory. */
 const isV2 = coverIndex !== COVER_V1;
 let rules: Awaited<ReturnType<KuasaCover['rules']>> = null;
@@ -342,7 +351,12 @@ const svc = new InsurerService({
   ap2Merchant: (name) => AP2_MERCHANTS[name],
   verifyPayer: (payer, proof) => verifyPayerProof({ header: proof as (n: string) => string | undefined, payer, audience: AUDIENCES, accountInfo: (a) => grpc.getAccountInfo(a) }),
   cover: {
-    issuePolicy: async (p) => { const r = await cover.issuePolicy(p, operator); return { hash: r.hash, id: KuasaCover.idFromEvents(r.summary, coverIndex) }; },
+    issuePolicy: async (p) => {
+      const r = await cover.issuePolicy(p, operator);
+      const id = KuasaCover.idFromEvents(r.summary, coverIndex);
+      if (id !== null) announceCertificate(id); // the CIS-2 certificate shows up in wallets and explorers
+      return { hash: r.hash, id };
+    },
     policy: (id) => cover.policy(id),
     claim: (id) => cover.claim(id),
     ...(rules ? { autoApprove: (id: bigint) => cover.autoApprove(id, operator) } : {}),
