@@ -12,7 +12,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { loadProfile } from './lib/identity.js';
 
 const STATE = new URL('../.kuasa/state.json', import.meta.url);
-const state = JSON.parse(readFileSync(STATE, 'utf8')) as { cover: string; coverModuleRef: string; marketModuleRef?: string; marketContract?: string; marketContractV1?: string; marketContractV2?: string; market: { name: string; cover: string; url: string }[] };
+const state = JSON.parse(readFileSync(STATE, 'utf8')) as { cover: string; coverModuleRef: string; marketModuleRef?: string; marketContract?: string; marketContractV1?: string; marketContractV2?: string; marketContractV3?: string; market: { name: string; cover: string; url: string }[] };
 // --v2: the registry with arbiter-free slashing (flagUnpaid/slashUnpaid) and the 2-of-3 panel as arbiter;
 // the first registry is kept as marketContractV1 and both insurers leave it (bonds back after 7 days)
 if (process.argv.includes('--v2') && !state.marketContractV1) {
@@ -24,7 +24,12 @@ if (process.argv.includes('--v3') && !state.marketContractV2) {
   state.marketContractV2 = state.marketContract; state.marketContract = undefined; state.marketModuleRef = undefined;
   writeFileSync(STATE, JSON.stringify(state, null, 2));
 }
-const previous = state.marketContractV2 ?? state.marketContractV1;
+// --v4: escrowed slashes outlive the insurer's registration
+if (process.argv.includes('--v4') && !state.marketContractV3) {
+  state.marketContractV3 = state.marketContract; state.marketContract = undefined; state.marketModuleRef = undefined;
+  writeFileSync(STATE, JSON.stringify(state, null, 2));
+}
+const previous = state.marketContractV3 ?? state.marketContractV2 ?? state.marketContractV1;
 const save = () => writeFileSync(STATE, JSON.stringify(state, null, 2));
 const grpc = connect();
 const acct = (name: string, n: number): Wallet => { const a = loadProfile(name).accounts.find((x) => x.credNumber === n)!; return wallet(a.address, a.key); };

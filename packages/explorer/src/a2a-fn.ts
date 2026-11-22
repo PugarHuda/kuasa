@@ -11,7 +11,7 @@ import { feedbackFor } from './erc8004.js';
 import { verifyEvmAgent } from './evm.js';
 
 /**
- * The market in one call: every insurer on the open registry (kuasa-market <13112,0>) with its bond,
+ * The market in one call: every insurer on the open registry (kuasa-market <13114,0>) with its bond,
  * price and URL, and its pool, live limits and free capacity recomputed from its own book.
  */
 async function market() {
@@ -24,7 +24,7 @@ async function market() {
     out.push({ name: i.name, pool: i.pool, cover: `<${i.cover},0>`, url: i.url, priceMultiplier: i.priceBps / 10_000, bondMicroCcd: String(i.bond), leaving: i.exitAt !== null,
       poolBalance: String(pool), liveLimits: s ? String(s.exposure) : null, freeCapacity: s ? String(s.pool > s.exposure ? s.pool - s.exposure : 0n) : null });
   }
-  return { registry: '<13112,0>', insurers: out, note: 'free capacity counts this book only; an insurer may back other books from the same pool' };
+  return { registry: '<13114,0>', insurers: out, note: 'free capacity counts this book only; an insurer may back other books from the same pool' };
 }
 
 const skills = {
