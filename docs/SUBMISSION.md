@@ -45,7 +45,7 @@ Escrow protects you from bad sellers. Kuasa Cover protects you from your agent.
 https://github.com/PugarHuda/kuasa
 
 ## Demo video
-https://youtu.be/Tqe_CLniIl0
+https://youtu.be/gLmIZl-64h0
 
 ## Testnet link
 https://ccdexplorer.io/testnet/instance/13105/0 (kuasa-cover v3; v2: https://ccdexplorer.io/testnet/instance/13100/0, v1: https://ccdexplorer.io/testnet/instance/13066/0). Second insurer Kuasa Re: https://ccdexplorer.io/testnet/instance/13108/0. Open insurer registry kuasa-market: https://ccdexplorer.io/testnet/instance/13114/0.
