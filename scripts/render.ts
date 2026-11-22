@@ -134,7 +134,10 @@ createServer(async (req, res) => {
         vpLastByIp.set(ip, Date.now());
         if (vpLastByIp.size > 5000) vpLastByIp.clear();
         vpToday++;
-        const r = await anchorWalletRequest(grpc, body.account, typeof body.agentToken === 'string' ? body.agentToken : undefined);
+        const agentToken = typeof body.agentToken === 'string' ? body.agentToken : undefined;
+        // a proof bound to an agent only for the account that owns it (and it is not revoked) in the Agent Registry
+        if (agentToken && !(await agentsOf(body.account)).some((a) => a.tokenHex === agentToken && a.status !== 'Revoked')) return fail(403, 'that agent is not yours in the Agent Registry');
+        const r = await anchorWalletRequest(grpc, body.account, agentToken);
         for (const [k, v] of vpRequests) if (Date.now() - v.at > 30 * 60_000) vpRequests.delete(k);
         const session = crypto.randomUUID(); // unguessable: only the page that asked can answer
         vpRequests.set(session, { at: Date.now(), request: r.request, account: body.account, tries: 0 });

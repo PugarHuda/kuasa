@@ -65,7 +65,7 @@ export async function prepareOwnerTx(grpc: ConcordiumGRPCClient, owner: string, 
   if (action === 'issue') {
     if (!/^[0-9a-f]{16}$/.test(args.agentToken ?? '')) throw new Error('agentToken: 16 hex characters');
     const mine = await agentsOf(owner);
-    if (!mine.some((a) => a.tokenHex === args.agentToken)) throw new Error('that agent is not yours in the Agent Registry');
+    if (!mine.some((a) => a.tokenHex === args.agentToken && a.status !== 'Revoked')) throw new Error('that agent is not yours in the Agent Registry');
     const id = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex');
     const shopPayTo = loadProfile('merchant').accounts.find((a) => a.credNumber === 0)!.address;
     const insurer = loadProfile('insurer').accounts.find((a) => a.credNumber === 0)!.address;
