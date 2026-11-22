@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@concordium/web-sdk": "^12.0.2",
+    "@concordium/web-sdk": "^12.0.3",
     "@kuasa/agent": "workspace:*",
     "@kuasa/chain": "workspace:*",
     "@kuasa/core": "workspace:*",

@@ -10,7 +10,7 @@
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@concordium/web-sdk": "^12.0.2",
+    "@concordium/web-sdk": "^12.0.3",
     "@kuasa/core": "workspace:*"
   }
 }
