@@ -164,15 +164,20 @@ function publishDecision(claimId: bigint | string, by: 'auto' | 'human' | 'panel
   const value = `by=${by};verdict=${verdict};paid=${paid ?? '-'};${code}at=${Math.floor(Date.now() / 1000)}`;
   const key = claimKey('decision', state.cover, claimId);
   // a decision is final: if it is already on-chain (e.g. republished after a restart), pay no fee again
+  // risk score and owner alert follow only a decision written now, never a republish after a restart: a
+  // restart republishes every past decision, and re-scoring them all floods the public node (HTTP 429)
   void cis8004GetMetadata(grpc, state.insurerAgent, key)
-    .then((existing) => (existing?.includes(`verdict=${verdict};`) ? undefined : cis8004SetMetadata(grpc, state.insurerAgent!, key, value, treasury)))
+    .then(async (existing) => {
+      if (existing?.includes(`verdict=${verdict};`)) return;
+      await cis8004SetMetadata(grpc, state.insurerAgent!, key, value, treasury);
+      if (!paid) return;
+      void publishRisk(BigInt(claimId)).catch((e) => console.error('[insurer] publishing risk failed', String(claimId), (e as Error).message));
+      const c = await cover.claim(BigInt(claimId));
+      const p = c && await cover.policy(c.policyId);
+      if (p) notifyOwner(p.agentPayer, 'Claim paid', `Kuasa Cover paid claim ${claimId} (${Number(c!.payout) / 1e6} EUDemo) for your agent ${p.agentPayer.slice(0, 8)}…: https://ccdexplorer.io/testnet/transaction/${paid}`);
+    })
     .catch((e) => console.error('[insurer] publishing decision failed', String(claimId), (e as Error).message));
   if (paid) void postReputation(BigInt(claimId)).catch((e) => console.error('[insurer] ERC-8004 feedback failed', String(claimId), (e as Error).message));
-  if (paid) void publishRisk(BigInt(claimId)).catch((e) => console.error('[insurer] publishing risk failed', String(claimId), (e as Error).message));
-  if (paid) void cover.claim(BigInt(claimId)).then(async (c) => {
-    const p = c && await cover.policy(c.policyId);
-    if (p) notifyOwner(p.agentPayer, 'Claim paid', `Kuasa Cover paid claim ${claimId} (${Number(c!.payout) / 1e6} EUDemo) for your agent ${p.agentPayer.slice(0, 8)}…: https://ccdexplorer.io/testnet/transaction/${paid}`);
-  }).catch(() => undefined);
 }
 
 /**

@@ -44,6 +44,9 @@ export async function runTry(log: (line: string) => void) {
     }
   }
   log("2. Alice's agent and its cover");
+  // a run cut short leaves the agent paused: its owner resumes it first, as after every finished run
+  const held = await alice.detections().then((d) => (d as { hold?: string | null }).hold).catch(() => null);
+  if (held) { await consoleCall(`/holds/${payer}/clear`, { method: 'POST', body: '{}' }); log('   the agent was still paused by an earlier run; its owner resumes it'); }
   const status = await alice.coverStatus();
   if (BigInt(status.onChain.periodRemaining || '0') < 10n * EUR) {
     // too little cover left for a claim: a claim approved beyond the limit could never be paid, and the
