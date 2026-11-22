@@ -14,7 +14,9 @@ import { connect } from '@kuasa/chain';
 import { decodeMarketInsurers } from '@kuasa/core';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const SHOP = 'http://localhost:4021';
 const INSURER = 'http://localhost:4023';
+const RE = 'http://localhost:4024';
 const tx = (h: string) => `https://ccdexplorer.io/testnet/transaction/${h}`;
 const EUR = 1_000_000n;
 const TRANSIENT = /unavailable|lookup_failed|UNAVAILABLE|502|timed out/i;
@@ -28,12 +30,17 @@ export async function runTry(log: (line: string) => void) {
     for (const i of decodeMarketInsurers(new Uint8Array(sdk.ReturnValue.toBuffer(iv.returnValue)))) log(`   ${i.name}: cover contract <${i.cover},0>, bond ${Number(i.bond) / 1e6} CCD${i.exitAt ? ' (leaving)' : ''}`);
   }
 
-  const alice = KuasaAgent.fromDemo('alice');
+  // explicit URLs: Kuasa Re's settings share this process's environment (KUASA_INSURER_URL points at Re)
+  const alice = KuasaAgent.fromDemo('alice', SHOP, INSURER);
   const payer = st.mandates.alice.payer;
-  log("   each insurer prices the same cover for Alice's agent (50 EUDemo, 30 days):");
-  for (const [name, at] of [['Kuasa Cover', INSURER], ['Kuasa Re', 'http://localhost:4024']] as const) {
-    const q = await alice.coverQuote(50n * EUR, 30, undefined, undefined, false, at).catch(() => null) as { premium?: string; refused?: string; factors?: { name: string; multiplier: number }[] } | null;
-    log(`   ${name}: ${!q ? 'offline' : q.refused ?? `${Number(q.premium) / 1e6} EUDemo [${(q.factors ?? []).map((f) => `${f.name} x${f.multiplier}`).join(', ')}]`}`);
+  const bob = KuasaAgent.fromDemo('bob', SHOP, INSURER);
+  const order = await bob.quote('/shop/wine/rioja');
+  if (order.orderRef) {
+    log("   both insurers quote cover for one order: Bob's agent wants a 24 EUDemo bottle of wine");
+    for (const [name, at] of [['Kuasa Cover', INSURER], ['Kuasa Re', RE]] as const) {
+      const q = await bob.coverQuote(0n, 1, { ref: order.orderRef, amount: BigInt(order.amount!) }, undefined, false, at).catch(() => null) as { premium?: string; refused?: string; factors?: { name: string; multiplier: number }[] } | null;
+      log(`   ${name}: ${!q ? 'offline' : q.refused ?? `${Number(q.premium) / 1e6} EUDemo [${(q.factors ?? []).map((f) => `${f.name} x${f.multiplier}`).join(', ')}]`}`);
+    }
   }
   log("2. Alice's agent and its cover");
   const status = await alice.coverStatus();
