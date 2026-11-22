@@ -30,7 +30,8 @@ createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.setHeader('access-control-allow-methods', 'POST'); res.end(); return; }
   if (req.method === 'GET' && req.url === '/health') { res.end('ok'); return; }
   if (req.method !== 'POST' || req.url !== '/try') { res.statusCode = 404; res.end('not found'); return; }
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '').split(',')[0].trim();
+  // the last X-Forwarded-For entry is the one Render's proxy appends; earlier ones are client-supplied
+  const ip = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '').split(',').at(-1)!.trim();
   const now = Date.now();
   const d = new Date().toISOString().slice(0, 10);
   if (d !== day) { day = d; today = 0; }
