@@ -111,6 +111,11 @@ createServer(async (req, res) => {
     return;
   }
   if (req.method === 'GET' && req.url === '/health') { res.end('ok'); return; }
+  if (req.method === 'GET' && req.url === '/ip') { // the caller's own address as the proxy chain reports it (rate limits key on it)
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ xff: req.headers['x-forwarded-for'] ?? null, cf: req.headers['cf-connecting-ip'] ?? null, trueClient: req.headers['true-client-ip'] ?? null, xRealIp: req.headers['x-real-ip'] ?? null }));
+    return;
+  }
   if (req.method === 'GET' && req.url === '/stats') {
     // public, read-only: what the hosted insurers hold and owe right now, from their own solvency views
     const get = (u: string) => fetch(u, { signal: AbortSignal.timeout(20_000) }).then((r) => r.json()).catch(() => null);
