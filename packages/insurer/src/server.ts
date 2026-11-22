@@ -182,7 +182,11 @@ async function publishRisk(claimId: bigint) {
   const p = c && await cover.policy(c.policyId);
   if (!p) return;
   const r = await riskOf(p.agentPayer);
-  await cis8004SetMetadata(grpc, state.insurerAgent, `kuasa:risk:${p.agentPayer}`, `multiplier=${r.premiumMultiplier};paidClaims=${r.paidClaims};at=${Math.floor(Date.now() / 1000)}`, treasury);
+  const key = `kuasa:risk:${p.agentPayer}`;
+  const score = `multiplier=${r.premiumMultiplier};paidClaims=${r.paidClaims};`;
+  // decisions are republished after a restart: write only when the score changed (each write is a transaction)
+  if ((await cis8004GetMetadata(grpc, state.insurerAgent, key))?.startsWith(score)) return;
+  await cis8004SetMetadata(grpc, state.insurerAgent, key, `${score}at=${Math.floor(Date.now() / 1000)}`, treasury);
 }
 
 /**
@@ -258,6 +262,7 @@ async function eudemoBalance(address: string) {
   return t ? BigInt(t.state.balance.value) : 0n;
 }
 
+let lastCapacity: { pool: bigint; exposure: bigint; at: number } | null = null;
 const STATE_NAME = process.env.KUASA_STATE_FILE ?? 'insurer-state.json';
 const STATE_FILE = new URL(STATE_NAME, ROOT);
 const svc = new InsurerService({
@@ -304,7 +309,16 @@ const svc = new InsurerService({
   verifyAp2Owner: (intent, owner) => verifyAp2Intent(intent, owner, (a) => grpc.getAccountInfo(a)),
   verifyDelivery: (d, signer) => verifyDeliveryNote(d, signer, (a) => grpc.getAccountInfo(a)),
   treasuryBalance: () => eudemoBalance(treasury.address.address),
-  capacity: async () => { const s = await solvencyNow(); return { pool: s.pool - pendingOut(), exposure: s.exposure }; },
+  // a busy public node (HTTP 429) can fail the full scan: the last good reading stands for 2 minutes
+  capacity: async () => {
+    try {
+      const s = await solvencyNow();
+      lastCapacity = { pool: s.pool, exposure: s.exposure, at: Date.now() };
+    } catch (e) {
+      if (!lastCapacity || Date.now() - lastCapacity.at > 120_000) throw e;
+    }
+    return { pool: lastCapacity!.pool - pendingOut(), exposure: lastCapacity!.exposure };
+  },
   ...(isV3 ? { bondOf: (payer: string) => cover.bondOf(payer) } : {}),
   paidClaims: async (payer) => {
     return paidClaimsOf(payer);
