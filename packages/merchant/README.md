@@ -34,3 +34,13 @@ the insurer pays claims from the receipts the guard records.
 
 The package lives in this monorepo and is not published to npm yet. Publishing it is a step on the
 [path to production](../../docs/PRODUCTION.md).
+
+## Show it to your customers
+
+One tag shows the buying agent's live cover, read from the contract through the insurer's public A2A skill:
+
+```html
+<script src="https://kuasa-explorer.vercel.app/badge.js" data-payer="4DRGyL6GkXQXs8CT7KovczM9SbwVgn8KsKAvQtFt4G4puhXKLc"></script>
+```
+
+Live example: https://kuasa-explorer.vercel.app/badge.html
