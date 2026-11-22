@@ -1,6 +1,6 @@
 # Kuasa Cover
 
-**Insurance for AI agent commerce, on Concordium.** Payment guards stop a bad payment before it happens. Kuasa pays when one gets through.
+**Insurance for AI agent commerce, on Concordium.** Concordium answers *who is behind your agent*; Kuasa answers *who pays when it gets it wrong*. Payment guards stop a bad payment before it happens. Kuasa pays when one gets through.
 
 **Judging? Start with [docs/JUDGING.md](docs/JUDGING.md)**: five minutes, a button that runs a live claim, and `pnpm verify` to re-check every transaction without keys.
 

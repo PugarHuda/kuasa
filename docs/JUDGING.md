@@ -26,10 +26,19 @@ No keys, no accounts and none of our services: it only reads the public testnet 
 ## 4. What to look at, by judging criterion
 | Criterion | Where |
 |---|---|
-| Depth of integration | Concordium ID and Verify & Access (ZK 18+ and EU residency bound to one agent), Agent Registry CIS-8004 and the badge, CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, three contracts with cross-contract reads, registerData audit anchors. Table: [README](../README.md#concordium-components) |
-| It works | The Try it button above; [evidence tour](https://kuasa-explorer.vercel.app/evidence.html) (every live step with its transactions); `pnpm verify` |
+| Depth of integration | Concordium ID and Verify & Access V1 with all three anchors (request, presentation, audit anchor; ZK 18+ and EU residency bound to one agent), Agent Registry CIS-8004 with the badge and the agentWallet each payment must come from (cleared on transfer), Agent Cards from the registry's own builder (badge valid, card hash matches on-chain), CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, three contracts with cross-contract reads, registerData audit anchors. Table: [README](../README.md#concordium-components) |
+| It works | The Try it button above; live numbers at https://kuasa-live.onrender.com/stats; [evidence tour](https://kuasa-explorer.vercel.app/evidence.html) (every live step with its transactions); `pnpm verify` |
 | Path to production | [PRODUCTION.md](PRODUCTION.md): pools under Protocol-Level Locks, EURQ, a licensed fronting insurer with Kuasa as MGA, independent operators, open security findings |
 | Usefulness | Agents now spend money on their own; when one double-pays, buys outside its owner's intent or harms a merchant, Kuasa pays, priced from on-chain facts. From the mistake to the payout: about 5 minutes, no human (median of recorded runs, on-chain) |
+
+## What the contracts enforce, and what waits for Protocol-Level Locks
+Enforced on-chain today: the policy terms and limits, the claim lifecycle and its automatic-approval rules
+(`autoApprove` refuses anything outside them), bonded objections, and the insurers' CCD bonds on kuasa-market:
+an insurer that approves a claim and does not pay is slashed by anyone, into an escrow the juror panel can
+veto. Not enforced yet: the EUDemo payout itself, because Protocol-Level Tokens cannot be held by smart
+contracts. Concordium's Protocol-Level Locks (Simple, January 2027; contract-authenticated Enhanced, March
+2027) are the protocol answer; the cover contract's `claimsAuthorized` view is already the release condition
+they need ([PRODUCTION.md](PRODUCTION.md)).
 
 ## Honest limits
 - Every role on testnet is played by one team: both insurers, the three jurors, the capital providers

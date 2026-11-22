@@ -116,3 +116,18 @@ An independent review of `contracts/kuasa-cover` found no critical issue: status
 | The first poster of an agent bond owns it | Open: let only the payer post |
 
 The fixes ship with the next kuasa-cover deployment (25 contract tests pass). The live instances still run the reviewed code.
+
+## 9. Concordium roadmap Kuasa plugs into (checked 22 Nov 2026)
+
+| Roadmap item | Status (concordium.com/roadmap, blog) | What changes for Kuasa |
+|---|---|---|
+| Protocol-Level Locks, Simple | January 2027 (moved from July 2026) | Agent budgets move from `kuasa-registry` bookkeeping into a lock the protocol enforces |
+| Protocol-Level Locks, Enhanced (contract-authenticated) | March 2027 | Each pool sits in a lock released only when `kuasa_cover.claimsAuthorized(claimId)` is true: the EUDemo payout becomes contract-enforced, like the CCD bonds already are |
+| Agent-assisted Verify & Pay | roadmap (January 2027) | The agent proves it is authorised and pays in one step; Kuasa's mandate proof and x402 premium collapse into that one confirmation |
+| AI Agent IDP / Agent ID Service | roadmap (Nov–Dec 2026) | Agent credentials replace the owner's headless proof as an underwriting input |
+| `ccd-agent-kit` (official, live) | released (CLI and MCP: chain client, signer with YubiKey/hardware keys, identity manager) | Insurer treasury and operator keys move from JSON key files to `ccd-signer` with hardware keys; the operator runbook uses its MCP tools |
+| Tether WDK wallet module, Dfns | WDK 0.1.0 beta; Dfns supports Concordium | Self-custodial (WDK) or institutional (Dfns) wallets for agent owners and insurers instead of demo key files |
+
+Already done on testnet from the same official stack: CIS-8004 `agentWallet` bound for every agent and
+enforced by the shop and both insurers; the Verify & Access V1 flow completed with Verification Audit
+Anchors; Agent Cards built with the registry's `build_agent_card` (badge valid, card hash matches on-chain).
