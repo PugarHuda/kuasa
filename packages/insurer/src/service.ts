@@ -635,12 +635,15 @@ export class InsurerService {
   /** The policy holder picks an ntfy.sh topic for this agent's alerts (pause, claim paid); '' removes it. */
   setNotify(payer: string, holder: string, topic: string) {
     if (!this.holdsLivePolicy(payer, holder)) throw new Error('only the holder of a live policy on this agent sets its notifications');
+    const cur = this.notify.get(payer);
+    if (cur && cur.by !== holder && this.holdsLivePolicy(payer, cur.by)) throw new Error('these notifications belong to another policy holder');
     if (topic && !/^[A-Za-z0-9_-]{12,64}$/.test(topic)) throw new Error('topic: 12 to 64 letters, digits, - or _ (pick something hard to guess)');
     if (topic) this.notify.set(payer, { topic, by: holder }); else this.notify.delete(payer);
     this.save();
     return topic || null;
   }
-  notifyTopic = (payer: string) => this.notify.get(payer)?.topic ?? null;
+  /** The topic, only while whoever set it still holds a live policy on the agent. */
+  notifyTopic = (payer: string) => { const n = this.notify.get(payer); return n && this.holdsLivePolicy(payer, n.by) ? n.topic : null; };
 
   detectionsOf = (payer: string) => this.detections.filter((d) => d.payer === payer);
   holdOf = (payer: string) => this.holds.get(payer) ?? null;

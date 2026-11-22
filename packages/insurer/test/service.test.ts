@@ -1094,4 +1094,7 @@ test('owner alerts: only a policy holder picks the ntfy topic, and it must be ha
   assert.equal(t.svc.notifyTopic(PAYER), 'kuasa-alerts-7f3a9c2e');
   t.svc.setNotify(PAYER, OWNER, '');
   assert.equal(t.svc.notifyTopic(PAYER), null);
+  t.svc.setNotify(PAYER, OWNER, 'kuasa-alerts-7f3a9c2e');
+  // the same ownership rule as spending rules: another holder cannot take over a live holder's alerts
+  assert.throws(() => t.svc.setNotify(PAYER, addr(40), 'someone-else-topic-1'), /holder of a live policy|another policy holder/);
 });
