@@ -10,7 +10,8 @@
 import { readFileSync } from 'node:fs';
 import * as sdk from '@concordium/web-sdk';
 import { KuasaAgent } from '@kuasa/agent';
-import { connect } from '@kuasa/chain';
+import { connect, KuasaCover, wallet } from '@kuasa/chain';
+import { loadProfile } from './lib/identity.js';
 import { decodeMarketInsurers } from '@kuasa/core';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -23,7 +24,7 @@ const TRANSIENT = /unavailable|lookup_failed|UNAVAILABLE|502|timed out/i;
 const consoleCall = (path: string, init: RequestInit = {}) => fetch(`${INSURER}${path}`, { ...init, headers: { 'x-kuasa-console': '1', 'content-type': 'application/json' } }).then((r) => r.json());
 
 export async function runTry(log: (line: string) => void) {
-  const st = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { marketContract: string; mandates: Record<string, { payer: string }> };
+  const st = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { cover: string; marketContract: string; mandates: Record<string, { payer: string }> };
   log('1. The insurance market, read from the kuasa-market contract');
   const iv = await connect().invokeContract({ contract: sdk.ContractAddress.create(BigInt(st.marketContract), 0n), method: sdk.ReceiveName.fromString('kuasa_market.insurers'), parameter: sdk.Parameter.empty() });
   if (iv.tag === 'success' && iv.returnValue) {
@@ -45,7 +46,15 @@ export async function runTry(log: (line: string) => void) {
   log("2. Alice's agent and its cover");
   const status = await alice.coverStatus();
   if (BigInt(status.onChain.periodRemaining || '0') < 10n * EUR) {
-    log('   no live cover: the agent buys 50 EUDemo of cover for 30 days over x402');
+    // too little cover left for a claim: a claim approved beyond the limit could never be paid, and the
+    // public keeper would slash the insurer for it. The owner cancels (refunded pro rata) and the agent re-insures.
+    if (status.onChain.policyId !== null && status.onChain.policyId !== undefined) {
+      const owner = loadProfile('alice').accounts.find((a) => a.credNumber === 0)!;
+      const c = await new KuasaCover(connect(), BigInt(st.cover)).cancelPolicy(BigInt(status.onChain.policyId), wallet(owner.address, owner.key));
+      log(`   only ${Number(status.onChain.periodRemaining) / 1e6} EUDemo of cover left: the owner cancels policy ${status.onChain.policyId} (unused premium refunded): ${tx(c.hash)}`);
+      for (let i = 0; i < 20 && (await alice.coverStatus()).onChain.policyId !== null; i++) await sleep(3000);
+    }
+    log('   the agent buys 50 EUDemo of cover for 30 days over x402');
     const bought = await alice.coverBuy(50n * EUR, 30) as { ok?: boolean; premium?: string; paymentTx?: string; reasons?: string[] };
     if (!bought.ok) throw new Error(`cover not bought: ${JSON.stringify(bought.reasons)}`);
     log(`   premium ${Number(bought.premium) / 1e6} EUDemo paid: ${tx(bought.paymentTx!)}`);
@@ -53,6 +62,7 @@ export async function runTry(log: (line: string) => void) {
 
   log('3. The mistake: the agent pays twice for the same loaf of bread (3 EUDemo)');
   const txs: string[] = [];
+  let mistakeAt = Date.now();
   const detected = async () => (await alice.detections()).detections.find((d) => d.paymentTxs.some((t) => txs.includes(t)));
   for (let n = 0; n < 2 && !(await detected()); n++) {
     let r: { ok: boolean; paymentTx?: string; reasons?: string[] } = { ok: false };
@@ -61,7 +71,7 @@ export async function runTry(log: (line: string) => void) {
       if (r.ok || !TRANSIENT.test(JSON.stringify(r.reasons))) break;
       await sleep(3000);
     }
-    if (r.ok && r.paymentTx) { txs.push(r.paymentTx); log(`   paid: ${tx(r.paymentTx)}`); }
+    if (r.ok && r.paymentTx) { txs.push(r.paymentTx); mistakeAt = Date.now(); log(`   paid: ${tx(r.paymentTx)}`); }
     else log(`   refused by the shop: ${JSON.stringify(r.reasons)}`);
     for (let i = 0; i < 8 && !(await detected()); i++) await sleep(5000);
   }
@@ -83,6 +93,8 @@ export async function runTry(log: (line: string) => void) {
     if (c?.paid) {
       if (c.autoApproveTx) log(`   approved by the contract rules (autoApprove): ${tx(c.autoApproveTx)}`);
       log(`   paid to the agent: ${tx(c.paid)}`);
+      const secs = Math.round((Date.now() - mistakeAt) / 1000);
+      log(`   from the mistake to the payout: ${Math.floor(secs / 60)} min ${secs % 60} s, no human involved`);
       break;
     }
     await sleep(10_000);

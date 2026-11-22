@@ -243,8 +243,11 @@ else {
 /** Try it live: the hosted shop + insurer run the parametric claim and stream what happens. */
 const TRY_URL = 'https://kuasa-live.onrender.com/try';
 const linkify = (line: string) => esc(line).replace(/https:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u.length > 60 ? `${u.slice(0, 57)}…` : u}</a>`);
-// wake the hosted demo as soon as the page opens, so it is up by the time someone presses the button
-void fetch(TRY_URL.replace(/\/try$/, '/health'), { mode: 'no-cors' }).catch(() => undefined);
+// wake the hosted demo as soon as the page opens (and show its state): it is up by the time someone presses the button
+const showStatus = () => fetch(TRY_URL.replace(/\/try$/, '/status')).then((r) => r.json()).then((st: { running: boolean; runsLeftToday: number; agentEUDemo: number | null }) => {
+  $('try-note').textContent = `Live server up. ${st.running ? 'A run is in progress right now. ' : ''}${st.runsLeftToday} live runs left today; the demo agent holds ${st.agentEUDemo ?? '?'} EUDemo (testnet).`;
+}).catch(() => undefined);
+void showStatus();
 $('try-run').addEventListener('click', async () => {
   const btn = $('try-run') as HTMLButtonElement;
   const out = $('try-out');
@@ -266,3 +269,9 @@ $('try-run').addEventListener('click', async () => {
   } catch (e) { out.innerHTML += esc(`could not reach the live server: ${(e as Error).message}`); }
   finally { btn.disabled = false; }
 });
+
+/** Mistake to payout, measured on-chain over the recorded runs (scripts/payout-speed.ts). */
+void fetch('payout-speed.json').then((r) => r.json()).then((k: { medianSeconds: number; runs: { claim: number; mistake: string; payout: string; seconds: number }[] }) => {
+  const m = (s: number) => `${Math.floor(s / 60)} min ${s % 60} s`;
+  $('payout-speed').innerHTML = `<b>From the mistake to the payout: ${m(k.medianSeconds)}</b> (median of ${k.runs.length} runs, block times on-chain), with no human. Most of it is the objection window the contract enforces before an automatic payout. Runs: ${k.runs.map((r) => `claim ${r.claim} <a href="https://ccdexplorer.io/testnet/transaction/${esc(r.mistake)}" target="_blank" rel="noopener">${m(r.seconds)}</a>`).join(' · ')}`;
+}).catch(() => undefined);
