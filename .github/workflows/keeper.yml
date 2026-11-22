@@ -6,17 +6,19 @@ on:
     - cron: '*/15 * * * *'
   workflow_dispatch:
 concurrency: keeper
+permissions:
+  contents: read
 jobs:
   keep:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
+      # pnpm from corepack (the version in package.json): no third-party action sees the keeper key
+      - run: corepack enable
       - run: pnpm install --frozen-lockfile --filter @kuasa/scripts...
       - run: pnpm exec tsx keeper.ts
         working-directory: scripts
