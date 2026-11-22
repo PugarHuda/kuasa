@@ -26,7 +26,7 @@ Judging guide (five minutes, keyless verification of every transaction): https:/
 - Merchants harmed by an agent claim on its cover; cancelled policies are refunded pro rata.
 
 **Concordium components**
-Concordium ID and Verify & Access, Web3 ID, Agent Registry (CIS-8004) and the Verified by Concordium badge, CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, three smart contracts (kuasa-registry, kuasa-cover, kuasa-market) with cross-contract reads, registerData audit anchors (EU AI Act Art. 12), Privacy Guardians, MCP and A2A.
+Concordium ID and Verify & Access, Web3 ID, Agent Registry (CIS-8004) and the Verified by Concordium badge, CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, three smart contracts (kuasa-registry, kuasa-cover, kuasa-market) with cross-contract reads, registerData audit anchors (EU AI Act Art. 12), MCP and A2A, plus a documented lawful-disclosure route through the identity provider and Privacy Guardians (drafted and anchored per claim; not executed on testnet).
 
 **Path to production**
 Pools move into Protocol-Level Locks released only by the cover contract; EURQ replaces EUDemo; a licensed fronting insurer carries the risk while Kuasa acts as MGA and claims infrastructure. Details: https://github.com/PugarHuda/kuasa/blob/main/docs/PRODUCTION.md
@@ -53,7 +53,7 @@ Every live step with its transactions, newest first: https://kuasa-explorer.verc
 - **Protocol-Level Token EUDemo:** allow-listed; prices, premiums and payouts.
 - **Smart contracts:** `kuasa-registry`, `kuasa-cover` (two insurers run their own instance) and `kuasa-market` (open, bonded insurer registry), with cross-contract checks.
 - **registerData:** EU AI Act Art. 12 audit anchors.
-- **Privacy Guardians:** the disclosure process.
+- **Privacy Guardians:** the disclosure route for repeat fraud, documented and anchored per claim, not executed on testnet.
 - **MCP and A2A**, and ERC-8004 on Ethereum Sepolia for portable reputation.
 
 ## Your path to mainnet

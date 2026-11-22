@@ -47,6 +47,9 @@ export async function runTry(log: (line: string) => void) {
   const shopToken = Buffer.from((JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { shopAgent: string }).shopAgent, 'hex').readBigUInt64LE();
   const vet = await fetch(`https://vet402-concordium.fly.dev/check?agent=${shopToken}`, { signal: AbortSignal.timeout(10_000) }).then((r) => r.json()).catch(() => null) as { vet402?: { verdict?: string; reason?: string } } | null;
   log(`   vet402 (a payment guard) on the shop, agent #${shopToken}: ${vet?.vet402 ? `${vet.vet402.verdict} (${vet.vet402.reason})` : 'unreachable'}; Kuasa prices that verdict into cover`);
+  // the same factor on a payee vet402 has caught not delivering (its own public test seller, agent #1350)
+  const failing = await fetch(`${INSURER}/payee-vetting?merchant=4not6An1LB2UUTeQKRDgYHUdpFPVHZbSUtuWbMAVGRLPXTjsHx`, { signal: AbortSignal.timeout(20_000) }).then((r) => r.json()).catch(() => null) as { verdict?: string; premiumMultiplier?: number } | null;
+  if (failing?.verdict) log(`   a mandate that allowed vet402's failing test seller (#1350) would be priced x${failing.premiumMultiplier} (vet402: ${failing.verdict})`);
   log("2. Alice's agent and its cover");
   // a run cut short leaves the agent paused: its owner resumes it first, as after every finished run
   const held = await alice.detections().then((d) => (d as { hold?: string | null }).hold).catch(() => null);

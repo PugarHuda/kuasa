@@ -675,6 +675,15 @@ async function scanCover() {
 const paidClaimsOf = async (payer: string) => (await scanCover()).per.reduce((n, b) => n + b.claims.filter((c) => c.status.tag === 'Paid' && b.policies[Number(c.policyId)]?.agentPayer === payer).length, 0);
 
 /** Public proof of solvency: pool vs the cover still owed by live policies, from on-chain data. */
+/** How this insurer's payee vetting (vet402) would price a merchant an agent's mandate allows. Read-only. */
+app.get('/payee-vetting', async (req, res) => {
+  const m = String(req.query.merchant ?? '');
+  if (!/^[1-9A-HJ-NP-Za-km-z]{50}$/.test(m)) { res.status(400).json({ error: 'merchant: a Concordium account address' }); return; }
+  const v = await payeeVetting([m]);
+  const verdict = v.go.length ? 'go' : v.no.length ? 'no' : 'unproven';
+  res.json({ merchant: m, verdict, premiumMultiplier: verdict === 'go' ? 0.9 : verdict === 'no' ? 1.25 : 1, source: 'vet402 via the Agent Registry (agents whose agentWallet is this account; worst verdict)' });
+});
+
 app.get('/solvency', async (_req, res) => {
   try {
     json(res, await solvencyNow());
