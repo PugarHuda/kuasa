@@ -71,8 +71,12 @@ const $ = (id) => document.getElementById(id);
 const logEl = $('log'); let first = true;
 const tx = (h) => `<a href="https://ccdexplorer.io/testnet/transaction/${h}" target="_blank" rel="noopener">${h.slice(0, 10)}…</a>`;
 const log = (html, cls = '') => { if (first) { logEl.innerHTML = ''; first = false; } logEl.insertAdjacentHTML('beforeend', `<div class="${cls}">${html}</div>`); logEl.scrollTop = logEl.scrollHeight; };
-const post = async (path, body) => {
+const post = async (path, body, retried = false) => {
   const r = await fetch(API + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (r.status === 429 && !retried) {
+    const why = await r.clone().json().catch(() => ({}));
+    if (/per 15 seconds/.test(why.error || '')) { log('the hosted demo spaces owner actions 15 seconds apart; continuing in a moment…'); await new Promise((res) => setTimeout(res, 16_000)); return post(path, body, true); }
+  }
   const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
   if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
   return j;

@@ -13,7 +13,9 @@ And one minute with a real Concordium Wallet (the identity step, Verify & Access
   hosted shop and both insurers make Alice's insured agent pay twice for a loaf; the insurer finds the
   pair on-chain, pauses the agent at every shop, files the claim itself, and the contract approves the
   payout after the objection window. 3 to 5 minutes; every line links to a testnet transaction.
-- Or bring your own wallet: https://kuasa-explorer.vercel.app/wallet.html runs the identity step (ZK 18+ and EU
+- Or own an agent with your own wallet: https://kuasa-explorer.vercel.app/owner.html registers an agent, proves who
+  stands behind it, signs a mandate and revokes it, every step signed in the Concordium Wallet (Kuasa sponsors the fees).
+  The identity step alone: https://kuasa-explorer.vercel.app/wallet.html runs the identity step (ZK 18+ and EU
   residency, Verify & Access V1) with your Concordium Wallet on testnet; Kuasa anchors the request and the audit record.
 - Or bring your own agent: `claude mcp add --transport http kuasa https://kuasa-live.onrender.com/mcp`,
   then ask Claude to buy a bottle of Rioja. It drives Bob's insured agent against the same services.
@@ -45,8 +47,8 @@ contracts. Concordium's Protocol-Level Locks (Simple, January 2027; contract-aut
 they need ([PRODUCTION.md](PRODUCTION.md)).
 
 ## Honest limits
-- The four demo principals prove their identity with keys in scripts (so the flow runs unattended); one
-  proof was made by the official Concordium Browser Wallet to show the same request works from a real wallet.
+- The four demo principals prove their identity with keys in scripts (so the flow runs unattended). A fifth owner
+  did everything from the official Concordium Wallet: agent #1416, its proof, mandate and revocation (TESTNET.md).
 - Every role on testnet is played by one team: both insurers, the three jurors, the capital providers
   and the shop ([who runs what](TESTNET.md#who-runs-what)).
 - The testnet claims are staged to show each flow, so the loss ratio says nothing about real risk;
