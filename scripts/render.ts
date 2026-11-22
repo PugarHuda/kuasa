@@ -6,6 +6,8 @@
  *   POST /mcp     the Kuasa MCP server over HTTP, as Bob's agent: point any MCP client (Claude) at it
  *   GET  /stats   live numbers: both insurers' pool and exposure (read from chain), live runs today, uptime
  *   POST /vp/request, /vp/verify   Verify & Access V1 with the visitor's own Concordium wallet (wallet.html)
+ *   POST /owner/*  owner actions signed in the visitor's wallet, sponsored by Kuasa (owner.html)
+ *   GET  /audit-record?payer=  one agent's audit record (policies, claims, decisions, transactions)
  * Kuasa Re (4024) runs in the same process too: its server module is loaded a second time under another
  * URL with its own configuration (only server.ts reads the environment; libraries are shared).
  * ponytail: one run at a time, one per IP per 15 minutes, 36 a day: each run spends testnet EUDemo.
@@ -162,6 +164,16 @@ createServer(async (req, res) => {
     res.setHeader('content-type', 'application/json');
     res.setHeader('access-control-allow-origin', '*');
     res.end(JSON.stringify({ at: new Date().toISOString(), uptimeSeconds: Math.round(process.uptime()), liveRunsToday: day === new Date().toISOString().slice(0, 10) ? today : 0, paidActionsTodayViaMcp: spendDay === new Date().toISOString().slice(0, 10) ? spent : 0, insurers: { kuasaCover, kuasaRe } }, (_k, v) => (typeof v === 'bigint' ? String(v) : v)));
+    return;
+  }
+  if (req.method === 'GET' && req.url?.startsWith('/audit-record?')) {
+    // public, read-only: one agent's audit record from Kuasa Cover (policies, claims, decisions, transactions)
+    const q = new URL(req.url, 'http://x').searchParams.get('payer') ?? '';
+    const r = await fetch(`http://localhost:4023/audit-record?payer=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(20_000) }).catch(() => null);
+    res.statusCode = r?.status ?? 502;
+    res.setHeader('content-type', 'application/json');
+    res.setHeader('access-control-allow-origin', '*');
+    res.end(r ? await r.text() : JSON.stringify({ error: 'insurer unavailable' }));
     return;
   }
   if (req.method === 'GET' && req.url === '/status') {

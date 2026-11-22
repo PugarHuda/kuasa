@@ -676,6 +676,38 @@ const paidClaimsOf = async (payer: string) => (await scanCover()).per.reduce((n,
 
 /** Public proof of solvency: pool vs the cover still owed by live policies, from on-chain data. */
 /** How this insurer's payee vetting (vet402) would price a merchant an agent's mandate allows. Read-only. */
+/**
+ * The audit record for one insured agent (EU AI Act Art. 12 style record keeping), public and read-only:
+ * every policy it held with this insurer and every claim on them, with the transactions that prove each
+ * step and who decided it (contract rules, a human, the appeals panel). Its SHA-256 is included so a copy
+ * can be checked byte for byte; the evidence itself stays on-chain.
+ */
+app.get('/audit-record', (req, res) => {
+  const payer = String(req.query.payer ?? '');
+  if (!/^[1-9A-HJ-NP-Za-km-z]{50}$/.test(payer)) { res.status(400).json({ error: 'payer: the agent payer account' }); return; }
+  const st = svc.state();
+  const tx = (h?: string) => (h && /^[0-9a-f]{64}$/.test(h) ? `https://ccdexplorer.io/testnet/transaction/${h}` : undefined);
+  const policies = st.policies.filter((p) => p.payer === payer);
+  const ids = new Set(policies.map((p) => String(p.policyId)));
+  const record = {
+    kind: 'Kuasa Cover audit record for one AI agent',
+    purpose: 'Record keeping for an AI agent that spends money (in the spirit of EU AI Act Article 12): what it was allowed to do, what it was insured for, what went wrong and who decided',
+    insurer: { cover: `<${state.cover},0>`, treasury },
+    agentPayer: payer,
+    generatedAt: new Date().toISOString(),
+    policies: policies.map((p) => ({ policyId: String(p.policyId), kind: p.kind, holder: p.holder, limit: String(p.limit), validUntil: new Date(p.until).toISOString(), premiumPaid: tx(p.premiumTx), terms: p.terms ? { autoPayLimit: String(p.terms.autoPayLimit), objectionWindowMs: String(p.terms.objectionWindowMs), setIn: tx(p.terms.tx) } : undefined })),
+    claims: st.claims.filter((c) => ids.has(String(c.policyId))).map((c) => ({
+      claimId: String(c.claimId), policyId: String(c.policyId), reasonCode: c.reason ?? null, claimant: c.claimant,
+      evidence: { assessed: c.assessment.ok, why: c.assessment.reason, orders: c.orders.length, receipts: c.receiptTxs.map(tx) },
+      decision: { verdict: c.verdict ?? 'open', by: c.decidedBy === 'auto' ? 'the cover contract rules (autoApprove)' : c.decidedBy === 'panel' ? 'the appeals panel' : c.verdict ? 'a human claims handler' : null, approvedIn: tx(c.autoApproveTx) },
+      objections: (c.objections ?? []).length, payout: c.paid ? { tx: tx(c.paid), amount: c.amountPaid !== undefined ? String(c.amountPaid) : undefined } : null, blocked: c.payoutBlocked ?? null,
+    })),
+    pauses: (st.detections ?? []).filter((d: { payer?: string }) => d.payer === payer).length,
+  };
+  const body = JSON.stringify(record, null, 1);
+  res.json({ ...record, sha256: Buffer.from(sdk.sha256([Buffer.from(body)])).toString('hex') });
+});
+
 app.get('/payee-vetting', async (req, res) => {
   const m = String(req.query.merchant ?? '');
   if (!/^[1-9A-HJ-NP-Za-km-z]{50}$/.test(m)) { res.status(400).json({ error: 'merchant: a Concordium account address' }); return; }
