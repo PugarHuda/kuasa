@@ -3,6 +3,7 @@
  * Kuasa Cover (4023) on localhost, and serves on $PORT:
  *   GET  /health  keep-alive target
  *   POST /try     the live parametric-claim demo (scripts/try.ts), streamed as text
+ *   POST /mcp     the Kuasa MCP server over HTTP, as Bob's agent: point any MCP client (Claude) at it
  * Kuasa Re (4024) runs in the same process too: its server module is loaded a second time under another
  * URL with its own configuration (only server.ts reads the environment; libraries are shared).
  * ponytail: one run at a time, one per IP per 15 minutes, 36 a day: each run spends testnet EUDemo.
@@ -28,6 +29,19 @@ Object.assign(process.env, { PORT: '4024', KUASA_PROFILE: 'insurer2', KUASA_COVE
 await import(new URL('../packages/insurer/src/server.ts?insurer=re', import.meta.url).href);
 if (process.env.DATABASE_URL) startSync();
 const { runTry } = await import('./try.js');
+// bring your own agent: Claude (or any MCP client) drives Bob's insured agent against the hosted shop and insurers
+const { KuasaAgent } = await import('../packages/agent/src/client.ts');
+const { serveHttp } = await import('../packages/agent/src/mcp-server.ts');
+const bobAgent = KuasaAgent.fromDemo('bob', 'http://localhost:4021', 'http://localhost:4023');
+const SPEND_DAILY = 40; // purchases, premiums and claims through /mcp per day (the mandate caps the budget too)
+let spendDay = '', spent = 0;
+const spend = (tool: string) => {
+  const d = new Date().toISOString().slice(0, 10);
+  if (d !== spendDay) { spendDay = d; spent = 0; }
+  if (spent >= SPEND_DAILY) return `today's ${SPEND_DAILY} paid actions on the hosted demo are used up (${tool} refused); read-only tools still work`;
+  spent++;
+  return null;
+};
 
 const DAILY = 36;
 /** The demo agent's EUDemo balance, read from the chain at most once a minute. */
@@ -52,6 +66,16 @@ createServer(async (req, res) => {
     const eudemo = await agentBalance().catch(() => null);
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ running, runsLeftToday: Math.max(0, DAILY - (day === new Date().toISOString().slice(0, 10) ? today : 0)), agentEUDemo: eudemo }));
+    return;
+  }
+  if (req.url === '/mcp') {
+    if (req.method !== 'POST') { res.statusCode = 405; res.setHeader('allow', 'POST'); res.end('stateless MCP: POST only'); return; }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const c of req) { size += (c as Buffer).length; if (size > 64_000) { res.statusCode = 413; res.end('too large'); return; } chunks.push(c as Buffer); }
+    let body: unknown;
+    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.statusCode = 400; res.end('bad json'); return; }
+    await serveHttp(bobAgent, spend, req, res, body).catch((e) => { if (!res.headersSent) { res.statusCode = 500; res.end((e as Error).message); } });
     return;
   }
   if (req.method !== 'POST' || req.url !== '/try') { res.statusCode = 404; res.end('not found'); return; }

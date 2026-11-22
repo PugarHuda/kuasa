@@ -376,7 +376,7 @@ test('a revoked mandate after the premium settled needs a refund, not endless re
   assert.equal(t.calls.filter((c) => c === 'issuePolicy').length, 0);
 });
 
-test('blocked payouts keep their reason; an exhausted limit is final', async () => {
+test('blocked payouts keep their reason; a claim the exhausted limit cannot pay is rejected, never left approved', async () => {
   const t = harness({ treasuryBalance: async () => 0n });
   await filedClaim(t, true, 0n);
   await t.svc.decide(0n, true);
@@ -384,9 +384,11 @@ test('blocked payouts keep their reason; an exhausted limit is final', async () 
   const u = harness();
   await filedClaim(u, true, 0n);
   u.policies.get(0n)!.paidOut = 100n * EUR;
-  await u.svc.decide(0n, true);
+  const d = await u.svc.decide(0n, true);
+  // approved and unpaid would stay Approved on-chain for good, and kuasa-market slashes for that
+  assert.match(d.reason ?? '', /limit exhausted: rejected/);
+  assert.equal(u.svc.state().claims[0].verdict, 'rejected');
   assert.match(u.svc.state().claims[0].payoutBlocked ?? '', /limit exhausted/);
-  assert.equal(u.svc.state().claims[0].final, true);
 });
 
 test('a quote backs exactly one premium payment', async () => {

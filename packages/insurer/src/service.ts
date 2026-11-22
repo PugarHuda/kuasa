@@ -838,11 +838,34 @@ export class InsurerService {
     this.save();
   }
 
+  /**
+   * Why a claim could not be paid if approved now, or null. An approved claim that can never be paid stays
+   * Approved on-chain (the contract has no way out of it), and kuasa-market lets anyone slash the insurer's
+   * bond for it: so such a claim is rejected, with the reason, instead of approved.
+   */
+  private async unpayable(rec: ClaimRecord): Promise<string | null> {
+    const policy = await this.deps.cover.policy(rec.policyId);
+    if (!policy || policy.limit <= policy.paidOut) return 'policy limit exhausted';
+    if (this.deps.otherInsurersPaid && rec.assessment.loss !== undefined) {
+      const elsewhere = await this.deps.otherInsurersPaid(policy.agentPayer, rec.orders).catch(() => null);
+      if (elsewhere !== null && rec.assessment.loss <= elsewhere) return 'paid in full by another insurer on the market (contribution)';
+    }
+    return null;
+  }
+
   /** Pays small, positively assessed claims whose objection window has passed and nobody held. */
   async runAutoPay() {
     for (const rec of this.claims.values()) {
       if (rec.autoPayAt === undefined || rec.held || rec.verdict || this.deps.now() < rec.autoPayAt) continue;
       if (this.flagged(rec)) { this.hold(rec.claimId); continue; } // flagged during the window: a human decides
+      const blocked = await this.unpayable(rec).catch(() => 'policy unreadable');
+      if (blocked === 'policy unreadable') continue; // try again on the next round
+      if (blocked) {
+        rec.payoutBlocked = blocked;
+        rec.decidedBy = 'auto';
+        await this.decide(rec.claimId, false).catch(() => { rec.decidedBy = undefined; });
+        continue;
+      }
       rec.decidedBy = 'auto';
       if (this.deps.cover.autoApprove) {
         // v2: the contract itself enforces the rules (limit, window, kind, objections)
@@ -889,6 +912,13 @@ export class InsurerService {
         return { decided: true as const, reason: 'the policy was cancelled and its unused premium refunded; this claim needs a manual review' };
       }
       if (!rec.verdict) {
+        const blocked = await this.unpayable(rec);
+        if (blocked) {
+          await this.deps.cover.decide(claimId, false, this.deps.operator);
+          rec.verdict = 'rejected';
+          rec.payoutBlocked = blocked;
+          return { decided: true as const, reason: `${blocked}: rejected rather than approved and left unpaid` };
+        }
         await this.deps.cover.decide(claimId, true, this.deps.operator);
         rec.verdict = 'approved';
       }
