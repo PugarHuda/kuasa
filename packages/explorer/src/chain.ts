@@ -121,7 +121,7 @@ const fields = (v: string | null) => (v ? Object.fromEntries(v.split(';').map((k
 
 /** The insurer publishes each claim decision on its CIS-8004 entry: by=auto|human;verdict=...;paid=... */
 /** The open, bonded registry of insurers (kuasa-market). */
-export const MARKET_REGISTRY = 13114n;
+export const MARKET_REGISTRY = 13118n;
 export async function marketInsurers() {
   const r = await grpc.invokeContract({ contract: ContractAddress.create(MARKET_REGISTRY, 0n), method: ReceiveName.fromString('kuasa_market.insurers'), parameter: Parameter.empty() });
   if (r.tag !== 'success' || !r.returnValue) return [];

@@ -125,8 +125,9 @@ export class KuasaAgent {
     const root = new URL('../../../.kuasa/', import.meta.url);
     const st = JSON.parse(readFileSync(new URL('state.json', root), 'utf8')) as { insurerAgent: string; marketContract?: string };
     const base = KuasaAgent.fromDemo(name, shopUrl);
-    const market = st.marketContract
-      ? await KuasaAgent.discoverRegistry(BigInt(st.marketContract), base.opts.scope.merchants ?? [])
+    const marketIndex = process.env.KUASA_MARKET ?? st.marketContract;
+    const market = marketIndex
+      ? await KuasaAgent.discoverRegistry(BigInt(marketIndex), base.opts.scope.merchants ?? [])
       : await KuasaAgent.discoverMarket(st.insurerAgent, base.opts.scope.merchants ?? []);
     const [first, ...rest] = market.map((m) => m.url);
     return { agent: new KuasaAgent({ ...base.opts, ...(first ? { insurerUrl: first } : {}), insurers: rest }), market };

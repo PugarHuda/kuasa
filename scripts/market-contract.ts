@@ -12,7 +12,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { loadProfile } from './lib/identity.js';
 
 const STATE = new URL('../.kuasa/state.json', import.meta.url);
-const state = JSON.parse(readFileSync(STATE, 'utf8')) as { cover: string; coverModuleRef: string; marketModuleRef?: string; marketContract?: string; marketContractV1?: string; marketContractV2?: string; marketContractV3?: string; market: { name: string; cover: string; url: string }[] };
+const state = JSON.parse(readFileSync(STATE, 'utf8')) as { cover: string; coverModuleRef: string; marketModuleRef?: string; marketContract?: string; marketContractV1?: string; marketContractV2?: string; marketContractV3?: string; marketContractV4?: string; market: { name: string; cover: string; url: string }[] };
 // --v2: the registry with arbiter-free slashing (flagUnpaid/slashUnpaid) and the 2-of-3 panel as arbiter;
 // the first registry is kept as marketContractV1 and both insurers leave it (bonds back after 7 days)
 if (process.argv.includes('--v2') && !state.marketContractV1) {
@@ -29,7 +29,13 @@ if (process.argv.includes('--v4') && !state.marketContractV3) {
   state.marketContractV3 = state.marketContract; state.marketContract = undefined; state.marketModuleRef = undefined;
   writeFileSync(STATE, JSON.stringify(state, null, 2));
 }
-const previous = state.marketContractV3 ?? state.marketContractV2 ?? state.marketContractV1;
+// --v5: claim-sized slashes (the unpaid payout priced in CCD, capped by the bond) and a short veto window
+if (process.argv.includes('--v5') && !state.marketContractV4) {
+  state.marketContractV4 = state.marketContract; state.marketContract = undefined; state.marketModuleRef = undefined;
+  writeFileSync(STATE, JSON.stringify(state, null, 2));
+}
+const BOND = state.marketContractV4 ? 100_000_000n : 10_000_000n; // v5: a bond that covers the claims it backs
+const previous = state.marketContractV4 ?? state.marketContractV3 ?? state.marketContractV2 ?? state.marketContractV1;
 const save = () => writeFileSync(STATE, JSON.stringify(state, null, 2));
 const grpc = connect();
 const acct = (name: string, n: number): Wallet => { const a = loadProfile(name).accounts.find((x) => x.credNumber === n)!; return wallet(a.address, a.key); };
@@ -55,7 +61,9 @@ if (!state.marketContract) {
   const arbiter = sdk.AccountAddress.fromBase58(loadProfile('panel').accounts[0].address);
   // ...and cover_module: the kuasa-cover module both insurers run (only its contracts count as evidence)
   const coverModule = sdk.ModuleReference.fromHexString(state.coverModuleRef).decodedModuleRef;
-  const init = new Uint8Array([...arbiter.decodedAddress, ...u64(10_000_000n), ...u64(7n * 86_400_000n), ...u64(10n * 60_000n), ...u64(2_000_000n), ...coverModule]);
+  const init = new Uint8Array([...arbiter.decodedAddress, ...u64(10_000_000n), ...u64(7n * 86_400_000n), ...u64(10n * 60_000n), ...u64(2_000_000n), ...coverModule,
+    // v5: penalty_rate 1 micro-CCD per micro-EUDemo (1 CCD per EUDemo on testnet), veto window 10 minutes
+    ...(state.marketContractV4 ? [...u64(1n), ...u64(10n * 60_000n)] : [])]);
   const r = await submit(grpc, Transaction.initContract({ amount: sdk.CcdAmount.zero(), moduleRef: sdk.ModuleReference.fromHexString(state.marketModuleRef), initName: sdk.ContractName.fromString('kuasa_market'), param: sdk.Parameter.fromBuffer(init.buffer) }, sdk.Energy.create(30_000)) as Transaction.Builder, deployer);
   state.marketContract = String(ok(r, 'market init').contractInitialized.address.index); save();
   console.log(`kuasa-market <${state.marketContract},0>`, r.hash);
@@ -77,8 +85,8 @@ if (previous) {
 for (const i of insurers) {
   // RegisterParams { name, cover: ContractAddress, url, price_bps: u32, evm }
   const param = new Uint8Array([...str(i.name), ...u64(i.cover), ...u64(0n), ...str(i.url), ...u32(i.price), ...str(i.evm)]);
-  const r = await submit(grpc, Transaction.updateContract({ amount: sdk.CcdAmount.fromMicroCcd(10_000_000n), address: market, receiveName: sdk.ReceiveName.fromString('kuasa_market.register'), message: sdk.Parameter.fromBuffer(param.buffer) }, sdk.Energy.create(30_000)) as Transaction.Builder, i.pool);
+  const r = await submit(grpc, Transaction.updateContract({ amount: sdk.CcdAmount.fromMicroCcd(BOND), address: market, receiveName: sdk.ReceiveName.fromString('kuasa_market.register'), message: sdk.Parameter.fromBuffer(param.buffer) }, sdk.Energy.create(30_000)) as Transaction.Builder, i.pool);
   ok(r, `register ${i.name}`);
-  console.log(`${i.name} registered itself with a 10 CCD bond`, r.hash);
+  console.log(`${i.name} registered itself with a ${BOND / 1_000_000n} CCD bond`, r.hash);
 }
 process.exit(0);

@@ -89,7 +89,7 @@ const ownEvm = PROFILE === 'insurer' && existsSync(ownEvmKey) ? privateKeyToAcco
 const repCache = new Map<string, { at: number; v: { count: number; average: number } | null }>();
 /** EVM addresses the market's insurers advertise (evm= in kuasa:insurer, written by each entry's owning pool). */
 async function trustedRaters(): Promise<`0x${string}`[]> {
-  const registryIndex = (state as { marketContract?: string }).marketContract;
+  const registryIndex = process.env.KUASA_MARKET ?? (state as { marketContract?: string }).marketContract;
   if (registryIndex) {
     // the open registry: every bonded insurer that is not leaving, with the EVM address it registered
     const r = await grpc.invokeContract({ contract: sdk.ContractAddress.create(BigInt(registryIndex), 0n), method: sdk.ReceiveName.fromString('kuasa_market.insurers'), parameter: sdk.Parameter.empty() });

@@ -1,3 +1,4 @@
+thread_local! { static RATE: std::cell::RefCell<u64> = std::cell::RefCell::new(0); }
 use concordium_smart_contract_testing::*;
 use concordium_std::{AccountAddress, ContractAddress, HashSha2256, Timestamp};
 use kuasa_market::*;
@@ -28,7 +29,7 @@ fn setup_with_cover() -> (Chain, ContractAddress, ContractAddress, ContractAddre
             amount: Amount::zero(),
             mod_ref: m.module_reference,
             init_name: OwnedContractName::new_unchecked("init_kuasa_market".into()),
-            param: OwnedParameter::from_serial(&InitParams { arbiter: ARBITER, min_bond: Amount::from_ccd(10), exit_delay_ms: 7 * DAY, grace_ms: DAY, unpaid_penalty: Amount::from_ccd(4), cover_module }).unwrap(),
+            param: OwnedParameter::from_serial(&InitParams { arbiter: ARBITER, min_bond: Amount::from_ccd(10), exit_delay_ms: 7 * DAY, grace_ms: DAY, unpaid_penalty: Amount::from_ccd(4), cover_module, penalty_rate: RATE.with(|r| *r.borrow()), veto_window_ms: 7 * DAY }).unwrap(),
         })
         .unwrap()
         .contract_address;
@@ -227,4 +228,22 @@ fn an_escrowed_slash_survives_the_insurer_leaving_and_withdrawing() {
     let before = chain.account_balance_available(CLAIMANT).unwrap();
     upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &EscrowRef { pool: POOL, cover, claim_id: 0 }, Amount::zero()).unwrap();
     assert_eq!(chain.account_balance_available(CLAIMANT).unwrap(), before + Amount::from_ccd(4));
+}
+
+#[test]
+fn a_slash_is_sized_to_the_unpaid_claim_and_capped_by_the_bond() {
+    // 1 CCD per EUDemo: the approved claim (24 EUDemo less the 1 EUDemo deductible) is worth more than the
+    // 10 CCD bond, so the whole bond goes to the claimant, not the flat 4 CCD
+    RATE.with(|r| *r.borrow_mut() = 1);
+    let (mut chain, market, cover) = market_with_approved_claim();
+    RATE.with(|r| *r.borrow_mut() = 0);
+    let r = ClaimRef { pool: POOL, claim_id: 0 };
+    upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).unwrap();
+    chain.tick_block_time(Duration::from_millis(DAY)).unwrap();
+    let before = chain.account_balance_available(CLAIMANT).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).unwrap();
+    assert_eq!(listed(&chain, market)[0].1.bond, Amount::zero(), "the payout exceeds the bond: all of it");
+    chain.tick_block_time(Duration::from_millis(7 * DAY)).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &EscrowRef { pool: POOL, cover, claim_id: 0 }, Amount::zero()).unwrap();
+    assert_eq!(chain.account_balance_available(CLAIMANT).unwrap(), before + Amount::from_ccd(10));
 }

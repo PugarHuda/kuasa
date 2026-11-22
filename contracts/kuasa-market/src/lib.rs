@@ -5,7 +5,8 @@
 //! owner's mandate allows. Leaving takes `exit_delay_ms`, so an insurer cannot walk out on claims in
 //! flight; after it, `withdraw` returns the bond. Slashing needs no arbiter for the core promise: anyone can
 //! `flagUnpaid` a claim that the insurer's own cover contract shows as Approved, and if it is still not
-//! Paid after `grace_ms`, anyone can `slashUnpaid`: `unpaid_penalty` of the bond goes to the claimant.
+//! Paid after `grace_ms`, anyone can `slashUnpaid`: the unpaid payout priced in CCD (`penalty_rate`, at least
+//! `unpaid_penalty`, at most the bond) leaves the bond into escrow, and reaches the claimant after `veto_window_ms`.
 //! The market's arbiter (in production an appeals panel or a Kleros court) can still `slash` by judgement.
 #![cfg_attr(target_arch = "wasm32", no_std)]
 use concordium_std::*;
@@ -35,6 +36,11 @@ pub struct InitParams {
     pub unpaid_penalty: Amount,
     /// The kuasa-cover module every registered cover contract must run (its claims are the evidence).
     pub cover_module: ModuleReference,
+    /// Claim-sized slashing: micro-CCD per smallest unit of the cover's token (EUDemo, 6 decimals). A slash is
+    /// the unpaid payout at this rate, at least `unpaid_penalty`, at most the bond. 0 = flat `unpaid_penalty`.
+    pub penalty_rate: u64,
+    /// How long the arbiter can veto a slash before the claimant can be paid from escrow.
+    pub veto_window_ms: u64,
 }
 
 #[derive(Serialize, SchemaType)]
@@ -96,13 +102,15 @@ pub struct State<S: HasStateApi = StateApi> {
     grace_ms: u64,
     unpaid_penalty: Amount,
     cover_module: ModuleReference,
+    penalty_rate: u64,
+    veto_window_ms: u64,
     insurers: StateMap<AccountAddress, Insurer, S>,
     /// (pool, cover contract, claim id) -> when it was first seen Approved and unpaid
     unpaid: StateMap<(AccountAddress, ContractAddress, u64), Timestamp, S>,
     /// claims already slashed for, per cover contract (each unpaid claim costs the bond once)
     slashed_for: StateSet<(AccountAddress, ContractAddress, u64), S>,
     /// slashed amounts in escrow: (claimant, amount, release time). They leave the bond at once, reach the
-    /// claimant only after exit_delay_ms, and the arbiter can veto them meanwhile (an insurer approving
+    /// claimant only after veto_window_ms, and the arbiter can veto them meanwhile (an insurer approving
     /// fake claims to its own accounts cannot get its bond back faster than by leaving)
     escrow: StateMap<(AccountAddress, ContractAddress, u64), (AccountAddress, Amount, Timestamp), S>,
 }
@@ -152,7 +160,7 @@ fn sender_account(ctx: &ReceiveContext) -> CResult<AccountAddress> {
 #[init(contract = "kuasa_market", parameter = "InitParams")]
 fn init(ctx: &InitContext, state_builder: &mut StateBuilder) -> InitResult<State> {
     let p: InitParams = ctx.parameter_cursor().get()?;
-    Ok(State { arbiter: p.arbiter, min_bond: p.min_bond, exit_delay_ms: p.exit_delay_ms, grace_ms: p.grace_ms, unpaid_penalty: p.unpaid_penalty, cover_module: p.cover_module,
+    Ok(State { arbiter: p.arbiter, min_bond: p.min_bond, exit_delay_ms: p.exit_delay_ms, grace_ms: p.grace_ms, unpaid_penalty: p.unpaid_penalty, cover_module: p.cover_module, penalty_rate: p.penalty_rate, veto_window_ms: p.veto_window_ms,
         insurers: state_builder.new_map(), unpaid: state_builder.new_map(), slashed_for: state_builder.new_set(), escrow: state_builder.new_map() })
 }
 
@@ -270,7 +278,10 @@ fn slash_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     let c = read_claim(host, cover, r.claim_id)?;
     ensure!(c.status == CoverClaimStatus::Approved, Error::NotApprovedUnpaid);
     ensure!(c.claimant != r.pool, Error::Unauthorized);
-    let penalty = host.state().unpaid_penalty;
+    // claim-sized: the payout the insurer owes, priced in CCD, never below the flat penalty
+    let owed = if c.payout > 0 { c.payout } else { c.amount };
+    let sized = Amount::from_micro_ccd(owed.saturating_mul(host.state().penalty_rate));
+    let penalty = if sized > host.state().unpaid_penalty { sized } else { host.state().unpaid_penalty };
     let mut i = host.state_mut().insurers.get_mut(&r.pool).ok_or(Error::UnknownInsurer)?;
     let amount = if penalty < i.bond { penalty } else { i.bond };
     ensure!(amount > Amount::zero(), Error::BondTooSmall);
@@ -278,7 +289,7 @@ fn slash_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     drop(i);
     let _ = host.state_mut().slashed_for.insert((r.pool, cover, r.claim_id));
     host.state_mut().unpaid.remove(&(r.pool, cover, r.claim_id));
-    let release_at = ctx.metadata().slot_time().checked_add(Duration::from_millis(host.state().exit_delay_ms)).ok_or(Error::InvalidParams)?;
+    let release_at = ctx.metadata().slot_time().checked_add(Duration::from_millis(host.state().veto_window_ms)).ok_or(Error::InvalidParams)?;
     let _ = host.state_mut().escrow.insert((r.pool, cover, r.claim_id), (c.claimant, amount, release_at));
     logger.log(&Event::SlashEscrowed { pool: r.pool, claim_id: r.claim_id, amount, to: c.claimant, release_at })?;
     Ok(())
@@ -328,10 +339,12 @@ pub struct Rules {
     pub exit_delay_ms: u64,
     pub grace_ms: u64,
     pub unpaid_penalty: Amount,
+    pub penalty_rate: u64,
+    pub veto_window_ms: u64,
 }
 
 /// The market's rules: who arbitrates, the minimum bond, the exit delay.
 #[receive(contract = "kuasa_market", name = "rules", return_value = "Rules", error = "Error")]
 fn rules(_ctx: &ReceiveContext, host: &Host<State>) -> CResult<Rules> {
-    Ok(Rules { arbiter: host.state().arbiter, min_bond: host.state().min_bond, exit_delay_ms: host.state().exit_delay_ms, grace_ms: host.state().grace_ms, unpaid_penalty: host.state().unpaid_penalty })
+    Ok(Rules { arbiter: host.state().arbiter, min_bond: host.state().min_bond, exit_delay_ms: host.state().exit_delay_ms, grace_ms: host.state().grace_ms, unpaid_penalty: host.state().unpaid_penalty, penalty_rate: host.state().penalty_rate, veto_window_ms: host.state().veto_window_ms })
 }

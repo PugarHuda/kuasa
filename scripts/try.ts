@@ -26,7 +26,7 @@ const consoleCall = (path: string, init: RequestInit = {}) => fetch(`${INSURER}$
 export async function runTry(log: (line: string) => void) {
   const st = JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { cover: string; marketContract: string; mandates: Record<string, { payer: string }> };
   log('1. The insurance market, read from the kuasa-market contract');
-  const iv = await connect().invokeContract({ contract: sdk.ContractAddress.create(BigInt(st.marketContract), 0n), method: sdk.ReceiveName.fromString('kuasa_market.insurers'), parameter: sdk.Parameter.empty() });
+  const iv = await connect().invokeContract({ contract: sdk.ContractAddress.create(BigInt(process.env.KUASA_MARKET ?? st.marketContract), 0n), method: sdk.ReceiveName.fromString('kuasa_market.insurers'), parameter: sdk.Parameter.empty() });
   if (iv.tag === 'success' && iv.returnValue) {
     for (const i of decodeMarketInsurers(new Uint8Array(sdk.ReturnValue.toBuffer(iv.returnValue)))) log(`   ${i.name}: cover contract <${i.cover},0>, bond ${Number(i.bond) / 1e6} CCD${i.exitAt ? ' (leaving)' : ''}`);
   }
