@@ -73,6 +73,16 @@
   </header>
 
   <section>
+    <h2>Try it live</h2>
+    <div class="panel">
+      <p style="margin:0 0 10px">Run the core flow yourself, on Concordium testnet: Alice's insured agent pays twice for the same loaf, the insurer spots it on-chain, pauses the agent at every shop, files the claim itself, and the contract approves the payout after the objection window. No wallet needed; it takes 3 to 5 minutes, and every line links to a real transaction.</p>
+      <button id="try-run" type="button">Run it on testnet</button>
+      <span class="muted" id="try-note" style="margin-left:8px">The server sleeps when idle; the first run may take a minute to start.</span>
+      <pre id="try-out" class="mono" style="white-space:pre-wrap;margin:12px 0 0;max-height:360px;overflow:auto" hidden></pre>
+    </div>
+  </section>
+
+  <section>
     <h2>Proof of solvency</h2>
     <div class="panel">
       <div id="solvent"><span class="muted">Reading testnet…</span></div>

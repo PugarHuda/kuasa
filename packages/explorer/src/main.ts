@@ -238,3 +238,29 @@ else {
   void load();
   setInterval(load, 60_000);
 }
+
+
+/** Try it live: the hosted shop + insurer run the parametric claim and stream what happens. */
+const TRY_URL = 'https://kuasa-live.onrender.com/try';
+const linkify = (line: string) => esc(line).replace(/https:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u.length > 60 ? `${u.slice(0, 57)}…` : u}</a>`);
+$('try-run').addEventListener('click', async () => {
+  const btn = $('try-run') as HTMLButtonElement;
+  const out = $('try-out');
+  btn.disabled = true; out.hidden = false; out.innerHTML = 'Starting (waking the server if it was asleep)…\n';
+  try {
+    const r = await fetch(TRY_URL, { method: 'POST' });
+    if (!r.ok || !r.body) { out.innerHTML += esc(await r.text()); return; }
+    out.innerHTML = '';
+    const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      const lines = buf.split('\n'); buf = lines.pop() ?? '';
+      for (const l of lines) out.innerHTML += `${linkify(l)}\n`;
+      out.scrollTop = out.scrollHeight;
+    }
+  } catch (e) { out.innerHTML += esc(`could not reach the live server: ${(e as Error).message}`); }
+  finally { btn.disabled = false; }
+});

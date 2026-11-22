@@ -1,0 +1,13 @@
+# Keeps the hosted demo (Render free tier sleeps after 15 idle minutes) awake for the "Try it" button.
+name: keep-alive
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - run: curl -fsS -m 120 --retry 2 https://kuasa-live.onrender.com/health || true

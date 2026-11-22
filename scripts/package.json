@@ -9,6 +9,10 @@
     "@kuasa/core": "workspace:*",
     "@kuasa/cover": "workspace:*",
     "@kuasa/merchant": "workspace:*",
+    "pg": "^8.23.1",
     "viem": "2.58.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
   }
 }
