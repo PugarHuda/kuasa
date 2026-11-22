@@ -65,6 +65,7 @@ Escrow protects you from bad sellers (Concordium's Protocol-Enforced Escrow cove
 | `registerData` | Anchored audit batches of every guard and claim decision (EU AI Act Art. 12 record keeping) |
 | Privacy Guardians (process) | Lawful disclosure route for repeated fraudulent claims |
 | A2A + Agent Card | The insurer is itself a badged agent (CIS-8004, Verified by Concordium). Other agents call its skills (solvency, risk, cover-status, quote) over A2A `message/send`. See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) |
+| CIS-2 (cover certificates) | `kuasa-certificate`: one non-transferable token per policy, balance read live from the cover contract, so any CIS-2 wallet or explorer shows an insured agent (`<13120,0>`, `<13121,0>`) |
 | MCP | Claude (or any MCP client) can shop, insure itself, list its own payments (`kuasa_my_payments`, signed request) and file claims. The demo runs Claude Code headless with only this server |
 
 ## Where it is on testnet

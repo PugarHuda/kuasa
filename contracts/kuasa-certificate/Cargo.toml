@@ -1,0 +1,26 @@
+[package]
+name = "kuasa-certificate"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Kuasa Cover certificates: a CIS-2 token per policy whose balance is read live from the cover contract"
+
+[features]
+default = []
+bump_alloc = ["concordium-std/bump_alloc"]
+
+[dependencies]
+concordium-std = "11.0"
+concordium-cis2 = "7"
+
+[dev-dependencies]
+concordium-smart-contract-testing = "5"
+kuasa-cover = { path = "../kuasa-cover" }
+kuasa-registry = { path = "../kuasa-registry" }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "s"
+codegen-units = 1

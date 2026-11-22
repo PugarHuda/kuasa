@@ -1,0 +1,8 @@
+{
+  "name": "Kuasa Cover certificate",
+  "description": "Proof that this account's AI agent is insured by Kuasa Cover. The balance is read live from the cover contract: 1 while the policy is active, unexpired and not used up, 0 otherwise. It cannot be transferred; it follows the policy.",
+  "unique": true,
+  "decimals": 0,
+  "thumbnail": { "url": "https://kuasa-explorer.vercel.app/og.png" },
+  "display": { "url": "https://kuasa-explorer.vercel.app/og.png" }
+}
