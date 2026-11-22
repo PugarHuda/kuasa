@@ -9,7 +9,7 @@ https://youtu.be/F_uwB-QmuhY
 And one minute with a real Concordium Wallet (the identity step, Verify & Access V1): https://youtu.be/0PuI22XYhdA
 
 ## 2. Run it yourself (no wallet, no keys)
-- Open https://kuasa-explorer.vercel.app and press **Run it on testnet** under "Try it live". The
+- Open https://kuasa-explorer.vercel.app and press **Run it on testnet**. The
   hosted shop and both insurers make Alice's insured agent pay twice for a loaf; the insurer finds the
   pair on-chain, pauses the agent at every shop, files the claim itself, and the contract approves the
   payout after the objection window. 3 to 5 minutes; every line links to a testnet transaction.

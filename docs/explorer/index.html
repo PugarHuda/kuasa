@@ -3,176 +3,276 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kuasa Explorer</title>
-<meta property="og:title" content="Kuasa Cover: insurance for AI agent commerce on Concordium"><meta property="og:description" content="Your agent paid twice. Kuasa paid it back. Live on Concordium testnet."><meta property="og:image" content="https://kuasa-explorer.vercel.app/og.png"><meta name="twitter:card" content="summary_large_image">
-<meta name="description" content="Live, read-only view of Kuasa Cover on Concordium testnet: policies, claims, pool and proof of solvency, read straight from the chain.">
+<title>Kuasa Cover</title>
+<meta name="description" content="Insurance for what AI agents do with real money, on Concordium. When your agent pays twice, its cover pays you back, from evidence on the chain.">
+<meta property="og:title" content="Kuasa Cover: insurance for AI agent commerce">
+<meta property="og:description" content="When your AI agent pays twice, its insurance pays you back. Live on Concordium testnet.">
+<meta property="og:image" content="https://kuasa-explorer.vercel.app/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { --bg: #f7f7f5; --panel: #ffffff; --ink: #16181d; --muted: #5d6570; --line: #e3e5e8; --accent: #2f5bd3; --ok: #11794a; --ok-bg: #e2f5ec; --bad: #b3261e; --bad-bg: #fbe7e5; --warn: #8a5a00; --warn-bg: #fdf1d6; --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; } }
-  :root[data-theme="dark"] { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
-  header h1 { margin: 0; font-size: 28px; letter-spacing: -0.01em; }
-  header p { margin: 6px 0 0; color: var(--muted); max-width: 760px; }
-  .links { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 15px; }
-  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
-  section { margin-top: 32px; }
-  h2 { font-size: 18px; margin: 0 0 12px; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
-  .stat .k { color: var(--muted); font-size: 13px; } .stat .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .pill { display: inline-block; font-size: 13px; padding: 2px 10px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
-  .pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.bad { background: var(--bad-bg); color: var(--bad); } .pill.warn { background: var(--warn-bg); color: var(--warn); }
-  .scroll { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 720px; }
-  th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-  th.n { text-align: right; }
-  td { padding: 8px 10px; border-bottom: 1px solid var(--line); } td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
-  .agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-  .agent h3 { margin: 0 0 4px; font-size: 16px; } .agent p { margin: 4px 0; color: var(--muted); font-size: 14px; }
-  .muted { color: var(--muted); font-size: 14px; }
-  ol { padding-left: 20px; margin: 0; } li { margin: 4px 0; }
-  .chart { margin-top: 16px; }
-  .chart h3 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
-  .hbar { display: grid; grid-template-columns: 110px 1fr auto; gap: 8px 12px; align-items: center; font-size: 14px; }
-  .hbar .track { height: 14px; }
-  .hbar .fill { height: 14px; background: var(--s1); border-radius: 0 4px 4px 0; min-width: 2px; }
-  .stack { display: flex; gap: 2px; height: 28px; }
-  .stack span { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; min-width: 22px; }
-  .stack span:first-child { border-radius: 4px 0 0 4px; } .stack span:last-child { border-radius: 0 4px 4px 0; }
-  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 13px; color: var(--muted); }
-  .timeline { list-style: none; padding: 0; margin: 12px 0 0 6px; border-left: 2px solid var(--line); }
-  .timeline li { position: relative; padding: 0 0 14px 18px; margin: 0; }
-  .timeline li::before { content: ""; position: absolute; left: -7px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--s1); }
-  .timeline li.off::before { background: var(--line); }
-  .timeline b { display: block; font-size: 14px; } .timeline span.d { color: var(--muted); font-size: 14px; }
-  .calc { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 16px; }
-  .calc label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-  .calc label.chk { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
-  .calc input[type=number], .calc select, select#claim-pick { font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); max-width: 100%; }
-  .premium { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 16px 0 4px; }
-  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+:root{
+  --paper:#ECEFF1; --sheet:#FFFFFF; --ink:#14213D; --ink-soft:#4A5568; --line:#C9D1D9;
+  --engrave:#2F6B5E; --stamp:#5A3FC0; --stamp-soft:#E7E2FA;
+  --display:'Bricolage Grotesque',system-ui,sans-serif; --body:'Instrument Sans',system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 17px/1.6 var(--body);font-feature-settings:"tnum" 1}
+a{color:inherit}
+a:focus-visible,button:focus-visible{outline:3px solid var(--stamp);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1160px;margin:0 auto;padding:0 28px}
+
+/* top bar */
+.top{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+.mark{display:flex;align-items:center;gap:10px;font:800 21px/1 var(--display);text-decoration:none;letter-spacing:-.01em}
+.mark svg{width:30px;height:30px}
+.top nav{display:flex;gap:26px;font-weight:500;font-size:15px}
+.top nav a{text-decoration:none;color:var(--ink-soft)}
+.top nav a:hover{color:var(--ink)}
+
+/* hero */
+.hero{display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center;padding:46px 0 84px}
+h1{font:800 clamp(42px,5.6vw,74px)/1.0 var(--display);letter-spacing:-.022em;margin:0;font-variation-settings:"opsz" 96}
+.lede{font-size:20px;line-height:1.55;color:var(--ink-soft);margin:26px 0 34px;max-width:33em}
+.actions{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+.btn{font:600 16px/1 var(--body);border-radius:999px;padding:16px 24px;cursor:pointer;text-decoration:none;border:2px solid var(--ink)}
+.btn.primary{background:var(--stamp);border-color:var(--stamp);color:#fff}
+.btn.primary:hover{background:#4930A8;border-color:#4930A8}
+.btn.ghost{background:transparent;color:var(--ink)}
+.btn.ghost:hover{background:var(--ink);color:#fff}
+.fine{font-size:14px;color:var(--ink-soft);margin-top:16px}
+
+/* the certificate */
+.cert{margin:0;position:relative;background:var(--sheet);border-radius:6px;padding:30px 32px 28px;box-shadow:0 1px 0 var(--line),0 30px 60px -30px #14213D55;overflow:visible}
+.cert .guil{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:.7;border-radius:6px}
+.cert-in{position:relative;border:1.5px solid var(--engrave);border-radius:3px;padding:22px 24px 20px;background:#fff}
+.cert h2{font:700 24px/1.15 var(--display);margin:0 0 4px;letter-spacing:-.01em}
+.cert .no{color:var(--engrave);font-weight:600;font-size:14px;margin:0 0 18px}
+.cert dl{display:grid;grid-template-columns:auto 1fr;gap:9px 18px;margin:0;font-size:15px}
+.cert dt{color:var(--ink-soft)}
+.cert dd{margin:0;font-weight:600}
+.cert .event{margin-top:18px;padding-top:16px;border-top:1px dashed var(--line);font-size:15px}
+.cert .event b{font-weight:600}
+.stamp{position:absolute;right:-34px;top:-44px;width:150px;height:150px;z-index:2;border-radius:50%;border:4px double var(--stamp);color:var(--stamp);display:grid;place-items:center;text-align:center;
+  transform:rotate(-14deg);font:800 19px/1.05 var(--display);background:#ffffffe6;box-shadow:0 0 0 3px #fff inset}
+.stamp small{display:block;font:600 13px/1.3 var(--body);margin-top:6px}
+.stamp.land{animation:land .5s cubic-bezier(.2,1.4,.4,1) .9s both}
+@keyframes land{0%{opacity:0;transform:rotate(-30deg) scale(1.9)}100%{opacity:1;transform:rotate(-14deg) scale(1)}}
+@media (prefers-reduced-motion:reduce){.stamp.land{animation:none}}
+
+/* sections */
+section{padding:84px 0;border-top:1px solid var(--line)}
+h3{font:800 clamp(30px,3.4vw,44px)/1.05 var(--display);letter-spacing:-.025em;margin:0 0 14px}
+.intro{color:var(--ink-soft);max-width:38em;margin:0 0 44px;font-size:18px}
+
+.mistakes{display:grid;gap:0}
+.mistake{display:grid;grid-template-columns:1fr 1fr;gap:40px;padding:26px 0;border-bottom:1px solid var(--line)}
+.mistake:first-child{border-top:1px solid var(--line)}
+.mistake p{margin:0}
+.mistake .what{font:700 24px/1.25 var(--display);letter-spacing:-.01em}
+.mistake .then{color:var(--ink-soft)}
+
+.flow{list-style:none;margin:0;padding:0;counter-reset:s;display:grid;grid-template-columns:repeat(5,1fr);gap:22px}
+.flow li{counter-increment:s;position:relative;padding-top:58px}
+.flow li:before{content:counter(s);position:absolute;top:0;left:0;width:40px;height:40px;border-radius:50%;border:2px solid var(--engrave);color:var(--engrave);display:grid;place-items:center;font:700 18px/1 var(--display)}
+.flow li:not(:last-child):after{content:"";position:absolute;top:20px;left:50px;right:-14px;height:2px;background:repeating-linear-gradient(90deg,var(--engrave) 0 6px,transparent 6px 11px)}
+.flow b{display:block;font:700 19px/1.25 var(--display);margin-bottom:6px}
+.flow span{font-size:15px;color:var(--ink-soft);display:block}
+.flow a{font-size:14px;color:var(--engrave);font-weight:600}
+
+/* live run */
+.live{display:grid;grid-template-columns:.8fr 1.2fr;gap:44px;align-items:start}
+.console{background:var(--ink);color:#DCE3EA;border-radius:10px;padding:22px 24px;min-height:340px;max-height:520px;overflow:auto;font:400 14px/1.65 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.console a{color:#B9ACF2}
+.console .ok{color:#9FD8C4}
+.console .muted{color:#8796A8}
+.status{font-size:15px;color:var(--ink-soft);margin:14px 0 0}
+
+.ways{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border-top:2px solid var(--ink)}
+.way{padding:28px 28px 30px 0}
+.way + .way{padding-left:28px;border-left:1px solid var(--line)}
+.way h4{font:700 22px/1.2 var(--display);margin:0 0 10px}
+.way p{margin:0 0 14px;color:var(--ink-soft);font-size:16px}
+.way code{display:block;background:var(--sheet);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;color:var(--ink)}
+
+.guard{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:start}
+.guard p{margin:0 0 16px}
+.ledger{background:var(--sheet);border-radius:6px;padding:8px 22px;box-shadow:0 1px 0 var(--line)}
+.ledger div{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-bottom:1px solid var(--line);font-size:15px}
+.ledger div:last-child{border:0}
+.ledger span:first-child{color:var(--ink-soft)}
+
+footer{padding:56px 0 70px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;justify-content:space-between;gap:24px;font-size:15px;color:var(--ink-soft)}
+footer nav{display:flex;flex-wrap:wrap;gap:22px}
+
+@media (max-width:900px){
+  .hero,.live,.guard{grid-template-columns:1fr;gap:40px}
+  .flow{grid-template-columns:1fr;gap:26px}
+  .flow li{padding:0 0 0 58px}
+  .flow li:not(:last-child):after{top:46px;left:19px;right:auto;bottom:-22px;width:2px;height:auto;background:repeating-linear-gradient(180deg,var(--engrave) 0 6px,transparent 6px 11px)}
+  .ways{grid-template-columns:1fr}
+  .way,.way + .way{padding:24px 0;border-left:0;border-bottom:1px solid var(--line)}
+  .mistake{grid-template-columns:1fr;gap:8px}
+  .top nav{display:none}
+  .stamp{width:118px;height:118px;font-size:15px;right:-6px;top:-40px}
+}
+@media (max-width:480px){.wrap{padding:0 16px}.cert{padding:16px;margin-top:40px}.cert-in{padding:18px 16px}.cert dl{grid-template-columns:1fr;gap:2px}.cert dd{margin-bottom:10px}.cert h2{padding-right:64px}.stamp{width:104px;height:104px;font-size:14px;top:-52px;right:-2px}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>Kuasa Explorer</h1>
-    <p>Kuasa Cover is insurance for AI agent commerce on Concordium. This page reads the <span class="mono">kuasa-cover</span> contract and the pool account directly from Concordium testnet in your browser. There is no backend and no keys, and every number is recomputed here.</p>
-    <div class="links">
+  <header class="top">
+    <a class="mark" href="./" aria-label="Kuasa Cover home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="none" stroke="#2F6B5E" stroke-width="2"/><circle cx="16" cy="16" r="9" fill="none" stroke="#5A3FC0" stroke-width="2" stroke-dasharray="3 2.4"/><path d="M11.5 16.5l3 3 6-7" fill="none" stroke="#14213D" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Kuasa Cover
+    </a>
+    <nav aria-label="Main">
+      <a href="#how">How it works</a>
+      <a href="#try">Try it</a>
+      <a href="explorer.html">Live explorer</a>
       <a href="https://github.com/PugarHuda/kuasa">Code</a>
-      <a href="evidence.html"><b>Evidence tour</b></a>
-      <a href="https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md">Every transaction</a>
-      <a href="https://github.com/PugarHuda/kuasa/blob/main/docs/PRICING.md">Pricing check</a>
-      <a href="wallet.html">Prove with your wallet</a>
-      <a href="https://ccdexplorer.io/testnet/instance/13105/0">kuasa-cover v3 &lt;13105,0&gt;</a> (v2 <a href="https://ccdexplorer.io/testnet/instance/13100/0">&lt;13100,0&gt;</a>, v1 <a href="https://ccdexplorer.io/testnet/instance/13066/0">&lt;13066,0&gt;</a> kept)
-      <a href="https://ccdexplorer.io/testnet/instance/13108/0">Kuasa Re &lt;13108,0&gt;</a>
-      <a href="https://ccdexplorer.io/testnet/instance/13119/0">kuasa-market &lt;13119,0&gt;</a>
-      <a href="https://ccdexplorer.io/testnet/instance/13065/0">kuasa-registry &lt;13065,0&gt;</a>
-    </div>
+    </nav>
   </header>
 
-  <section>
-    <h2>Try it live</h2>
-    <div class="panel">
-      <p style="margin:0 0 10px">Run the core flow yourself, on Concordium testnet: Alice's insured agent pays twice for the same loaf, the insurer spots it on-chain, pauses the agent at every shop, files the claim itself, and the contract approves the payout after the objection window. No wallet needed; it takes 3 to 5 minutes, and every line links to a real transaction.</p>
-      <button id="try-run" type="button">Run it on testnet</button>
-      <span class="muted" id="try-note" style="margin-left:8px">The server sleeps when idle; the first run may take a minute to start.</span>
-      <p id="payout-speed" class="muted" style="margin:10px 0 0"></p>
-      <p style="margin:10px 0 0"><b>Bring your own agent.</b> Connect your own Claude to the hosted Kuasa MCP server and drive Bob's insured agent yourself (catalog, quotes, cover, purchases, claims): in Claude Code run <span class="mono">claude mcp add --transport http kuasa https://kuasa-live.onrender.com/mcp</span>, or add <span class="mono">https://kuasa-live.onrender.com/mcp</span> as a custom connector in Claude. Then ask it to buy a bottle of Rioja.</p>
-      <pre id="try-out" class="mono" style="white-space:pre-wrap;margin:12px 0 0;max-height:360px;overflow:auto" hidden></pre>
+  <main>
+  <div class="hero">
+    <div>
+      <h1>When your AI agent pays twice, its insurance pays you back.</h1>
+      <p class="lede">Kuasa Cover insures what AI agents do with real money. You prove who you are once, your agent buys cover for what it spends, and when it gets something wrong the claim is paid from evidence on the chain, in minutes.</p>
+      <div class="actions">
+        <a class="btn primary" href="#try">Run it on testnet</a>
+        <a class="btn ghost" href="https://youtu.be/F_uwB-QmuhY">Watch the 3-minute video</a>
+      </div>
+      <p class="fine">Live on Concordium testnet. No wallet needed. Every step links to a transaction.</p>
+    </div>
+
+    <figure class="cert" aria-label="A real policy and claim from testnet">
+      <svg class="guil" id="guil" aria-hidden="true"></svg>
+      <div class="cert-in">
+        <h2>Certificate of cover</h2>
+        <p class="no">Kuasa Cover, contract &lt;13105,0&gt;</p>
+        <dl>
+          <dt>Policyholder</dt><dd>Alice, proven 18+ and EU resident</dd>
+          <dt>Insured agent</dt><dd>Agent #1262, Agent Registry</dd>
+          <dt>Spending rules</dt><dd>Food shops, 10 EUDemo per order</dd>
+          <dt>Pays from</dt><dd>EUDemo pool, with a 100 CCD bond</dd>
+        </dl>
+        <p class="event"><b>Claim 12.</b> The agent bought the same loaf twice. The insurer saw the pair on-chain, paused the agent, filed the claim and the contract approved it. <a href="https://ccdexplorer.io/testnet/transaction/55b7e421aa7f03346b6ef7d13c1ba479c0e0f55a9b2e36b1b08ecb5eef94e094">See the payout</a></p>
+      </div>
+      <div class="stamp land" aria-hidden="true"><div>Claim paid<small>4 min 37 s<br>no human</small></div></div>
+    </figure>
+  </div>
+
+  <section aria-labelledby="m-h">
+    <h3 id="m-h">Agents spend on their own now. They also get it wrong.</h3>
+    <p class="intro">Payment guards try to stop a bad payment before it happens. Some still get through, and today nobody carries that loss. Kuasa does.</p>
+    <div class="mistakes">
+      <div class="mistake"><p class="what">It pays twice for the same order.</p><p class="then">The insurer watches every finalized block. It finds the duplicate, pauses the agent at every shop and files the claim for you.</p></div>
+      <div class="mistake"><p class="what">It buys outside what you allowed.</p><p class="then">Your rules are signed and on-chain. A purchase that breaks them is refused at the shop, and one that slips through is a valid claim.</p></div>
+      <div class="mistake"><p class="what">It harms a merchant.</p><p class="then">The shop claims on the agent's cover directly, so merchants can trust agents they have never met.</p></div>
     </div>
   </section>
 
-  <section>
-    <h2>Proof of solvency</h2>
-    <div class="panel">
-      <div id="solvent"><span class="muted">Reading testnet…</span></div>
-      <div class="stats" id="stats"></div>
-      <p class="muted" style="margin:10px 0 0">Why the testnet loss ratio is high: nearly every claim here was staged on purpose to show a flow (duplicate orders, wrong items, prompt injection, fraud attempts, appeals, a merchant loss), on a few dozen small orders. The premium is priced for real mistake rates: a Monte Carlo run over the real assessor gives a 35% loss ratio at 0.5% mistakes per order and breaks even near 1.2% (<a href="https://github.com/PugarHuda/kuasa/blob/main/docs/PRICING.md">pricing check</a>); experience rating makes agents above that pay more.</p>
-      <div class="chart" id="solvency-chart" aria-label="Pool and live exposure"></div>
-      <div id="holds" style="margin-top:12px"><span class="muted">Reading circuit breaker…</span></div>
-      <p class="muted" style="margin:14px 0 0">The live exposure is the cover still owed by every active, unexpired policy (its limit minus what it already paid out). Small claims of 10 EUDemo or less are paid automatically after an objection window, and larger ones need a human claims handler. The insurer publishes who decided each claim on its CIS-8004 entry (<span class="mono">kuasa:decision:&lt;id&gt;</span>), shown in the Claims table. The shop, the other party to every purchase, attests whether each claim's orders are in its records (<span class="mono">kuasa:attest:&lt;id&gt;</span> on its CIS-8004 entry). Loss ratio is claims paid divided by premiums earned; on testnet it is far above 100% because the demo stages mistakes on purpose, and the pool is funded by capital, not by those premiums (see the Monte Carlo pricing in docs/PRICING.md for the break-even rate). The insurer also watches every receipt on-chain: when an insured agent pays twice for the same thing, it publishes a purchase hold (<span class="mono">kuasa:hold:&lt;payer&gt;</span>) that merchant guards honour until the owner resumes the agent. Reason codes follow card chargebacks: AM10 duplicate order, AM20 outside the user's intent (prompt injection), WI10 wrong item shipped, ML10 merchant loss.</p>
+  <section id="how" aria-labelledby="h-h">
+    <h3 id="h-h">How a claim gets paid</h3>
+    <p class="intro">Five steps, each one a Concordium transaction you can open.</p>
+    <ol class="flow">
+      <li><b>You verify once</b><span>Concordium ID proves you are 18+ and live in the EU, with zero knowledge.</span><a href="https://ccdexplorer.io/testnet/transaction/a2889df13b056017bbea87de5611d471f39cdc136a8d797e48b49c6b48398c61">Audit record</a></li>
+      <li><b>Your agent insures itself</b><span>It pays the premium over x402 in EUDemo, priced from its record.</span><a href="https://ccdexplorer.io/testnet/transaction/43bb75467de60dc7415faa3802baecef91c0369a61be81ac19eb8ff687d4c2f3">Policy bought</a></li>
+      <li><b>Shops check first</b><span>Badge, rules, the wallet bound to the agent, and that the order is covered.</span><a href="evidence.html">Evidence tour</a></li>
+      <li><b>The mistake is caught</b><span>Two payments for one order, found on-chain and claimed by the insurer.</span><a href="https://ccdexplorer.io/testnet/transaction/dcfcf0da770080ee35f83728b6b477872ef4ee2771af4d0f47d7956cb60a9b89">First payment</a></li>
+      <li><b>The contract approves</b><span>After the objection window, under rules the contract enforces. No human.</span><a href="https://ccdexplorer.io/testnet/transaction/535ecc49e5db6074dcc583a2f0f231e44320b375d0e7e0096b1f1670416d54dc">Approval</a></li>
+    </ol>
+  </section>
+
+  <section id="try" aria-labelledby="t-h">
+    <div class="live">
+      <div>
+        <h3 id="t-h">Run it yourself</h3>
+        <p class="intro" style="margin-bottom:24px">This runs the whole story on testnet: two insurers quote, Alice's agent pays twice for a loaf, and the claim is paid without anyone touching it. It takes 3 to 5 minutes.</p>
+        <button class="btn primary" id="run" type="button">Run it on testnet</button>
+        <p class="status" id="status">Checking the live service…</p>
+      </div>
+      <div class="console" id="out" role="log" aria-live="polite"><span class="muted">The run prints here, line by line, with a link for every transaction.</span></div>
     </div>
   </section>
 
-  <section>
-    <h2>Verified agents</h2>
-    <div class="agents">
-      <div class="panel agent"><h3>Alice's shopping agent</h3><p>Adult EU owner, ZK-proven 18+ and residency. Insures itself with Kuasa Cover.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/alice.json">Agent Card</a> · <span class="mono">JyP9YNuoGBRd7KGU5Zbf6</span></p></div>
-      <div class="panel agent"><h3>Teen's shopping agent</h3><p>16-year-old owner. It is refused age-restricted goods before payment.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/teen.json">Agent Card</a> · <span class="mono">JyP9YQ1HCCvYwSWJcmE8r</span></p></div>
-      <div class="panel agent"><h3>Kuasa Cover insurer</h3><p>The insurer is an agent too. Other agents call its skills over A2A: solvency, risk, cover-status and quote.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/insurer.json">Agent Card</a> · <span class="mono">JyP9UXdod6ZP39bFGudSW</span></p></div>
-      <div class="panel agent"><h3>Kuasa demo shop</h3><p>Checks the mandate, ZK proof, CIS-8004 entry and cover before it accepts an x402 payment.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/shop.json">Agent Card</a> · <span class="mono">JyP9YUPCvJvGFwTQ1EiJ6</span></p></div>
-    </div>
-    <p class="muted">Badges are confirmed by Concordium's hosted Agent Registry MCP (<span class="mono">check_badge</span>). The card hashes are pinned on CIS-8004 &lt;12802,0&gt;.</p>
-  </section>
-
-  <section>
-    <h2>Claims</h2>
-    <div class="panel chart" id="claims-chart" style="margin:0 0 12px" aria-label="Claims by outcome"></div>
-    <div class="panel scroll"><table><thead><tr><th>Claim</th><th>Policy</th><th>Kind</th><th>Filed by</th><th>Amount</th><th>Payout</th><th>Payout tx</th><th>Decided by</th><th>Merchant attests</th><th>Status</th></tr></thead><tbody id="claims"></tbody></table></div>
-  </section>
-
-  <section>
-    <h2>The market</h2>
-    <div class="panel scroll">
-      <p class="muted" style="margin:0 0 10px">Each insurer runs its own instance of the same kuasa-cover module, with its own pool and price, joins the open registry <a href="https://ccdexplorer.io/testnet/instance/13119/0" target="_blank" rel="noopener" class="mono">kuasa-market &lt;13119,0&gt;</a> by itself with a CCD bond (anyone can slash it to pay a claimant once an approved claim stays unpaid past the grace period: the registry reads the insurer's own contract; leaving takes 7 days). Agents find insurers there and buy the cheapest cover with free capacity, or split it.</p>
-      <table><thead><tr><th>Insurer</th><th class="n">Bond (registry)</th><th>Contract</th><th>Price</th><th class="n">Pool</th><th class="n">Live limits</th><th class="n">Free capacity</th><th class="n" title="Pool divided by the live limits it owes, read from the chain: above x1 every live policy could claim its full limit at once">Solvency</th><th class="n">Policies</th><th class="n">Loss ratio</th></tr></thead><tbody id="market"><tr><td colspan="10" class="muted">Reading testnet…</td></tr></tbody></table>
+  <section aria-labelledby="b-h">
+    <h3 id="b-h">Bring your own</h3>
+    <p class="intro">The demo uses our accounts. These three use yours.</p>
+    <div class="ways">
+      <div class="way"><h4>Your agent</h4><p>Give Claude the Kuasa tools and ask it to buy a bottle of Rioja. It drives an insured agent against the live shop and insurers.</p><code>claude mcp add --transport http kuasa https://kuasa-live.onrender.com/mcp</code></div>
+      <div class="way"><h4>Your wallet</h4><p>Prove 18+ and EU residency with your own Concordium Wallet. Kuasa learns those two facts and nothing else.</p><p><a href="wallet.html">Prove it with your wallet</a> or <a href="https://youtu.be/0PuI22XYhdA">watch one minute</a></p></div>
+      <div class="way"><h4>Your own check</h4><p>Re-read every transaction we cite straight from the chain, with no keys and none of our servers.</p><code>git clone https://github.com/PugarHuda/kuasa && cd kuasa && pnpm install && pnpm verify</code></div>
     </div>
   </section>
 
-  <section>
-    <h2>Claim timeline</h2>
-    <div class="panel">
-      <label class="muted" for="claim-pick">Claim </label><select id="claim-pick"><option>Reading testnet…</option></select>
-      <ol class="timeline" id="timeline"></ol>
+  <section aria-labelledby="g-h">
+    <div class="guard">
+      <div>
+        <h3 id="g-h">If the insurer does not pay, its bond does</h3>
+        <p>Every insurer posts a CCD bond on an open registry. If it approves a claim and leaves it unpaid, anyone can flag it. After a grace period anyone can slash the bond by the size of the claim, and after a short window for the juror panel to veto, the claimant is paid by the contract.</p>
+        <p>No arbiter has to agree, and the insurer cannot leave early to dodge it.</p>
+        <p><a href="https://ccdexplorer.io/testnet/instance/13119/0">kuasa-market &lt;13119,0&gt;</a></p>
+      </div>
+      <div class="ledger" id="ledger" aria-label="The registry right now">
+        <div><span>Insurers on the registry</span><span>Kuasa Cover, Kuasa Re</span></div>
+        <div><span>Bond each</span><span>100 CCD</span></div>
+        <div><span>Grace period, then veto window</span><span>10 min, then 10 min</span></div>
+        <div><span>Slash size</span><span>The unpaid claim, in CCD</span></div>
+        <div><span>Insurers' pools right now</span><span id="pools">reading…</span></div>
+      </div>
     </div>
   </section>
+  </main>
 
-  <section>
-    <h2>Premium calculator</h2>
-    <div class="panel">
-      <p class="muted" style="margin:0 0 12px">The insurer's own pricing function (<span class="mono">quote()</span> from <span class="mono">@kuasa/cover</span>), running in your browser. Change the inputs to see each factor.</p>
-      <form class="calc" id="calc" onsubmit="return false">
-        <label>Cover limit (EUDemo)<input type="number" name="limit" value="50" min="1" step="1"></label>
-        <label>Days<input type="number" name="days" value="30" min="1" max="365" step="1"></label>
-        <label>Mandate max per order (EUDemo)<input type="number" name="maxPerOrder" value="25" min="1" step="1"></label>
-        <label>Riskiest category<select name="category"><option>groceries</option><option>wine</option><option>vape</option></select></label>
-        <label>Incidents on the mandate<input type="number" name="incidents" value="0" min="0" step="1"></label>
-        <label>Paid claims on the agent<input type="number" name="paidClaims" value="0" min="0" step="1"></label>
-        <label>Receipts recorded<input type="number" name="receipts" value="0" min="0" step="1"></label>
-        <label>Orders in the last minutes<input type="number" name="recentOrders" value="0" min="0" step="1"></label>
-        <label>Spent in the last minutes (EUDemo)<input type="number" name="recentSpend" value="0" min="0" step="1"></label>
-        <label class="chk"><input type="checkbox" name="merchants" checked> Merchant allowlist</label>
-        <label class="chk"><input type="checkbox" name="proven" checked> Age and residency proven (ZK)</label>
-        <label class="chk"><input type="checkbox" name="bonded"> Operator bond (10 CCD)</label>
-        <label class="chk"><input type="checkbox" name="business"> Business owner (LEI)</label>
-      </form>
-      <div class="premium" id="premium"></div>
-      <div class="scroll"><table style="min-width:0"><thead><tr><th>Factor</th><th class="n">x</th><th>Why</th></tr></thead><tbody id="factors"></tbody></table></div>
-      <p class="muted" id="order-premium" style="margin:12px 0 0"></p>
-    </div>
-  </section>
-
-  <section>
-    <h2>Policies</h2>
-    <div class="panel scroll"><table><thead><tr><th>Policy</th><th>Insured agent</th><th>Cover</th><th>Limit</th><th>Paid out</th><th>Premium</th><th>Premium tx</th><th>Until</th><th>Status</th></tr></thead><tbody id="policies"></tbody></table></div>
-  </section>
-
-  <section>
-    <h2>How a claim gets here</h2>
-    <div class="panel"><ol>
-      <li>The owner verifies once with Concordium ID and gives the agent a mandate with a zero-knowledge proof.</li>
-      <li>The AI agent buys cover over x402 in EUDemo. The policy appears above.</li>
-      <li>A mistake happens, for example a double charge. The agent files a claim itself (fee sponsored), and the assessor matches the receipts on-chain.</li>
-      <li>The claim is paid automatically if it is small, or after a human approves it if it is large. The payout tx and the Paid status appear above.</li>
-    </ol></div>
-  </section>
-
-  <p class="muted" id="updated" style="margin-top:24px"></p>
+  <footer>
+    <span>Kuasa Cover, built for the Concordium Trusted Agents Hackathon.</span>
+    <nav aria-label="More">
+      <a href="explorer.html">Live explorer</a>
+      <a href="evidence.html">Evidence tour</a>
+      <a href="https://github.com/PugarHuda/kuasa/blob/main/docs/JUDGING.md">Judging guide</a>
+      <a href="https://github.com/PugarHuda/kuasa/blob/main/docs/PRODUCTION.md">Path to production</a>
+      <a href="https://github.com/PugarHuda/kuasa">Code</a>
+    </nav>
+  </footer>
 </div>
-<script type="module" src="app.js"></script>
+
+<script>
+// Engraved border: overlapping hypotrochoid rosettes, the pattern printed on banknotes and policy certificates.
+(function(){
+  const svg=document.getElementById('guil'); const box=svg.getBoundingClientRect(); const w=box.width||520, h=box.height||420;
+  svg.setAttribute('viewBox',`0 0 ${w} ${h}`);
+  const ns='http://www.w3.org/2000/svg';
+  const rosette=(cx,cy,R,r,d,steps,stroke,width)=>{let p='';for(let i=0;i<=steps;i++){const t=i/steps*Math.PI*2*r/ gcd(R,r);const x=cx+(R-r)*Math.cos(t)+d*Math.cos((R-r)/r*t);const y=cy+(R-r)*Math.sin(t)-d*Math.sin((R-r)/r*t);p+=(i?'L':'M')+x.toFixed(1)+' '+y.toFixed(1);}const el=document.createElementNS(ns,'path');el.setAttribute('d',p);el.setAttribute('fill','none');el.setAttribute('stroke',stroke);el.setAttribute('stroke-width',width);svg.appendChild(el);};
+  function gcd(a,b){return b?gcd(b,a%b):a}
+  rosette(w*0.02,h*0.03,150,37,70,2600,'#2F6B5E',.5);
+  rosette(w*0.98,h*0.97,150,41,72,2600,'#2F6B5E',.5);
+  rosette(w*0.98,h*0.03,110,29,52,2000,'#5A3FC0',.35);
+  rosette(w*0.02,h*0.97,110,23,48,2000,'#5A3FC0',.35);
+  for(let i=0;i<34;i++){const y=h-6-i*3.1;const el=document.createElementNS(ns,'path');let p='';for(let x=0;x<=w;x+=6){p+=(x?'L':'M')+x+' '+(y+Math.sin(x/23+i*.5)*2.2).toFixed(1);}el.setAttribute('d',p);el.setAttribute('fill','none');el.setAttribute('stroke','#2F6B5E');el.setAttribute('stroke-width','.35');el.setAttribute('opacity',(0.15+i/60).toFixed(2));svg.appendChild(el);}
+})();
+
+// The live run, from the hosted service (it wakes on the first request).
+const API='https://kuasa-live.onrender.com';
+const out=document.getElementById('out'), status=document.getElementById('status'), run=document.getElementById('run');
+const esc=(s)=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const line=(s)=>{let h=esc(s).replace(/https:\/\/ccdexplorer\.io\/testnet\/transaction\/([0-9a-f]{64})/g,(_m,x)=>`<a href="https://ccdexplorer.io/testnet/transaction/${x}" target="_blank" rel="noopener">tx ${x.slice(0,8)}</a>`);if(/paid|approved|Done/.test(s))h=`<span class="ok">${h}</span>`;return h;};
+fetch(API+'/status').then(r=>r.json()).then(s=>{status.textContent=s.running?'A run is in progress. Try again in a few minutes.':`The live service is up. ${s.runsLeftToday} runs left today.`;}).catch(()=>{status.textContent='The live service is waking up. It can take up to a minute.';});
+fetch(API+'/stats').then(r=>r.json()).then(s=>{const f=(x)=>x?`${(Number(x.pool)/1e6).toFixed(0)} EUDemo, ${x.coverage}× covered`:'unreadable';document.getElementById('pools').textContent=`Kuasa Cover ${f(s.insurers.kuasaCover)}; Kuasa Re ${f(s.insurers.kuasaRe)}`;}).catch(()=>{document.getElementById('pools').textContent='service asleep';});
+run.addEventListener('click',async()=>{
+  run.disabled=true; out.innerHTML=''; status.textContent='Running. Keep this page open.';
+  try{
+    const r=await fetch(API+'/try',{method:'POST'});
+    if(!r.ok){out.innerHTML=line(await r.text());status.textContent='Not started.';run.disabled=false;return;}
+    const rd=r.body.getReader(), dec=new TextDecoder(); let buf='';
+    for(;;){const {done,value}=await rd.read(); if(done)break; buf+=dec.decode(value,{stream:true}); const parts=buf.split('\n'); buf=parts.pop(); for(const p of parts){out.insertAdjacentHTML('beforeend',line(p)+'\n'); out.scrollTop=out.scrollHeight;}}
+    status.textContent='Finished. Every link above is a testnet transaction.';
+  }catch(e){status.textContent='The connection dropped. The run may still finish on-chain; check the live explorer.';}
+  run.disabled=false;
+});
+</script>
 </body>
 </html>

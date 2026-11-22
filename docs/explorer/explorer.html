@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kuasa Explorer</title>
+<meta property="og:title" content="Kuasa Cover: insurance for AI agent commerce on Concordium"><meta property="og:description" content="Your agent paid twice. Kuasa paid it back. Live on Concordium testnet."><meta property="og:image" content="https://kuasa-explorer.vercel.app/og.png"><meta name="twitter:card" content="summary_large_image">
+<meta name="description" content="Live, read-only view of Kuasa Cover on Concordium testnet: policies, claims, pool and proof of solvency, read straight from the chain.">
+<style>
+  :root { --bg: #f7f7f5; --panel: #ffffff; --ink: #16181d; --muted: #5d6570; --line: #e3e5e8; --accent: #2f5bd3; --ok: #11794a; --ok-bg: #e2f5ec; --bad: #b3261e; --bad-bg: #fbe7e5; --warn: #8a5a00; --warn-bg: #fdf1d6; --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; } }
+  :root[data-theme="dark"] { --bg: #0f1216; --panel: #171b21; --ink: #eef0f2; --muted: #9aa3ad; --line: #262c34; --accent: #7aa2ff; --ok: #5fd39a; --ok-bg: #143026; --bad: #ff8a80; --bad-bg: #3a1d1b; --warn: #f2c25b; --warn-bg: #352a12; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
+  header h1 { margin: 0; font-size: 28px; letter-spacing: -0.01em; }
+  header p { margin: 6px 0 0; color: var(--muted); max-width: 760px; }
+  .links { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 15px; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  section { margin-top: 32px; }
+  h2 { font-size: 18px; margin: 0 0 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
+  .stat .k { color: var(--muted); font-size: 13px; } .stat .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; font-size: 13px; padding: 2px 10px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.bad { background: var(--bad-bg); color: var(--bad); } .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 720px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th.n { text-align: right; }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); } td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .agent h3 { margin: 0 0 4px; font-size: 16px; } .agent p { margin: 4px 0; color: var(--muted); font-size: 14px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  ol { padding-left: 20px; margin: 0; } li { margin: 4px 0; }
+  .chart { margin-top: 16px; }
+  .chart h3 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+  .hbar { display: grid; grid-template-columns: 110px 1fr auto; gap: 8px 12px; align-items: center; font-size: 14px; }
+  .hbar .track { height: 14px; }
+  .hbar .fill { height: 14px; background: var(--s1); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .stack { display: flex; gap: 2px; height: 28px; }
+  .stack span { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; min-width: 22px; }
+  .stack span:first-child { border-radius: 4px 0 0 4px; } .stack span:last-child { border-radius: 0 4px 4px 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .timeline { list-style: none; padding: 0; margin: 12px 0 0 6px; border-left: 2px solid var(--line); }
+  .timeline li { position: relative; padding: 0 0 14px 18px; margin: 0; }
+  .timeline li::before { content: ""; position: absolute; left: -7px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--s1); }
+  .timeline li.off::before { background: var(--line); }
+  .timeline b { display: block; font-size: 14px; } .timeline span.d { color: var(--muted); font-size: 14px; }
+  .calc { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 16px; }
+  .calc label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .calc label.chk { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
+  .calc input[type=number], .calc select, select#claim-pick { font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); max-width: 100%; }
+  .premium { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 16px 0 4px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p style="margin:0 0 8px"><a href="./">Kuasa Cover home</a></p>
+    <h1>Kuasa Explorer</h1>
+    <p>Kuasa Cover is insurance for AI agent commerce on Concordium. This page reads the <span class="mono">kuasa-cover</span> contract and the pool account directly from Concordium testnet in your browser. There is no backend and no keys, and every number is recomputed here.</p>
+    <div class="links">
+      <a href="https://github.com/PugarHuda/kuasa">Code</a>
+      <a href="evidence.html"><b>Evidence tour</b></a>
+      <a href="https://github.com/PugarHuda/kuasa/blob/main/docs/TESTNET.md">Every transaction</a>
+      <a href="https://github.com/PugarHuda/kuasa/blob/main/docs/PRICING.md">Pricing check</a>
+      <a href="wallet.html">Prove with your wallet</a>
+      <a href="https://ccdexplorer.io/testnet/instance/13105/0">kuasa-cover v3 &lt;13105,0&gt;</a> (v2 <a href="https://ccdexplorer.io/testnet/instance/13100/0">&lt;13100,0&gt;</a>, v1 <a href="https://ccdexplorer.io/testnet/instance/13066/0">&lt;13066,0&gt;</a> kept)
+      <a href="https://ccdexplorer.io/testnet/instance/13108/0">Kuasa Re &lt;13108,0&gt;</a>
+      <a href="https://ccdexplorer.io/testnet/instance/13119/0">kuasa-market &lt;13119,0&gt;</a>
+      <a href="https://ccdexplorer.io/testnet/instance/13065/0">kuasa-registry &lt;13065,0&gt;</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>Try it live</h2>
+    <div class="panel">
+      <p style="margin:0 0 10px">Run the core flow yourself, on Concordium testnet: Alice's insured agent pays twice for the same loaf, the insurer spots it on-chain, pauses the agent at every shop, files the claim itself, and the contract approves the payout after the objection window. No wallet needed; it takes 3 to 5 minutes, and every line links to a real transaction.</p>
+      <button id="try-run" type="button">Run it on testnet</button>
+      <span class="muted" id="try-note" style="margin-left:8px">The server sleeps when idle; the first run may take a minute to start.</span>
+      <p id="payout-speed" class="muted" style="margin:10px 0 0"></p>
+      <p style="margin:10px 0 0"><b>Bring your own agent.</b> Connect your own Claude to the hosted Kuasa MCP server and drive Bob's insured agent yourself (catalog, quotes, cover, purchases, claims): in Claude Code run <span class="mono">claude mcp add --transport http kuasa https://kuasa-live.onrender.com/mcp</span>, or add <span class="mono">https://kuasa-live.onrender.com/mcp</span> as a custom connector in Claude. Then ask it to buy a bottle of Rioja.</p>
+      <pre id="try-out" class="mono" style="white-space:pre-wrap;margin:12px 0 0;max-height:360px;overflow:auto" hidden></pre>
+    </div>
+  </section>
+
+  <section>
+    <h2>Proof of solvency</h2>
+    <div class="panel">
+      <div id="solvent"><span class="muted">Reading testnet…</span></div>
+      <div class="stats" id="stats"></div>
+      <p class="muted" style="margin:10px 0 0">Why the testnet loss ratio is high: nearly every claim here was staged on purpose to show a flow (duplicate orders, wrong items, prompt injection, fraud attempts, appeals, a merchant loss), on a few dozen small orders. The premium is priced for real mistake rates: a Monte Carlo run over the real assessor gives a 35% loss ratio at 0.5% mistakes per order and breaks even near 1.2% (<a href="https://github.com/PugarHuda/kuasa/blob/main/docs/PRICING.md">pricing check</a>); experience rating makes agents above that pay more.</p>
+      <div class="chart" id="solvency-chart" aria-label="Pool and live exposure"></div>
+      <div id="holds" style="margin-top:12px"><span class="muted">Reading circuit breaker…</span></div>
+      <p class="muted" style="margin:14px 0 0">The live exposure is the cover still owed by every active, unexpired policy (its limit minus what it already paid out). Small claims of 10 EUDemo or less are paid automatically after an objection window, and larger ones need a human claims handler. The insurer publishes who decided each claim on its CIS-8004 entry (<span class="mono">kuasa:decision:&lt;id&gt;</span>), shown in the Claims table. The shop, the other party to every purchase, attests whether each claim's orders are in its records (<span class="mono">kuasa:attest:&lt;id&gt;</span> on its CIS-8004 entry). Loss ratio is claims paid divided by premiums earned; on testnet it is far above 100% because the demo stages mistakes on purpose, and the pool is funded by capital, not by those premiums (see the Monte Carlo pricing in docs/PRICING.md for the break-even rate). The insurer also watches every receipt on-chain: when an insured agent pays twice for the same thing, it publishes a purchase hold (<span class="mono">kuasa:hold:&lt;payer&gt;</span>) that merchant guards honour until the owner resumes the agent. Reason codes follow card chargebacks: AM10 duplicate order, AM20 outside the user's intent (prompt injection), WI10 wrong item shipped, ML10 merchant loss.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Verified agents</h2>
+    <div class="agents">
+      <div class="panel agent"><h3>Alice's shopping agent</h3><p>Adult EU owner, ZK-proven 18+ and residency. Insures itself with Kuasa Cover.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/alice.json">Agent Card</a> · <span class="mono">JyP9YNuoGBRd7KGU5Zbf6</span></p></div>
+      <div class="panel agent"><h3>Teen's shopping agent</h3><p>16-year-old owner. It is refused age-restricted goods before payment.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/teen.json">Agent Card</a> · <span class="mono">JyP9YQ1HCCvYwSWJcmE8r</span></p></div>
+      <div class="panel agent"><h3>Kuasa Cover insurer</h3><p>The insurer is an agent too. Other agents call its skills over A2A: solvency, risk, cover-status and quote.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/insurer.json">Agent Card</a> · <span class="mono">JyP9UXdod6ZP39bFGudSW</span></p></div>
+      <div class="panel agent"><h3>Kuasa demo shop</h3><p>Checks the mandate, ZK proof, CIS-8004 entry and cover before it accepts an x402 payment.</p><p><span class="pill ok">Verified by Concordium</span></p><p><a href="https://pugarhuda.github.io/kuasa/agents/shop.json">Agent Card</a> · <span class="mono">JyP9YUPCvJvGFwTQ1EiJ6</span></p></div>
+    </div>
+    <p class="muted">Badges are confirmed by Concordium's hosted Agent Registry MCP (<span class="mono">check_badge</span>). The card hashes are pinned on CIS-8004 &lt;12802,0&gt;.</p>
+  </section>
+
+  <section>
+    <h2>Claims</h2>
+    <div class="panel chart" id="claims-chart" style="margin:0 0 12px" aria-label="Claims by outcome"></div>
+    <div class="panel scroll"><table><thead><tr><th>Claim</th><th>Policy</th><th>Kind</th><th>Filed by</th><th>Amount</th><th>Payout</th><th>Payout tx</th><th>Decided by</th><th>Merchant attests</th><th>Status</th></tr></thead><tbody id="claims"></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>The market</h2>
+    <div class="panel scroll">
+      <p class="muted" style="margin:0 0 10px">Each insurer runs its own instance of the same kuasa-cover module, with its own pool and price, joins the open registry <a href="https://ccdexplorer.io/testnet/instance/13119/0" target="_blank" rel="noopener" class="mono">kuasa-market &lt;13119,0&gt;</a> by itself with a CCD bond (anyone can slash it to pay a claimant once an approved claim stays unpaid past the grace period: the registry reads the insurer's own contract; leaving takes 7 days). Agents find insurers there and buy the cheapest cover with free capacity, or split it.</p>
+      <table><thead><tr><th>Insurer</th><th class="n">Bond (registry)</th><th>Contract</th><th>Price</th><th class="n">Pool</th><th class="n">Live limits</th><th class="n">Free capacity</th><th class="n" title="Pool divided by the live limits it owes, read from the chain: above x1 every live policy could claim its full limit at once">Solvency</th><th class="n">Policies</th><th class="n">Loss ratio</th></tr></thead><tbody id="market"><tr><td colspan="10" class="muted">Reading testnet…</td></tr></tbody></table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Claim timeline</h2>
+    <div class="panel">
+      <label class="muted" for="claim-pick">Claim </label><select id="claim-pick"><option>Reading testnet…</option></select>
+      <ol class="timeline" id="timeline"></ol>
+    </div>
+  </section>
+
+  <section>
+    <h2>Premium calculator</h2>
+    <div class="panel">
+      <p class="muted" style="margin:0 0 12px">The insurer's own pricing function (<span class="mono">quote()</span> from <span class="mono">@kuasa/cover</span>), running in your browser. Change the inputs to see each factor.</p>
+      <form class="calc" id="calc" onsubmit="return false">
+        <label>Cover limit (EUDemo)<input type="number" name="limit" value="50" min="1" step="1"></label>
+        <label>Days<input type="number" name="days" value="30" min="1" max="365" step="1"></label>
+        <label>Mandate max per order (EUDemo)<input type="number" name="maxPerOrder" value="25" min="1" step="1"></label>
+        <label>Riskiest category<select name="category"><option>groceries</option><option>wine</option><option>vape</option></select></label>
+        <label>Incidents on the mandate<input type="number" name="incidents" value="0" min="0" step="1"></label>
+        <label>Paid claims on the agent<input type="number" name="paidClaims" value="0" min="0" step="1"></label>
+        <label>Receipts recorded<input type="number" name="receipts" value="0" min="0" step="1"></label>
+        <label>Orders in the last minutes<input type="number" name="recentOrders" value="0" min="0" step="1"></label>
+        <label>Spent in the last minutes (EUDemo)<input type="number" name="recentSpend" value="0" min="0" step="1"></label>
+        <label class="chk"><input type="checkbox" name="merchants" checked> Merchant allowlist</label>
+        <label class="chk"><input type="checkbox" name="proven" checked> Age and residency proven (ZK)</label>
+        <label class="chk"><input type="checkbox" name="bonded"> Operator bond (10 CCD)</label>
+        <label class="chk"><input type="checkbox" name="business"> Business owner (LEI)</label>
+      </form>
+      <div class="premium" id="premium"></div>
+      <div class="scroll"><table style="min-width:0"><thead><tr><th>Factor</th><th class="n">x</th><th>Why</th></tr></thead><tbody id="factors"></tbody></table></div>
+      <p class="muted" id="order-premium" style="margin:12px 0 0"></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Policies</h2>
+    <div class="panel scroll"><table><thead><tr><th>Policy</th><th>Insured agent</th><th>Cover</th><th>Limit</th><th>Paid out</th><th>Premium</th><th>Premium tx</th><th>Until</th><th>Status</th></tr></thead><tbody id="policies"></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>How a claim gets here</h2>
+    <div class="panel"><ol>
+      <li>The owner verifies once with Concordium ID and gives the agent a mandate with a zero-knowledge proof.</li>
+      <li>The AI agent buys cover over x402 in EUDemo. The policy appears above.</li>
+      <li>A mistake happens, for example a double charge. The agent files a claim itself (fee sponsored), and the assessor matches the receipts on-chain.</li>
+      <li>The claim is paid automatically if it is small, or after a human approves it if it is large. The payout tx and the Paid status appear above.</li>
+    </ol></div>
+  </section>
+
+  <p class="muted" id="updated" style="margin-top:24px"></p>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
