@@ -692,7 +692,7 @@ app.get('/audit-record', (req, res) => {
   const record = {
     kind: 'Kuasa Cover audit record for one AI agent',
     purpose: 'Record keeping for an AI agent that spends money (in the spirit of EU AI Act Article 12): what it was allowed to do, what it was insured for, what went wrong and who decided',
-    insurer: { cover: `<${state.cover},0>`, treasury },
+    insurer: { cover: `<${state.cover},0>`, treasury: treasuryAcc.address },
     agentPayer: payer,
     generatedAt: new Date().toISOString(),
     policies: policies.map((p) => ({ policyId: String(p.policyId), kind: p.kind, holder: p.holder, limit: String(p.limit), validUntil: new Date(p.until).toISOString(), premiumPaid: tx(p.premiumTx), terms: p.terms ? { autoPayLimit: String(p.terms.autoPayLimit), objectionWindowMs: String(p.terms.objectionWindowMs), setIn: tx(p.terms.tx) } : undefined })),
