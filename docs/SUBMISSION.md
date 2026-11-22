@@ -69,6 +69,7 @@ https://kuasa-explorer.vercel.app/slides
 
 ## Live demo
 - Try it live: the "Run it on testnet" button on https://kuasa-explorer.vercel.app runs the parametric claim for real on the hosted shop and insurer (Render free tier: if it was asleep, the first run takes a minute to start)
+- Bring your own agent: the Kuasa MCP server is hosted at https://kuasa-live.onrender.com/mcp (Streamable HTTP). `claude mcp add --transport http kuasa https://kuasa-live.onrender.com/mcp`, then ask Claude to buy a bottle of Rioja
 - Explorer: https://kuasa-explorer.vercel.app (market table, claim timelines, premium calculator)
 - Evidence tour: https://kuasa-explorer.vercel.app/evidence.html
 - Public A2A: https://kuasa-explorer.vercel.app/a2a
