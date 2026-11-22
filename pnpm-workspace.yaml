@@ -14,3 +14,5 @@ allowBuilds:
   keccak: false
   opensea-js: false
   secp256k1: false
+overrides:
+  '@concordium/web-sdk': 12.0.3
