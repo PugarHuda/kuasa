@@ -215,9 +215,11 @@ async function vetOne(merchant: string): Promise<'go' | 'no' | 'unproven'> {
 }
 async function payeeVetting(merchants: string[]) {
   const out = { go: [] as string[], no: [] as string[], unproven: [] as string[] };
-  const list = [...new Set(merchants)].slice(0, 10); // bounded outbound work per quote
+  const uniq = [...new Set(merchants)];
+  const list = uniq.slice(0, 10); // bounded outbound work per quote
   const verdicts = await Promise.all(list.map((m) => vetOne(m)));
   list.forEach((m, i) => out[verdicts[i]].push(m));
+  out.unproven.push(...uniq.slice(10)); // not vetted, so no discount can rest on them
   return out;
 }
 
