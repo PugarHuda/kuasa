@@ -6,6 +6,8 @@ Cover is insurance for what an AI agent gets wrong with real money, on Concordiu
 ## 1. Watch (3 minutes)
 https://youtu.be/F_uwB-QmuhY
 
+And one minute with a real Concordium Wallet (the identity step, Verify & Access V1): https://youtu.be/0PuI22XYhdA
+
 ## 2. Run it yourself (no wallet, no keys)
 - Open https://kuasa-explorer.vercel.app and press **Run it on testnet** under "Try it live". The
   hosted shop and both insurers make Alice's insured agent pay twice for a loaf; the insurer finds the
