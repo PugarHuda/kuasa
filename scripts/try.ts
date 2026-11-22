@@ -30,6 +30,11 @@ export async function runTry(log: (line: string) => void) {
 
   const alice = KuasaAgent.fromDemo('alice');
   const payer = st.mandates.alice.payer;
+  log("   each insurer prices the same cover for Alice's agent (50 EUDemo, 30 days):");
+  for (const [name, at] of [['Kuasa Cover', INSURER], ['Kuasa Re', 'http://localhost:4024']] as const) {
+    const q = await alice.coverQuote(50n * EUR, 30, undefined, undefined, false, at).catch(() => null) as { premium?: string; refused?: string; factors?: { name: string; multiplier: number }[] } | null;
+    log(`   ${name}: ${!q ? 'offline' : q.refused ?? `${Number(q.premium) / 1e6} EUDemo [${(q.factors ?? []).map((f) => `${f.name} x${f.multiplier}`).join(', ')}]`}`);
+  }
   log("2. Alice's agent and its cover");
   const status = await alice.coverStatus();
   if (BigInt(status.onChain.periodRemaining || '0') < 10n * EUR) {
@@ -41,7 +46,7 @@ export async function runTry(log: (line: string) => void) {
 
   log('3. The mistake: the agent pays twice for the same loaf of bread (3 EUDemo)');
   const txs: string[] = [];
-  const detected = async () => (await alice.detections()).detections.find((d) => d.paymentTxs.some((t) => txs.includes(t)) && d.status !== 'dismissed');
+  const detected = async () => (await alice.detections()).detections.find((d) => d.paymentTxs.some((t) => txs.includes(t)));
   for (let n = 0; n < 2 && !(await detected()); n++) {
     let r: { ok: boolean; paymentTx?: string; reasons?: string[] } = { ok: false };
     for (let i = 0; i < 5; i++) {

@@ -3,8 +3,9 @@
  * Kuasa Cover (4023) on localhost, and serves on $PORT:
  *   GET  /health  keep-alive target
  *   POST /try     the live parametric-claim demo (scripts/try.ts), streamed as text
- * Kuasa Re stays registered on kuasa-market but is not run here (memory).
- * ponytail: one run at a time, one per IP per 15 minutes, 24 a day: each run spends testnet EUDemo.
+ * Kuasa Re (4024) runs in the same process too: its server module is loaded a second time under another
+ * URL with its own configuration (only server.ts reads the environment; libraries are shared).
+ * ponytail: one run at a time, one per IP per 15 minutes, 36 a day: each run spends testnet EUDemo.
  */
 import { createServer } from 'node:http';
 import { restore, startSync } from './state-sync.js';
@@ -18,6 +19,10 @@ process.env.PORT = '4021';
 await import('../packages/shop/src/server.ts');
 process.env.PORT = '4023';
 await import('../packages/insurer/src/server.ts');
+// Kuasa Re: the same module under another URL, so its top level runs again with Re's settings
+delete process.env.KUASA_JURORS;
+Object.assign(process.env, { PORT: '4024', KUASA_PROFILE: 'insurer2', KUASA_COVER_INDEX: '13108', KUASA_STATE_FILE: 'insurer2-state.json', KUASA_CAPITAL_FILE: 'capital2.json', KUASA_INSURER_URL: 'http://localhost:4024', KUASA_PRICE_BPS: '8500', KUASA_WATCH_MS: '30000' });
+await import(new URL('../packages/insurer/src/server.ts?insurer=re', import.meta.url).href);
 if (process.env.DATABASE_URL) startSync();
 const { runTry } = await import('./try.js');
 
@@ -37,7 +42,7 @@ createServer(async (req, res) => {
   if (d !== day) { day = d; today = 0; }
   const wait = running ? 'a run is in progress, try again in a few minutes'
     : now - (lastByIp.get(ip) ?? 0) < 15 * 60_000 ? 'one run per 15 minutes from the same address'
-    : today >= 24 ? 'the daily limit of live runs is reached; the recorded run is on the evidence page' : '';
+    : today >= 36 ? "today's live runs are used up (each one spends testnet EUDemo). The same flow, recorded on-chain: https://kuasa-explorer.vercel.app/evidence.html" : '';
   if (wait) { res.statusCode = 429; res.end(wait); return; }
   running = true; lastByIp.set(ip, now); today++;
   res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });

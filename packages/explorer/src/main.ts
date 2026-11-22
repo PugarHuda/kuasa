@@ -243,6 +243,8 @@ else {
 /** Try it live: the hosted shop + insurer run the parametric claim and stream what happens. */
 const TRY_URL = 'https://kuasa-live.onrender.com/try';
 const linkify = (line: string) => esc(line).replace(/https:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u.length > 60 ? `${u.slice(0, 57)}…` : u}</a>`);
+// wake the hosted demo as soon as the page opens, so it is up by the time someone presses the button
+void fetch(TRY_URL.replace(/\/try$/, '/health'), { mode: 'no-cors' }).catch(() => undefined);
 $('try-run').addEventListener('click', async () => {
   const btn = $('try-run') as HTMLButtonElement;
   const out = $('try-out');
