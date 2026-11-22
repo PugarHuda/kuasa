@@ -4,11 +4,11 @@
 
 **Judging? Start with [docs/JUDGING.md](docs/JUDGING.md)**: five minutes, a button that runs a live claim, and `pnpm verify` to re-check every transaction without keys.
 
-**[Demo video (3 min)](https://youtu.be/F_uwB-QmuhY)** · **[Website](https://kuasa-explorer.vercel.app)** · [Live explorer](https://kuasa-explorer.vercel.app/explorer.html) · [Public A2A endpoint](docs/INTEGRATIONS.md#a2a-talking-to-the-insurer) · [Slides](https://kuasa-explorer.vercel.app/slides/) · [Every testnet transaction](docs/TESTNET.md) · [Integrations (MCP, A2A, OpenAI Agents SDK)](docs/INTEGRATIONS.md)
+**[Demo video (3 min)](https://youtu.be/8cP4A9FcAHQ)** · **[Website](https://kuasa-explorer.vercel.app)** · [Live explorer](https://kuasa-explorer.vercel.app/explorer.html) · [Public A2A endpoint](docs/INTEGRATIONS.md#a2a-talking-to-the-insurer) · [Slides](https://kuasa-explorer.vercel.app/slides/) · [Every testnet transaction](docs/TESTNET.md) · [Integrations (MCP, A2A, OpenAI Agents SDK)](docs/INTEGRATIONS.md)
 
 ### Five-minute tour for judges
 
-1. **Watch** the [3-minute demo](https://youtu.be/F_uwB-QmuhY): a real Claude agent is refused for lacking cover, insures itself over x402, and later claims its own double charge.
+1. **Watch** the [3-minute demo](https://youtu.be/8cP4A9FcAHQ): a real Claude agent is refused for lacking cover, insures itself over x402, and later claims its own double charge.
 2. **Run it yourself**: press **Run it on testnet** on [kuasa-explorer.vercel.app](https://kuasa-explorer.vercel.app). The hosted shop and insurer (Render) make Alice's insured agent pay twice for a loaf; the insurer spots it on-chain, pauses the agent, files the claim itself, and the contract approves the payout. It takes 3 to 5 minutes and every line links to a testnet transaction. No wallet needed.
    Or bring your own agent: `claude mcp add --transport http kuasa https://kuasa-live.onrender.com/mcp` (or add that URL as a custom connector in Claude) and ask it to buy a bottle of Rioja; it drives Bob's insured agent against the hosted shop and insurers.
    Or bring your own wallet: [wallet.html](https://kuasa-explorer.vercel.app/wallet.html) runs the identity step (zero-knowledge 18+ and EU residency, Verify & Access V1) with your Concordium Wallet on testnet; Kuasa anchors the request and the audit record ([one-minute video](https://youtu.be/0PuI22XYhdA)).

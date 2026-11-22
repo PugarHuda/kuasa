@@ -4,7 +4,7 @@
 Cover is insurance for what an AI agent gets wrong with real money, on Concordium.
 
 ## 1. Watch (3 minutes)
-https://youtu.be/F_uwB-QmuhY
+https://youtu.be/8cP4A9FcAHQ
 
 And one minute with a real Concordium Wallet (the identity step, Verify & Access V1): https://youtu.be/0PuI22XYhdA
 

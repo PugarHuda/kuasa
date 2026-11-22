@@ -35,7 +35,7 @@ Pools move into Protocol-Level Locks released only by the cover contract; EURQ r
 https://github.com/PugarHuda/kuasa
 
 ## Demo video
-https://youtu.be/F_uwB-QmuhY
+https://youtu.be/8cP4A9FcAHQ
 
 ## Testnet link
 https://ccdexplorer.io/testnet/instance/13105/0 (kuasa-cover v3; v2: https://ccdexplorer.io/testnet/instance/13100/0, v1: https://ccdexplorer.io/testnet/instance/13066/0). Second insurer Kuasa Re: https://ccdexplorer.io/testnet/instance/13108/0. Open insurer registry kuasa-market: https://ccdexplorer.io/testnet/instance/13114/0.
