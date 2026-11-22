@@ -8,8 +8,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -17,14 +16,8 @@ import pg from 'pg';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const db = () => new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL?.includes('render.com') ? true : undefined }); // external URL: verified TLS; Render's internal URL: private network
 
-function pack(): Buffer {
-  const dir = mkdtempSync(join(tmpdir(), 'kuasa-'));
-  const file = join(dir, 'state.tgz');
-  execFileSync('tar', ['--exclude=.kuasa/archive', '-czf', file, '.kuasa'], { cwd: ROOT });
-  const b = readFileSync(file);
-  rmSync(dir, { recursive: true, force: true });
-  return b;
-}
+// through stdin/stdout: no archive path (GNU tar on Windows reads "C:" as a remote host)
+const pack = (): Buffer => execFileSync('tar', ['--exclude=.kuasa/archive', '-czf', '-', '.kuasa'], { cwd: ROOT, maxBuffer: 64 << 20 });
 // gzip carries a timestamp: compare the tar's content, not the archive bytes
 const digest = () => createHash('sha256').update(execFileSync('tar', ['--exclude=.kuasa/archive', '-cf', '-', '--sort=name', '--mtime=@0', '.kuasa'], { cwd: ROOT, maxBuffer: 64 << 20 })).digest('hex');
 
@@ -43,10 +36,7 @@ export async function restore() {
     await c.query('create table if not exists kuasa_state (id int primary key, data bytea not null, at timestamptz not null default now())');
     const r = await c.query('select data, at from kuasa_state where id = 1');
     if (!r.rows[0]) return false;
-    const dir = mkdtempSync(join(tmpdir(), 'kuasa-'));
-    writeFileSync(join(dir, 'state.tgz'), r.rows[0].data);
-    execFileSync('tar', ['-xzf', join(dir, 'state.tgz')], { cwd: ROOT });
-    rmSync(dir, { recursive: true, force: true });
+    execFileSync('tar', ['-xzf', '-'], { cwd: ROOT, input: r.rows[0].data });
     console.log(`[state] restored .kuasa saved at ${r.rows[0].at.toISOString()}`);
     return true;
   } finally { await c.end(); }
