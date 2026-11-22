@@ -33,7 +33,13 @@ export async function anchorWalletRequest(grpc: ConcordiumGRPCClient, account: s
   return { request: request.toJSON(), requestAnchorTx: sdk.TransactionHash.toHexString(request.transactionRef) };
 }
 
-export async function checkWalletPresentation(grpc: ConcordiumGRPCClient, requestJson: unknown, presentationJson: unknown) {
+export async function checkWalletPresentation(grpc: ConcordiumGRPCClient, requestJson: unknown, presentationJson: unknown, account: string) {
+  // the proof must come from a credential of the account the request was bound to, not any account
+  const subjects = ((presentationJson as { verifiableCredential?: { credentialSubject?: { id?: string } }[] }).verifiableCredential ?? [])
+    .map((c) => c.credentialSubject?.id?.match(/^did:ccd:testnet:cred:([0-9a-f]{96})$/)?.[1]);
+  const info = await grpc.getAccountInfo(sdk.AccountAddress.fromBase58(account));
+  const own = new Set(Object.values(info.accountCredentials).map((c) => (c.value.contents as { credId?: string; regId?: string }).credId ?? (c.value.contents as { regId?: string }).regId));
+  if (!subjects.length || subjects.some((id) => !id || !own.has(id))) return { verified: false as const, error: `the proof is not from a credential of ${account}` };
   const request = VerificationRequestV1.fromJSON(requestJson as VerificationRequestV1.JSON);
   const presentation = VerifiablePresentationV1.fromJSON(presentationJson as VerifiablePresentationV1.JSON);
   const checked = await VerificationAuditRecordV1.createChecked(crypto.randomUUID(), request, presentation, grpc, 'Testnet');

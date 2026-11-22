@@ -50,7 +50,8 @@ const DAILY = 36;
 const { anchorWalletRequest, checkWalletPresentation } = await import('./lib/wallet-vp.js');
 const VP_DAILY = 30;
 let vpDay = '', vpToday = 0;
-const vpRequests = new Map<string, { at: number; request: unknown }>(); // requestAnchorTx -> request, for 30 min
+const vpRequests = new Map<string, { at: number; request: unknown; account: string }>(); // random session -> request, 30 min
+const vpLastByIp = new Map<string, number>();
 async function readJson(req: import('node:http').IncomingMessage, max: number): Promise<Record<string, unknown> | null> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -84,18 +85,25 @@ createServer(async (req, res) => {
       if (req.url === '/vp/request') {
         const d = new Date().toISOString().slice(0, 10);
         if (d !== vpDay) { vpDay = d; vpToday = 0; }
+        if (!ORIGINS.includes(origin)) return fail(403, 'wallet proofs start from https://kuasa-explorer.vercel.app/wallet.html');
+        const ip = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '').split(',').at(-1)!.trim();
+        if (Date.now() - (vpLastByIp.get(ip) ?? 0) < 60_000) return fail(429, 'one wallet proof request per minute from the same address');
         if (vpToday >= VP_DAILY) return fail(429, `today's ${VP_DAILY} wallet proofs on the hosted demo are used up`);
         if (typeof body.account !== 'string') return fail(400, 'account (base58) required');
+        vpLastByIp.set(ip, Date.now());
+        if (vpLastByIp.size > 5000) vpLastByIp.clear();
         vpToday++;
         const r = await anchorWalletRequest(grpc, body.account);
         for (const [k, v] of vpRequests) if (Date.now() - v.at > 30 * 60_000) vpRequests.delete(k);
-        vpRequests.set(r.requestAnchorTx, { at: Date.now(), request: r.request });
-        res.end(JSON.stringify(r));
+        const session = crypto.randomUUID(); // unguessable: only the page that asked can answer
+        vpRequests.set(session, { at: Date.now(), request: r.request, account: body.account });
+        res.end(JSON.stringify({ ...r, session }));
       } else {
-        const held = typeof body.requestAnchorTx === 'string' ? vpRequests.get(body.requestAnchorTx) : undefined;
+        const held = typeof body.session === 'string' ? vpRequests.get(body.session) : undefined;
         if (!held) return fail(404, 'unknown or expired request: ask for a new one');
-        vpRequests.delete(body.requestAnchorTx as string); // one presentation per request
-        res.end(JSON.stringify(await checkWalletPresentation(grpc, held.request, body.presentation)));
+        const r = await checkWalletPresentation(grpc, held.request, body.presentation, held.account);
+        if (r.verified) vpRequests.delete(body.session as string); // one audit anchor per request
+        res.end(JSON.stringify(r));
       }
     } catch (e) { fail(400, (e as Error).message.slice(0, 300)); }
     return;

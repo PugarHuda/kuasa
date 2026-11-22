@@ -32,11 +32,11 @@ document.getElementById('go').onclick = async (ev) => {
     const account = await window.concordium.connect();
     if (!account) throw new Error('the wallet did not share an account');
     log(`account ${account}\nKuasa is anchoring the request (about 10 s, longer if the host was asleep)…`);
-    const { request, requestAnchorTx } = await post('/vp/request', { account });
+    const { request, requestAnchorTx, session } = await post('/vp/request', { account });
     log(`request anchored: ${tx(requestAnchorTx)}\napprove the two statements in your wallet…`);
     const presentation = await window.concordium.requestVerifiablePresentationV1(request);
     log('wallet made the proof; Kuasa is checking it against the chain…');
-    const r = await post('/vp/verify', { requestAnchorTx, presentation: JSON.parse(JSON.stringify(presentation)) });
+    const r = await post('/vp/verify', { session, presentation: JSON.parse(JSON.stringify(presentation)) });
     if (!r.verified) throw new Error(`not verified: ${r.error}`);
     log(`verified: 18+ and EU residency, nothing else revealed\naudit anchor: ${tx(r.auditAnchorTx)}`);
   } catch (e) { log(`stopped: ${e.message || e}`); }

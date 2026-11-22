@@ -19,7 +19,8 @@ if (mode === 'request') {
   writeFileSync(reqFile, JSON.stringify(r.request));
   console.log(`request anchored: ${r.requestAnchorTx} -> .kuasa/wallet/request.json`);
 } else if (mode === 'finish') {
-  const r = await checkWalletPresentation(grpc, JSON.parse(readFileSync(reqFile, 'utf8')), JSON.parse(readFileSync(arg, 'utf8')));
+  const account = (JSON.parse(readFileSync(new URL('../.kuasa/wallet/browser-wallet.json', import.meta.url), 'utf8')) as { account: string }).account;
+  const r = await checkWalletPresentation(grpc, JSON.parse(readFileSync(reqFile, 'utf8')), JSON.parse(readFileSync(arg, 'utf8')), account);
   if (!r.verified) throw new Error(`wallet presentation failed verification: ${r.error}`);
   writeFileSync(new URL('../docs/explorer/wallet-proof.json', import.meta.url), JSON.stringify({
     what: 'A Verify & Access V1 presentation made by the Concordium Browser Wallet (not by keys in a script): 18+ and EU residency, zero-knowledge, bound to the wallet account',
