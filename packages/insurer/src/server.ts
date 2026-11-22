@@ -185,27 +185,39 @@ function publishDecision(claimId: bigint | string, by: 'auto' | 'human' | 'panel
  * agent in the Agent Registry (hosted MCP agents_by_owner), then vet402's public check gives go / no /
  * unproven from the deliveries it has observed. Cached 10 minutes per merchant; fixed hosts only.
  */
-const vetCache = new Map<string, { at: number; verdict: 'go' | 'no' | 'unproven' }>();
+const vetCache = new Map<string, { at: number; ttl: number; verdict: 'go' | 'no' | 'unproven' }>();
+const VET_CACHE_MAX = 500;
 async function vetOne(merchant: string): Promise<'go' | 'no' | 'unproven'> {
   const hit = vetCache.get(merchant);
-  if (hit && Date.now() - hit.at < 600_000) return hit.verdict;
-  const r = await fetch('https://agent-registry-mcp.concordium.com/mcp', {
-    method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, signal: AbortSignal.timeout(8_000),
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'agents_by_owner', arguments: { owner_account: merchant, network: 'testnet' } } }),
-  });
-  const raw = await r.text();
-  const agents = (JSON.parse(JSON.parse(raw.slice(raw.indexOf('{'))).result.content[0].text) as { agents?: { token_id: number }[] }).agents ?? [];
-  let verdict: 'go' | 'no' | 'unproven' = 'unproven';
-  if (agents.length) {
-    const v = await (await fetch(`https://vet402-concordium.fly.dev/check?agent=${agents[0].token_id}`, { signal: AbortSignal.timeout(8_000) })).json() as { vet402?: { verdict?: string } };
-    verdict = v.vet402?.verdict === 'go' ? 'go' : v.vet402?.verdict === 'no' ? 'no' : 'unproven';
+  if (hit && Date.now() - hit.at < hit.ttl) return hit.verdict;
+  const remember = (verdict: 'go' | 'no' | 'unproven', ttl: number) => {
+    if (vetCache.size >= VET_CACHE_MAX) vetCache.delete(vetCache.keys().next().value!); // oldest first
+    vetCache.set(merchant, { at: Date.now(), ttl, verdict });
+    return verdict;
+  };
+  try {
+    const r = await fetch('https://agent-registry-mcp.concordium.com/mcp', {
+      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, signal: AbortSignal.timeout(8_000),
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'agents_by_owner', arguments: { owner_account: merchant, network: 'testnet' } } }),
+    });
+    const raw = await r.text();
+    const all = (JSON.parse(JSON.parse(raw.slice(raw.indexOf('{'))).result.content[0].text) as { agents?: { token_id: number; agent_wallet?: string | null }[] }).agents ?? [];
+    // only agents whose registry wallet IS this merchant account speak for it; the worst verdict counts
+    const bound = all.filter((a) => a.agent_wallet === merchant).slice(0, 5);
+    if (!bound.length) return remember('unproven', 600_000);
+    const verdicts = await Promise.all(bound.map((a) => fetch(`https://vet402-concordium.fly.dev/check?agent=${a.token_id}`, { signal: AbortSignal.timeout(8_000) })
+      .then((x) => x.json() as Promise<{ vet402?: { verdict?: string } }>).then((v) => v.vet402?.verdict).catch(() => undefined)));
+    const verdict = verdicts.includes('no') ? 'no' : verdicts.every((v) => v === 'go') ? 'go' : 'unproven';
+    return remember(verdict, 600_000);
+  } catch {
+    return remember('unproven', 60_000); // a failed lookup is retried after a minute, not on every quote
   }
-  vetCache.set(merchant, { at: Date.now(), verdict });
-  return verdict;
 }
 async function payeeVetting(merchants: string[]) {
   const out = { go: [] as string[], no: [] as string[], unproven: [] as string[] };
-  for (const m of merchants) out[await vetOne(m).catch(() => 'unproven' as const)].push(m);
+  const list = [...new Set(merchants)].slice(0, 10); // bounded outbound work per quote
+  const verdicts = await Promise.all(list.map((m) => vetOne(m)));
+  list.forEach((m, i) => out[verdicts[i]].push(m));
   return out;
 }
 
