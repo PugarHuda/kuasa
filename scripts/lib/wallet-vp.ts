@@ -40,6 +40,14 @@ export async function checkWalletPresentation(grpc: ConcordiumGRPCClient, reques
   const info = await grpc.getAccountInfo(sdk.AccountAddress.fromBase58(account));
   const own = new Set(Object.values(info.accountCredentials).map((c) => (c.value.contents as { credId?: string; regId?: string }).credId ?? (c.value.contents as { regId?: string }).regId));
   if (!subjects.length || subjects.some((id) => !id || !own.has(id))) return { verified: false as const, error: `the proof is not from a credential of ${account}` };
+  // the SDK reports a context mismatch by throwing outside its promise (it takes the process down), so the
+  // presentation must answer exactly this request before the SDK sees it
+  type Ctx = { label?: string; context?: unknown };
+  const asked = (requestJson as { context?: { given?: Ctx[]; requested?: string[] } }).context;
+  const got = (presentationJson as { presentationContext?: { given?: Ctx[]; requested?: Ctx[] } }).presentationContext;
+  const answers = (g: Ctx) => got?.given?.some((x) => x.label === g.label && JSON.stringify(x.context) === JSON.stringify(g.context));
+  if (!asked?.given?.length || !got || !asked.given.every(answers) || !(asked.requested ?? []).every((l) => got.requested?.some((x) => x.label === l)))
+    return { verified: false as const, error: 'the presentation does not answer this request (stale or for another request)' };
   const request = VerificationRequestV1.fromJSON(requestJson as VerificationRequestV1.JSON);
   const presentation = VerifiablePresentationV1.fromJSON(presentationJson as VerifiablePresentationV1.JSON);
   const checked = await VerificationAuditRecordV1.createChecked(crypto.randomUUID(), request, presentation, grpc, 'Testnet');
