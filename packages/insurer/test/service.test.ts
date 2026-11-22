@@ -1082,3 +1082,16 @@ test('appeals panel: a majority approves and the appeal is paid', async () => {
   assert.equal(t.svc.state().claims.find((c) => c.claimId === 1n)!.decidedBy, 'panel');
   assert.deepEqual(t.svc.openAppeals(), []);
 });
+
+test('owner alerts: only a policy holder picks the ntfy topic, and it must be hard to guess', async () => {
+  const t = harness({ coverOf: async () => ({ periodRemaining: 0n, policyId: null }) });
+  assert.throws(() => t.svc.setNotify(PAYER, OWNER, 'kuasa-alerts-7f3a9c2e'), /holder of a live policy/);
+  await t.svc.issue((await quoteOk(t.svc)).quoteId, h(9));
+  assert.throws(() => t.svc.setNotify(PAYER, addr(40), 'kuasa-alerts-7f3a9c2e'), /holder of a live policy/);
+  assert.throws(() => t.svc.setNotify(PAYER, OWNER, 'short'), /12 to 64/);
+  assert.throws(() => t.svc.setNotify(PAYER, OWNER, 'has/slash-in-it-0000'), /12 to 64/);
+  t.svc.setNotify(PAYER, OWNER, 'kuasa-alerts-7f3a9c2e');
+  assert.equal(t.svc.notifyTopic(PAYER), 'kuasa-alerts-7f3a9c2e');
+  t.svc.setNotify(PAYER, OWNER, '');
+  assert.equal(t.svc.notifyTopic(PAYER), null);
+});

@@ -212,6 +212,8 @@ export class InsurerService {
   private confirmedBefore = new Map<string, number>();
   /** Owner rules (Stripe Radar style), per agent payer: pause the agent above this spend in one hour. */
   private rules = new Map<string, { maxSpendPerHour: bigint; by: string; at: number }>();
+  /** Owner notifications: the ntfy.sh topic the policy holder subscribed to for this agent. */
+  private notify = new Map<string, { topic: string; by: string }>();
   /** Receipts kept for owner rules (one hour, per mandate). */
   private spendLog: SeenReceipt[] = [];
 
@@ -238,6 +240,7 @@ export class InsurerService {
       this.holds = new Map(Object.entries(s.holds ?? {}));
       this.confirmedBefore = new Map(Object.entries(s.confirmedBefore ?? {}));
       this.rules = new Map(Object.entries(s.rules ?? {}));
+      this.notify = new Map(Object.entries(s.notify ?? {}));
     }
   }
 
@@ -248,7 +251,7 @@ export class InsurerService {
       fraud: Object.fromEntries(this.fraud), pendingDisclosures: this.pendingDisclosures, disclosures: this.disclosures,
       payouts: this.payouts, premiumsIn: this.premiumsIn, refunds: this.refunds, objectionsBy: Object.fromEntries(this.objectionsBy),
       detections: this.detections, holds: Object.fromEntries(this.holds), confirmedBefore: Object.fromEntries(this.confirmedBefore),
-      rules: Object.fromEntries(this.rules),
+      rules: Object.fromEntries(this.rules), notify: Object.fromEntries(this.notify),
     }));
   }
 
@@ -628,6 +631,16 @@ export class InsurerService {
     return this.rules.get(payer) ?? null;
   }
   ruleOf = (payer: string) => this.rules.get(payer) ?? null;
+
+  /** The policy holder picks an ntfy.sh topic for this agent's alerts (pause, claim paid); '' removes it. */
+  setNotify(payer: string, holder: string, topic: string) {
+    if (!this.holdsLivePolicy(payer, holder)) throw new Error('only the holder of a live policy on this agent sets its notifications');
+    if (topic && !/^[A-Za-z0-9_-]{12,64}$/.test(topic)) throw new Error('topic: 12 to 64 letters, digits, - or _ (pick something hard to guess)');
+    if (topic) this.notify.set(payer, { topic, by: holder }); else this.notify.delete(payer);
+    this.save();
+    return topic || null;
+  }
+  notifyTopic = (payer: string) => this.notify.get(payer)?.topic ?? null;
 
   detectionsOf = (payer: string) => this.detections.filter((d) => d.payer === payer);
   holdOf = (payer: string) => this.holds.get(payer) ?? null;

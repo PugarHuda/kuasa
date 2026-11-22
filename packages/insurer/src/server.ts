@@ -169,6 +169,20 @@ function publishDecision(claimId: bigint | string, by: 'auto' | 'human' | 'panel
     .catch((e) => console.error('[insurer] publishing decision failed', String(claimId), (e as Error).message));
   if (paid) void postReputation(BigInt(claimId)).catch((e) => console.error('[insurer] ERC-8004 feedback failed', String(claimId), (e as Error).message));
   if (paid) void publishRisk(BigInt(claimId)).catch((e) => console.error('[insurer] publishing risk failed', String(claimId), (e as Error).message));
+  if (paid) void cover.claim(BigInt(claimId)).then(async (c) => {
+    const p = c && await cover.policy(c.policyId);
+    if (p) notifyOwner(p.agentPayer, 'Claim paid', `Kuasa Cover paid claim ${claimId} (${Number(c!.payout) / 1e6} EUDemo) for your agent ${p.agentPayer.slice(0, 8)}…: https://ccdexplorer.io/testnet/transaction/${paid}`);
+  }).catch(() => undefined);
+}
+
+/**
+ * Owner alerts through ntfy.sh (the owner subscribes to a topic in the ntfy app). The host is fixed:
+ * the insurer never posts to an address a user supplied. Best effort: an alert never blocks a decision.
+ */
+function notifyOwner(payer: string, title: string, message: string) {
+  const topic = svc.notifyTopic(payer);
+  if (!topic) return;
+  void fetch(`https://ntfy.sh/${topic}`, { method: 'POST', body: message, headers: { Title: title, Tags: 'shield' }, signal: AbortSignal.timeout(10_000) }).catch(() => undefined);
 }
 
 /**
@@ -303,7 +317,10 @@ const svc = new InsurerService({
   },
   registryEvents: (tx) => registryEventsOfTx(grpc, tx, registryIndex),
   // Circuit breaker: holds live on the insurer's own CIS-8004 entry, where any merchant guard can read them.
-  hold: async (payer, reason) => { if (state.insurerAgent) await cis8004SetMetadata(grpc, state.insurerAgent, holdKey(payer), `hold;reason=${reason};at=${Math.floor(Date.now() / 1000)}`, treasury); },
+  hold: async (payer, reason) => {
+    notifyOwner(payer, 'Your agent is paused', `Kuasa Cover paused ${payer.slice(0, 8)}… at every shop (${reason}). Resume it when you have checked.`);
+    if (state.insurerAgent) await cis8004SetMetadata(grpc, state.insurerAgent, holdKey(payer), `hold;reason=${reason};at=${Math.floor(Date.now() / 1000)}`, treasury);
+  },
   unhold: async (payer) => { if (state.insurerAgent) await cis8004SetMetadata(grpc, state.insurerAgent, holdKey(payer), `clear;by=owner;at=${Math.floor(Date.now() / 1000)}`, treasury); },
   verifyAp2Owner: (intent, owner) => verifyAp2Intent(intent, owner, (a) => grpc.getAccountInfo(a)),
   verifyDelivery: (d, signer) => verifyDeliveryNote(d, signer, (a) => grpc.getAccountInfo(a)),
@@ -845,9 +862,10 @@ app.post('/rules/:payer', async (req, res) => {
   const holder = String(req.header('x-kuasa-payer') ?? '');
   if (!(await verifyPayerProof({ header: (n) => req.header(n), payer: holder, audience: AUDIENCES, accountInfo: (a) => grpc.getAccountInfo(a) }).catch(() => false))) return json(res, { error: 'holder signature required' }, 401);
   try {
-    const rule = svc.setRule(req.params.payer, holder, big(req.body?.maxSpendPerHour));
-    audit.append({ kind: 'owner-rule', payer: req.params.payer, by: holder, maxSpendPerHour: String(rule?.maxSpendPerHour ?? 0) });
-    json(res, { rule });
+    const rule = req.body?.maxSpendPerHour !== undefined ? svc.setRule(req.params.payer, holder, big(req.body.maxSpendPerHour)) : svc.ruleOf(req.params.payer);
+    const notify = typeof req.body?.notify === 'string' ? svc.setNotify(req.params.payer, holder, req.body.notify) : svc.notifyTopic(req.params.payer);
+    audit.append({ kind: 'owner-rule', payer: req.params.payer, by: holder, maxSpendPerHour: String(rule?.maxSpendPerHour ?? 0), notify: notify ? 'set' : 'none' });
+    json(res, { rule, notify });
   } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
 
