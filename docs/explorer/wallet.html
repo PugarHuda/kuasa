@@ -1,0 +1,46 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Prove with your wallet</title>
+<style>body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;background:#fff;color:#222}code{font-size:13px;word-break:break-all}button{font:inherit;padding:8px 16px;cursor:pointer}#log{white-space:pre-wrap;font:14px ui-monospace,monospace;background:#f5f5f5;padding:12px;border-radius:6px;min-height:3em}a{color:#1a56db}</style></head><body>
+<h1>Prove it with your own Concordium wallet</h1>
+<p>Before Kuasa insures an agent, its owner proves they are 18 or older and live in the EU, with a zero-knowledge
+proof: Kuasa learns those two facts and nothing else. This page runs that step with <b>your</b> wallet, on testnet.</p>
+<ol>
+<li>Kuasa anchors a Verify &amp; Access V1 request on-chain, bound to your account.</li>
+<li>Your wallet shows the two statements; you approve or reject them.</li>
+<li>Kuasa checks the proof against the chain and anchors the audit record.</li>
+</ol>
+<p>Needs the <a href="https://chromewebstore.google.com/detail/concordium-wallet/mnnkpffndmickbiakofclnpoiajlegmg">Concordium Wallet</a>
+on <b>Testnet</b> with an identity (the Concordium testnet identity provider issues one in a minute). No CCD needed: Kuasa pays the anchors.</p>
+<p><button id="go">Prove with my wallet</button></p>
+<div id="log">Waiting for you.</div>
+<p>A finished one, made this way: <a href="wallet-proof.json">wallet-proof.json</a>. Code: <a href="https://github.com/PugarHuda/kuasa/blob/main/scripts/lib/wallet-vp.ts">scripts/lib/wallet-vp.ts</a>.</p>
+<script>
+const API = 'https://kuasa-live.onrender.com';
+const log = (s) => { document.getElementById('log').textContent += '\n' + s; };
+const tx = (h) => `https://ccdexplorer.io/testnet/transaction/${h}`;
+fetch(API + '/health').catch(() => {}); // wake the free host early
+const post = async (path, body) => {
+  const r = await fetch(API + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+  if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+};
+document.getElementById('go').onclick = async (ev) => {
+  ev.target.disabled = true;
+  document.getElementById('log').textContent = '';
+  try {
+    if (!window.concordium) throw new Error('no Concordium Wallet in this browser (install it, then reload)');
+    const account = await window.concordium.connect();
+    if (!account) throw new Error('the wallet did not share an account');
+    log(`account ${account}\nKuasa is anchoring the request (about 10 s, longer if the host was asleep)…`);
+    const { request, requestAnchorTx } = await post('/vp/request', { account });
+    log(`request anchored: ${tx(requestAnchorTx)}\napprove the two statements in your wallet…`);
+    const presentation = await window.concordium.requestVerifiablePresentationV1(request);
+    log('wallet made the proof; Kuasa is checking it against the chain…');
+    const r = await post('/vp/verify', { requestAnchorTx, presentation: JSON.parse(JSON.stringify(presentation)) });
+    if (!r.verified) throw new Error(`not verified: ${r.error}`);
+    log(`verified: 18+ and EU residency, nothing else revealed\naudit anchor: ${tx(r.auditAnchorTx)}`);
+  } catch (e) { log(`stopped: ${e.message || e}`); }
+  ev.target.disabled = false;
+};
+</script>
+</body></html>

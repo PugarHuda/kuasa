@@ -5,6 +5,7 @@
  *   POST /try     the live parametric-claim demo (scripts/try.ts), streamed as text
  *   POST /mcp     the Kuasa MCP server over HTTP, as Bob's agent: point any MCP client (Claude) at it
  *   GET  /stats   live numbers: both insurers' pool and exposure (read from chain), live runs today, uptime
+ *   POST /vp/request, /vp/verify   Verify & Access V1 with the visitor's own Concordium wallet (wallet.html)
  * Kuasa Re (4024) runs in the same process too: its server module is loaded a second time under another
  * URL with its own configuration (only server.ts reads the environment; libraries are shared).
  * ponytail: one run at a time, one per IP per 15 minutes, 36 a day: each run spends testnet EUDemo.
@@ -45,6 +46,17 @@ const spend = (tool: string) => {
 };
 
 const DAILY = 36;
+// wallet proofs: each request and each audit anchor is a testnet transaction from the verifier, so cap them
+const { anchorWalletRequest, checkWalletPresentation } = await import('./lib/wallet-vp.js');
+const VP_DAILY = 30;
+let vpDay = '', vpToday = 0;
+const vpRequests = new Map<string, { at: number; request: unknown }>(); // requestAnchorTx -> request, for 30 min
+async function readJson(req: import('node:http').IncomingMessage, max: number): Promise<Record<string, unknown> | null> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) { size += (c as Buffer).length; if (size > max) return null; chunks.push(c as Buffer); }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return null; }
+}
 /** The demo agent's EUDemo balance, read from the chain at most once a minute. */
 let balance = { at: 0, eudemo: 0 };
 async function agentBalance() {
@@ -61,7 +73,33 @@ let day = '', today = 0;
 createServer(async (req, res) => {
   const origin = req.headers.origin ?? '';
   if (ORIGINS.includes(origin)) res.setHeader('access-control-allow-origin', origin);
-  if (req.method === 'OPTIONS') { res.setHeader('access-control-allow-methods', 'POST'); res.end(); return; }
+  if (req.method === 'OPTIONS') { res.setHeader('access-control-allow-methods', 'POST'); res.setHeader('access-control-allow-headers', 'content-type'); res.end(); return; }
+  if (req.method === 'POST' && (req.url === '/vp/request' || req.url === '/vp/verify')) {
+    res.setHeader('content-type', 'application/json');
+    const fail = (code: number, error: string) => { res.statusCode = code; res.end(JSON.stringify({ error })); };
+    const body = await readJson(req, 200_000);
+    if (!body) return fail(400, 'bad or oversized JSON');
+    const grpc = connect();
+    try {
+      if (req.url === '/vp/request') {
+        const d = new Date().toISOString().slice(0, 10);
+        if (d !== vpDay) { vpDay = d; vpToday = 0; }
+        if (vpToday >= VP_DAILY) return fail(429, `today's ${VP_DAILY} wallet proofs on the hosted demo are used up`);
+        if (typeof body.account !== 'string') return fail(400, 'account (base58) required');
+        vpToday++;
+        const r = await anchorWalletRequest(grpc, body.account);
+        for (const [k, v] of vpRequests) if (Date.now() - v.at > 30 * 60_000) vpRequests.delete(k);
+        vpRequests.set(r.requestAnchorTx, { at: Date.now(), request: r.request });
+        res.end(JSON.stringify(r));
+      } else {
+        const held = typeof body.requestAnchorTx === 'string' ? vpRequests.get(body.requestAnchorTx) : undefined;
+        if (!held) return fail(404, 'unknown or expired request: ask for a new one');
+        vpRequests.delete(body.requestAnchorTx as string); // one presentation per request
+        res.end(JSON.stringify(await checkWalletPresentation(grpc, held.request, body.presentation)));
+      }
+    } catch (e) { fail(400, (e as Error).message.slice(0, 300)); }
+    return;
+  }
   if (req.method === 'GET' && req.url === '/health') { res.end('ok'); return; }
   if (req.method === 'GET' && req.url === '/stats') {
     // public, read-only: what the hosted insurers hold and owe right now, from their own solvency views

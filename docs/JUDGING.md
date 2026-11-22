@@ -11,6 +11,8 @@ https://youtu.be/F_uwB-QmuhY
   hosted shop and both insurers make Alice's insured agent pay twice for a loaf; the insurer finds the
   pair on-chain, pauses the agent at every shop, files the claim itself, and the contract approves the
   payout after the objection window. 3 to 5 minutes; every line links to a testnet transaction.
+- Or bring your own wallet: https://kuasa-explorer.vercel.app/wallet.html runs the identity step (ZK 18+ and EU
+  residency, Verify & Access V1) with your Concordium Wallet on testnet; Kuasa anchors the request and the audit record.
 - Or bring your own agent: `claude mcp add --transport http kuasa https://kuasa-live.onrender.com/mcp`,
   then ask Claude to buy a bottle of Rioja. It drives Bob's insured agent against the same services.
 
