@@ -1,0 +1,191 @@
+{
+ "what": "A Verify & Access V1 presentation made by the Concordium Browser Wallet (not by keys in a script): 18+ and EU residency, zero-knowledge, bound to the wallet account",
+ "requestAnchorTx": "33e39a33ad4113e545d2126c2b92efba942d55f29513bb1b5f0db661e67a6834",
+ "auditAnchorTx": "6695711542305e8acb3a5cfa44aac15315bcdcc31bf9744b6f1672d94c0d86f6",
+ "record": {
+  "request": {
+   "type": "ConcordiumVerificationRequestV1",
+   "context": {
+    "type": "ConcordiumUnfilledContextInformationV1",
+    "given": [
+     {
+      "label": "Nonce",
+      "context": "f14681e6d7da71ec3007c815f01d25fd86baf4f806014a241f15828fa81bd979"
+     },
+     {
+      "label": "ConnectionID",
+      "context": "kuasa-browser-wallet"
+     },
+     {
+      "label": "ResourceID",
+      "context": "kuasa-mandate"
+     },
+     {
+      "label": "ContextString",
+      "context": "kuasa:v1:ccd:4221332d34e1694168c2a0c0b3fd0f27:36ywcyfH1J9hRJJnqSakg2euZ2r5YssGDvB6CT2dZW5r8ec25c:browser-wallet"
+     }
+    ],
+    "requested": [
+     "BlockHash"
+    ]
+   },
+   "subjectClaims": [
+    {
+     "type": "identity",
+     "source": [
+      "accountCredential"
+     ],
+     "statements": [
+      {
+       "type": "AttributeInRange",
+       "attributeTag": "dob",
+       "lower": "18000101",
+       "upper": "20081123"
+      },
+      {
+       "type": "AttributeInSet",
+       "attributeTag": "countryOfResidence",
+       "set": [
+        "AT",
+        "BE",
+        "BG",
+        "CY",
+        "CZ",
+        "DK",
+        "EE",
+        "FI",
+        "FR",
+        "DE",
+        "GR",
+        "HU",
+        "IE",
+        "IT",
+        "LV",
+        "LT",
+        "LU",
+        "MT",
+        "NL",
+        "PL",
+        "PT",
+        "RO",
+        "SK",
+        "SI",
+        "ES",
+        "SE",
+        "HR"
+       ]
+      }
+     ],
+     "issuers": [
+      "did:ccd:testnet:idp:0",
+      "did:ccd:testnet:idp:1",
+      "did:ccd:testnet:idp:3",
+      "did:ccd:testnet:idp:4",
+      "did:ccd:testnet:idp:5"
+     ]
+    }
+   ],
+   "transactionRef": "33e39a33ad4113e545d2126c2b92efba942d55f29513bb1b5f0db661e67a6834"
+  },
+  "presentation": {
+   "type": [
+    "VerifiablePresentation",
+    "ConcordiumVerifiablePresentationV1"
+   ],
+   "presentationContext": {
+    "type": "ConcordiumContextInformationV1",
+    "given": [
+     {
+      "label": "Nonce",
+      "context": "f14681e6d7da71ec3007c815f01d25fd86baf4f806014a241f15828fa81bd979"
+     },
+     {
+      "label": "ConnectionID",
+      "context": "kuasa-browser-wallet"
+     },
+     {
+      "label": "ResourceID",
+      "context": "kuasa-mandate"
+     },
+     {
+      "label": "ContextString",
+      "context": "kuasa:v1:ccd:4221332d34e1694168c2a0c0b3fd0f27:36ywcyfH1J9hRJJnqSakg2euZ2r5YssGDvB6CT2dZW5r8ec25c:browser-wallet"
+     }
+    ],
+    "requested": [
+     {
+      "label": "BlockHash",
+      "context": "cd721ff12080ad6fe749723595fbd13b14709dc924cf74837307f81b9e6e4751"
+     }
+    ]
+   },
+   "verifiableCredential": [
+    {
+     "type": [
+      "VerifiableCredential",
+      "ConcordiumVerifiableCredentialV1",
+      "ConcordiumAccountBasedCredential"
+     ],
+     "credentialSubject": {
+      "id": "did:ccd:testnet:cred:b326e2b6b187e966fdcfd76abe37608b4980a9b338e9653376ff6dbf726ac37f4a3dece668f9ac8c471493274b65c5aa",
+      "statement": [
+       {
+        "type": "AttributeInRange",
+        "attributeTag": "dob",
+        "lower": "18000101",
+        "upper": "20081123"
+       },
+       {
+        "type": "AttributeInSet",
+        "attributeTag": "countryOfResidence",
+        "set": [
+         "AT",
+         "BE",
+         "BG",
+         "CY",
+         "CZ",
+         "DE",
+         "DK",
+         "EE",
+         "ES",
+         "FI",
+         "FR",
+         "GR",
+         "HR",
+         "HU",
+         "IE",
+         "IT",
+         "LT",
+         "LU",
+         "LV",
+         "MT",
+         "NL",
+         "PL",
+         "PT",
+         "RO",
+         "SE",
+         "SI",
+         "SK"
+        ]
+       }
+      ]
+     },
+     "issuer": "did:ccd:testnet:idp:0",
+     "proof": {
+      "created": "2026-11-22T14:29:32.615Z",
+      "proofValue": "0000000000000002028b0635676b8c5d9204d5f849fdb44afad973b233f329506e10416fe1569f42c021423622dbe9ff9a1251b34c080351af836f1759eb248df1e8a8145e262fbae74e0be9de8e939bbf8cd4a9539d0907641b6685023d69d7baa3068ec204a573f2a8abb6387fa3865619c5c3ceb565807dac3fd58ee3bf9592018ca72b47417bac093feb9bdf896abd974332abd53b58feaf74df7506ff52add6d8530441be00d2a9843519b066fcac9eb05bca81c8a377c6f9ee5d63394f2d94890b13882a7a772931b90b9c3a7ede0d8c56c204fe1b8b88167639dd1924a5e7e14915c54b87195f9165c09cffdc950c8cab3a5e2479dda6cbcf37bc6989aa34895518ff215c0727950009228ba4929b13955f95d79c1d184afa47834a9dafba8996721680ee8000000007b993b8c939a065cf00d54b9066a5d0442bca1594395465634d0f6c4ed0b91d055d72ae9998a46fe0f40971d2bd29406f90149e5726e059cc18c21b7dde361f2ff42e8b057738d50e9a564928ed74e548a0466ce4e737928fded5d85bc7c2fbbf8d8e30e302b9c00c616d7e451d96cddedd092150eae6cafdd052067d8d33011886a9f4992ba407374be93d54492b2fa8a7fd1cdfd32860c4a6805f1fc819a93a1865a9e06fd94b2073a3e4c6fbca5b8097835e59533155b39a1a08a8167c390e8d90ec3417f5a24b07453ebb3af1cad5798afa2bcfbfd55bec42265bfcd5318bfd46560ec9c43d3a4add22b6fb958d0db3e1f1f1110589665e68bab578e7f8ddc75c80aebc8dc5b008617fd7b5d9dc8f6b5c298da97c75d807c0770343b5bba8836c0dc22b8fc07e5f57a7f6f52c144c128fccca005f95a425957220f4547f805d661b84acb3c9e2b241f9e3236b7b86856d18cd7447562b5659bb74a7d3f8375db0f08fff7ab439ba3fe8c7b88eb0ec97cbe95f5ea26fb6177ef5d9e09ad06c879a6c32c3dc7547f6f7b0dc9518838e1ad886e2e0ea9e5980019d7e0d12d46c332519bdce01489b6c3fa8d860759fdbaea8d0dceab6df5bac6301b799a89f1c66f6d6123669b279cf31fc598e5dcda175cf54b5481b82b1fdb10a037c07e57aa49639a7f29999dfc1369e0998dd1c574ef83045e557d3be1f811eaf78907c6886a6cda7f4b489230038ed85a1a6b011b4823c2a9c692fb630df619639e3c736f45aa353906ef8c9a4d2a919c6c4ebb61a4170080c4d7963409dfa93d17cd87ab5e4990e4ce4e791f3c2b1339cef08d38f00b6eb731b533726fc8db90933fdbd7225e8dd15ac14cdae66bf88e64d8bb0acf28b0425d1bd954b1fb2be5a9cb722a54584fac74e616a4a2d57f7760eb28949be6202d854fe8ec9caafc9a470a3440e5294244656b7f2be3306125b76baea5b41858408bcb2cdb8469b72eaa96d923b014cb41b6abbd4c0966cd807b9ce3f925dd26958c01f846e6f73748a31f072039209f37033d49f917f5502f975cb9e01587e1b305a609d2eacf50de343cf61fdbc96da7b6629e8232fb685cb9473d385a825c4703ba5a7cd8ca6835ee79b05c6e1195541a9e7764ad80f2aa8dc7fc45d09bcb56d73e004cd42e403d6c66616caafd44c3fa448d4d753dc176ce862002ae2944ba5fbc570de40e71b0472f2a7476531142871b6c727ef9b9e23fda97202911c9d2833b81c999f000bc0c0ceb370acd3c25290a0b8c0528b2de202ecda4a1a2c5fed0f1f17d833be556a818f1c5c05282757b073a018d98f8ceb18a3713c1d08444fff8ee1246bc1f0447092e15a0bde86635449b923062bed055a233f26c9b4c00a38ee0844a52be9dccd35925b198e21451e7e761ce8d90ed13596d8ba5a7ce53f8c471a425d1cb969e543e69d0000000582f0d598ea606c74d1dbc57122c2a7bcc842ce46c0f38dc550ddf5d40f0ba900a39f8e46c8895114bd6e9e527fc15bb596f86b7792db1cefd2c0411b6567672900a37ac84c38f9878962d9d075bc0523e9eea7871a1eb596ae2023dd82c2f0f492eaa83baa4cf7f7d6c087d1a077514037c6f7155c2cdbe683613a85b1792d9b3ac33ac195a280b81f08c5abfebf5626ac01859549a1a9dd93aa66cdc5504ef857f31b1d578c92d560d74447e3fcbc7e6d3ba788f2e535ab8844df0047602af196cd8707d64a907ab0c3232b0f9244e15c7058abcf7e1718ef8459dbbae5d74476aeccfe59b5a8fe95b6f0500551a42e950e3766477fbfe2db22a007d2340f4c8f26a8f4340a68d26fe2a9967321362c4569f853aaed443c0c6182a426e5f89fb3e2dcdab94bd742345fadaefcf79e22916732b13a4e5be3e145ade11b0b51f12a5e76a61007654d182c7cb393150bdc92077fa6bc025ddc498b8f9338f4569cd5c45f4e88e4fce7619c98d8e55da49d7b3d88fc47e4ab2b1d282011578d0372abf08e703e4e4e704d13d372df57ed05fe338c1f4d921dacb1008e82348eb8a73fab67db0acc4962f7e3dfd5b39d110f93e2b7ed2ce660b72d9017d328f77cc0a48e9a74b90a479529fd22fa37a1eb3d86cfa1178c6a27e28bad4f8464217cbb327ac46df695e76f627308fc40e6710299e5a6646a74ac74e3646163983085fe30e266f4fef3f8550d3fcd6802b96c2f4be0815e2d911fe48ebd68a420c4ae7a",
+      "type": "ConcordiumZKProofV4"
+     }
+    }
+   ],
+   "proof": {
+    "created": "2026-11-22T14:29:32.615Z",
+    "proofValue": "",
+    "type": "ConcordiumWeakLinkingProofV1"
+   }
+  },
+  "id": "2883101d-f79f-41cf-87b9-8c97a893863a",
+  "version": 1,
+  "type": "ConcordiumVerificationAuditRecord"
+ }
+}

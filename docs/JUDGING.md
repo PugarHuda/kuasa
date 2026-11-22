@@ -26,7 +26,7 @@ No keys, no accounts and none of our services: it only reads the public testnet 
 ## 4. What to look at, by judging criterion
 | Criterion | Where |
 |---|---|
-| Depth of integration | Concordium ID and Verify & Access V1 with all three anchors (request, presentation, audit anchor; ZK 18+ and EU residency bound to one agent), Agent Registry CIS-8004 with the badge and the agentWallet each payment must come from (cleared on transfer), Agent Cards from the registry's own builder (badge valid, card hash matches on-chain), CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, three contracts with cross-contract reads, registerData audit anchors. Table: [README](../README.md#concordium-components) |
+| Depth of integration | Concordium ID and Verify & Access V1 with all three anchors (request, presentation, audit anchor; ZK 18+ and EU residency bound to one agent; also answered by a real Concordium Browser Wallet, [record](https://kuasa-explorer.vercel.app/wallet-proof.json)), Agent Registry CIS-8004 with the badge and the agentWallet each payment must come from (cleared on transfer), Agent Cards from the registry's own builder (badge valid, card hash matches on-chain), CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, three contracts with cross-contract reads, registerData audit anchors. Table: [README](../README.md#concordium-components) |
 | It works | The Try it button above; live numbers at https://kuasa-live.onrender.com/stats; [evidence tour](https://kuasa-explorer.vercel.app/evidence.html) (every live step with its transactions); `pnpm verify` |
 | Path to production | [PRODUCTION.md](PRODUCTION.md): pools under Protocol-Level Locks, EURQ, a licensed fronting insurer with Kuasa as MGA, independent operators, open security findings |
 | Usefulness | Composes with the payment guards other teams built: the insurer prices vet402's delivery verdicts on the merchants an agent may pay (guards stop a bad payment; Kuasa pays when one gets through). Agents now spend money on their own; when one double-pays, buys outside its owner's intent or harms a merchant, Kuasa pays, priced from on-chain facts. From the mistake to the payout: about 5 minutes, no human (median of recorded runs, on-chain) |
@@ -41,6 +41,8 @@ contracts. Concordium's Protocol-Level Locks (Simple, January 2027; contract-aut
 they need ([PRODUCTION.md](PRODUCTION.md)).
 
 ## Honest limits
+- The four demo principals prove their identity with keys in scripts (so the flow runs unattended); one
+  proof was made by the official Concordium Browser Wallet to show the same request works from a real wallet.
 - Every role on testnet is played by one team: both insurers, the three jurors, the capital providers
   and the shop ([who runs what](TESTNET.md#who-runs-what)).
 - The testnet claims are staged to show each flow, so the loss ratio says nothing about real risk;
