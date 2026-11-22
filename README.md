@@ -1,6 +1,8 @@
 # Kuasa Cover
 
-**Insurance for AI agent commerce, on Concordium.**
+**Insurance for AI agent commerce, on Concordium.** Payment guards stop a bad payment before it happens. Kuasa pays when one gets through.
+
+**Judging? Start with [docs/JUDGING.md](docs/JUDGING.md)**: five minutes, a button that runs a live claim, and `pnpm verify` to re-check every transaction without keys.
 
 **[Demo video (3 min)](https://youtu.be/F_uwB-QmuhY)** · **[Live explorer](https://kuasa-explorer.vercel.app)** · [Public A2A endpoint](docs/INTEGRATIONS.md#a2a-talking-to-the-insurer) · [Slides](https://kuasa-explorer.vercel.app/slides/) · [Every testnet transaction](docs/TESTNET.md) · [Integrations (MCP, A2A, OpenAI Agents SDK)](docs/INTEGRATIONS.md)
 

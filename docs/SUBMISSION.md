@@ -3,7 +3,9 @@
 The form opens Mon 23 Nov, 06:59 GMT+7. The deadline is Thu 10 Dec, 06:59 GMT+7 (9 Dec, 23:59 UTC).
 
 ## Description
-Kuasa Cover is insurance for AI agent commerce, on Concordium. Escrow protects you from bad sellers. Kuasa Cover protects you from your own agent.
+Kuasa Cover is insurance for AI agent commerce, on Concordium. Payment guards stop a bad payment before it happens; Kuasa pays when one gets through. Escrow protects you from bad sellers. Kuasa Cover protects you from your own agent.
+
+Judging guide (five minutes, keyless verification of every transaction): https://github.com/PugarHuda/kuasa/blob/main/docs/JUDGING.md
 
 **The problem**
 - AI agents now pay on their own. When one orders twice, buys the wrong item or harms a merchant, nobody carries the loss.

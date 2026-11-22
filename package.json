@@ -3,10 +3,13 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.21.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "pnpm -r --if-present test",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm -r --if-present typecheck",
+    "verify": "pnpm --filter @kuasa/scripts exec tsx verify-evidence.ts"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
