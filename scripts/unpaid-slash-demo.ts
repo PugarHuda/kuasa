@@ -45,7 +45,12 @@ if (resume < 0) {
   console.log('   slashing right away:', early);
   console.log('   waiting out the 10-minute grace period…');
   await sleep(10 * 60_000 + 30_000);
-} else claimId = BigInt(process.argv[resume + 1]);
+} else {
+  // an approved claim left unpaid from an earlier run: flag it on this registry, then wait out the grace period
+  claimId = BigInt(process.argv[resume + 1]);
+  console.log(`2. the investor flags claim ${claimId} on kuasa-market`, (await callMarket('flagUnpaid', claimId)).hash);
+  if (!process.argv.includes('--now')) { console.log('   waiting out the 10-minute grace period…'); await sleep(10 * 60_000 + 30_000); }
+}
 console.log("   still on Kuasa Re's contract:", show((await re.claim(claimId))?.status));
 const before = await ccd(teenAgent.address);
 const slash = await callMarket('slashUnpaid', claimId);

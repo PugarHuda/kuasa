@@ -41,6 +41,9 @@ pub struct InitParams {
     pub penalty_rate: u64,
     /// How long the arbiter can veto a slash before the claimant can be paid from escrow.
     pub veto_window_ms: u64,
+    /// How much of one insurer's bond can reach claimants after the short veto window per `exit_delay_ms`;
+    /// beyond it a slash waits the full exit delay, so self-dealt claims cannot pull a bond out faster than leaving.
+    pub fast_release_cap: Amount,
 }
 
 #[derive(Serialize, SchemaType)]
@@ -74,6 +77,30 @@ pub struct CoverClaim {
     pub payout: u64,
 }
 
+/// kuasa-cover's `policy` view, mirrored for reading only: what the insurer can owe on a claim.
+#[derive(Deserial)]
+pub struct CoverMandateKey { pub owner: AccountAddress, pub id: HashSha2256 }
+#[derive(Deserial)]
+pub enum CoverPolicyKind { Period, Order(HashSha2256) }
+#[derive(Deserial)]
+pub enum CoverPolicyStatus { Active, Cancelled }
+#[derive(Deserial)]
+pub struct CoverPolicy {
+    pub holder: AccountAddress,
+    pub agent_payer: AccountAddress,
+    pub agent_token: String,
+    pub mandate: CoverMandateKey,
+    pub kind: CoverPolicyKind,
+    pub limit: u64,
+    pub deductible: u64,
+    pub premium: u64,
+    pub premium_tx: HashSha2256,
+    pub valid_from: Timestamp,
+    pub valid_until: Timestamp,
+    pub paid_out: u64,
+    pub status: CoverPolicyStatus,
+}
+
 #[derive(Serialize, SchemaType)]
 pub struct RegisterParams {
     pub name: String,
@@ -104,6 +131,9 @@ pub struct State<S: HasStateApi = StateApi> {
     cover_module: ModuleReference,
     penalty_rate: u64,
     veto_window_ms: u64,
+    fast_release_cap: Amount,
+    /// per insurer pool: (start of the current exit-delay window, amount released fast in it)
+    fast_used: StateMap<AccountAddress, (Timestamp, Amount), S>,
     insurers: StateMap<AccountAddress, Insurer, S>,
     /// (pool, cover contract, claim id) -> when it was first seen Approved and unpaid
     unpaid: StateMap<(AccountAddress, ContractAddress, u64), Timestamp, S>,
@@ -160,7 +190,7 @@ fn sender_account(ctx: &ReceiveContext) -> CResult<AccountAddress> {
 #[init(contract = "kuasa_market", parameter = "InitParams")]
 fn init(ctx: &InitContext, state_builder: &mut StateBuilder) -> InitResult<State> {
     let p: InitParams = ctx.parameter_cursor().get()?;
-    Ok(State { arbiter: p.arbiter, min_bond: p.min_bond, exit_delay_ms: p.exit_delay_ms, grace_ms: p.grace_ms, unpaid_penalty: p.unpaid_penalty, cover_module: p.cover_module, penalty_rate: p.penalty_rate, veto_window_ms: p.veto_window_ms,
+    Ok(State { arbiter: p.arbiter, min_bond: p.min_bond, exit_delay_ms: p.exit_delay_ms, grace_ms: p.grace_ms, unpaid_penalty: p.unpaid_penalty, cover_module: p.cover_module, penalty_rate: p.penalty_rate, veto_window_ms: p.veto_window_ms, fast_release_cap: p.fast_release_cap, fast_used: state_builder.new_map(),
         insurers: state_builder.new_map(), unpaid: state_builder.new_map(), slashed_for: state_builder.new_set(), escrow: state_builder.new_map() })
 }
 
@@ -237,6 +267,15 @@ fn slash(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logger) -> C
 }
 
 /// Reads a claim from the insurer's own cover contract (the one it registered, bound for good).
+fn read_policy(host: &Host<State>, cover: ContractAddress, policy_id: u64) -> CResult<CoverPolicy> {
+    let mut rv = host
+        .invoke_contract_read_only(&cover, &policy_id, EntrypointName::new_unchecked("policy"), Amount::zero())
+        .map_err(|_| Error::CoverUnreadable)?
+        .ok_or(Error::CoverUnreadable)?;
+    let p: Option<CoverPolicy> = rv.get().map_err(|_| Error::CoverUnreadable)?;
+    p.ok_or(Error::CoverUnreadable)
+}
+
 fn read_claim(host: &Host<State>, cover: ContractAddress, claim_id: u64) -> CResult<CoverClaim> {
     let mut rv = host
         .invoke_contract_read_only(&cover, &claim_id, EntrypointName::new_unchecked("claim"), Amount::zero())
@@ -278,8 +317,10 @@ fn slash_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     let c = read_claim(host, cover, r.claim_id)?;
     ensure!(c.status == CoverClaimStatus::Approved, Error::NotApprovedUnpaid);
     ensure!(c.claimant != r.pool, Error::Unauthorized);
-    // claim-sized: the payout the insurer owes, priced in CCD, never below the flat penalty
-    let owed = if c.payout > 0 { c.payout } else { c.amount };
+    // claim-sized: what the insurer owes on it (amount less the deductible, within what is left of the
+    // policy limit, both read from its own cover contract), priced in CCD, never below the flat penalty
+    let p = read_policy(host, cover, c.policy_id)?;
+    let owed = c.amount.saturating_sub(p.deductible).min(p.limit.saturating_sub(p.paid_out));
     let sized = Amount::from_micro_ccd(owed.saturating_mul(host.state().penalty_rate));
     let penalty = if sized > host.state().unpaid_penalty { sized } else { host.state().unpaid_penalty };
     let mut i = host.state_mut().insurers.get_mut(&r.pool).ok_or(Error::UnknownInsurer)?;
@@ -289,7 +330,15 @@ fn slash_unpaid(ctx: &ReceiveContext, host: &mut Host<State>, logger: &mut Logge
     drop(i);
     let _ = host.state_mut().slashed_for.insert((r.pool, cover, r.claim_id));
     host.state_mut().unpaid.remove(&(r.pool, cover, r.claim_id));
-    let release_at = ctx.metadata().slot_time().checked_add(Duration::from_millis(host.state().veto_window_ms)).ok_or(Error::InvalidParams)?;
+    // fast (after the veto window) within this insurer's cap per exit-delay window; the rest waits the exit delay
+    let now = ctx.metadata().slot_time();
+    let window = Duration::from_millis(host.state().exit_delay_ms);
+    let (start, used) = host.state().fast_used.get(&r.pool).map(|x| *x).unwrap_or((now, Amount::zero()));
+    let (start, used) = if now >= start.checked_add(window).ok_or(Error::InvalidParams)? { (now, Amount::zero()) } else { (start, used) };
+    let fast = used + amount <= host.state().fast_release_cap;
+    let _ = host.state_mut().fast_used.insert(r.pool, (start, if fast { used + amount } else { used }));
+    let delay = if fast { host.state().veto_window_ms } else { host.state().exit_delay_ms };
+    let release_at = now.checked_add(Duration::from_millis(delay)).ok_or(Error::InvalidParams)?;
     let _ = host.state_mut().escrow.insert((r.pool, cover, r.claim_id), (c.claimant, amount, release_at));
     logger.log(&Event::SlashEscrowed { pool: r.pool, claim_id: r.claim_id, amount, to: c.claimant, release_at })?;
     Ok(())
@@ -341,10 +390,11 @@ pub struct Rules {
     pub unpaid_penalty: Amount,
     pub penalty_rate: u64,
     pub veto_window_ms: u64,
+    pub fast_release_cap: Amount,
 }
 
 /// The market's rules: who arbitrates, the minimum bond, the exit delay.
 #[receive(contract = "kuasa_market", name = "rules", return_value = "Rules", error = "Error")]
 fn rules(_ctx: &ReceiveContext, host: &Host<State>) -> CResult<Rules> {
-    Ok(Rules { arbiter: host.state().arbiter, min_bond: host.state().min_bond, exit_delay_ms: host.state().exit_delay_ms, grace_ms: host.state().grace_ms, unpaid_penalty: host.state().unpaid_penalty, penalty_rate: host.state().penalty_rate, veto_window_ms: host.state().veto_window_ms })
+    Ok(Rules { arbiter: host.state().arbiter, min_bond: host.state().min_bond, exit_delay_ms: host.state().exit_delay_ms, grace_ms: host.state().grace_ms, unpaid_penalty: host.state().unpaid_penalty, penalty_rate: host.state().penalty_rate, veto_window_ms: host.state().veto_window_ms, fast_release_cap: host.state().fast_release_cap })
 }

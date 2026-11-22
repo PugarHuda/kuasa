@@ -29,7 +29,7 @@ fn setup_with_cover() -> (Chain, ContractAddress, ContractAddress, ContractAddre
             amount: Amount::zero(),
             mod_ref: m.module_reference,
             init_name: OwnedContractName::new_unchecked("init_kuasa_market".into()),
-            param: OwnedParameter::from_serial(&InitParams { arbiter: ARBITER, min_bond: Amount::from_ccd(10), exit_delay_ms: 7 * DAY, grace_ms: DAY, unpaid_penalty: Amount::from_ccd(4), cover_module, penalty_rate: RATE.with(|r| *r.borrow()), veto_window_ms: 7 * DAY }).unwrap(),
+            param: OwnedParameter::from_serial(&InitParams { arbiter: ARBITER, min_bond: Amount::from_ccd(10), exit_delay_ms: 7 * DAY, grace_ms: DAY, unpaid_penalty: Amount::from_ccd(4), cover_module, penalty_rate: RATE.with(|r| *r.borrow()), veto_window_ms: DAY / 24, fast_release_cap: Amount::from_ccd(6) }).unwrap(),
         })
         .unwrap()
         .contract_address;
@@ -246,4 +246,20 @@ fn a_slash_is_sized_to_the_unpaid_claim_and_capped_by_the_bond() {
     chain.tick_block_time(Duration::from_millis(7 * DAY)).unwrap();
     upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &EscrowRef { pool: POOL, cover, claim_id: 0 }, Amount::zero()).unwrap();
     assert_eq!(chain.account_balance_available(CLAIMANT).unwrap(), before + Amount::from_ccd(10));
+}
+
+#[test]
+fn a_small_slash_reaches_the_claimant_after_the_veto_window_but_a_bond_cannot_be_drained_fast() {
+    // flat 4 CCD penalty, fast cap 6 CCD per week: the first slash is paid after the 1-hour veto window
+    let (mut chain, market, cover) = market_with_approved_claim();
+    let r = ClaimRef { pool: POOL, claim_id: 0 };
+    upd(&mut chain, market, OTHER, "kuasa_market.flagUnpaid", &r, Amount::zero()).unwrap();
+    chain.tick_block_time(Duration::from_millis(DAY)).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.slashUnpaid", &r, Amount::zero()).unwrap();
+    let e = EscrowRef { pool: POOL, cover, claim_id: 0 };
+    assert!(upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &e, Amount::zero()).is_err(), "the panel's veto window runs first");
+    chain.tick_block_time(Duration::from_millis(DAY / 24)).unwrap();
+    let before = chain.account_balance_available(CLAIMANT).unwrap();
+    upd(&mut chain, market, OTHER, "kuasa_market.releaseSlash", &e, Amount::zero()).unwrap();
+    assert_eq!(chain.account_balance_available(CLAIMANT).unwrap(), before + Amount::from_ccd(4), "paid within the hour, not a week");
 }

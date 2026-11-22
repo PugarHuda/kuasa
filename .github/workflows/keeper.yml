@@ -23,6 +23,6 @@ jobs:
       - run: pnpm exec tsx keeper.ts
         working-directory: scripts
         env:
-          KUASA_MARKET: '13118'
+          KUASA_MARKET: '13119'
           KUASA_KEEPER_ADDRESS: ${{ secrets.KUASA_KEEPER_ADDRESS }}
           KUASA_KEEPER_KEY: ${{ secrets.KUASA_KEEPER_KEY }}
