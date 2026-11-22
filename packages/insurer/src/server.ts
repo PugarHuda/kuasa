@@ -251,6 +251,7 @@ async function postReputation(claimId: bigint) {
 }
 
 const grpc = connect();
+const agentRegistry = new Cis8004Registry(grpc); // CIS-8004: agent status and its bound payment wallet
 const registryIndex = BigInt(state.registry);
 const coverIndex = BigInt(state.cover);
 const registry = new KuasaRegistry(grpc, registryIndex);
@@ -357,6 +358,7 @@ const svc = new InsurerService({
   // contribution: only the same agent's claims count (double recovery needs the same insured; anyone else
   // listing these orders elsewhere cannot reduce this agent's payout), and only what was paid or approved
   externalReputation: (token) => externalReputation(token),
+  agentWallet: (token) => agentRegistry.walletOf(token),
   otherInsurersPaid: async (agentPayer, mine) => {
     const others = [fileCover, ...((state as { market?: { cover: string }[] }).market ?? []).map((m) => m.cover)].filter((c) => BigInt(c) !== coverIndex);
     let paid = 0n;

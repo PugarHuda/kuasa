@@ -165,6 +165,14 @@ export class KuasaGuard {
     const out: string[] = [];
     if (!a.active) out.push('agent token not active in the agent registry');
     if (a.owner !== m.principal.account) out.push('agent token not owned by the principal');
+    // the payer must be the wallet the registry routes this agent's payments to; the registry clears it on
+    // every transfer, so an agent that changed hands cannot buy until its new owner binds a wallet again
+    if (this.opts.agents.walletOf) {
+      const w = await this.opts.agents.walletOf(m.agent.registry.tokenId).catch(() => undefined);
+      if (w === undefined) out.push('agent wallet check unavailable');
+      else if (w === null) out.push('no payment wallet bound to this agent in the registry (cleared when an agent changes hands)');
+      else if (w !== m.agent.payer) out.push('the paying account is not the payment wallet bound to this agent in the registry');
+    }
     return out;
   }
 

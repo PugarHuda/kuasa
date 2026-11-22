@@ -3,29 +3,32 @@
   "description": "Regulated-goods shop for AI agents: checks mandates, ZK proofs, CIS-8004 status and Kuasa Cover before accepting x402 payments in EUDemo.",
   "url": "https://pugarhuda.github.io/kuasa/agents/shop.json",
   "version": "1.0.0",
-  "provider": {
-    "organization": "Kuasa",
-    "url": "https://github.com/PugarHuda/kuasa"
-  },
   "defaultInputModes": [
+    "text/markdown",
     "application/json"
   ],
   "defaultOutputModes": [
+    "text/markdown",
     "application/json"
   ],
+  "authentication": {
+    "schemes": []
+  },
+  "skills": [
+    {
+      "id": "sell-regulated-goods",
+      "name": "Sell regulated goods",
+      "description": "x402 checkout gated by Kuasa mandates, ZK proofs and Kuasa Cover",
+      "tags": [
+        "x402",
+        "kuasa"
+      ]
+    }
+  ],
   "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
     "extensions": [
-      {
-        "uri": "https://github.com/PugarHuda/kuasa/blob/main/docs/agents/kuasa-extension-v1.md",
-        "description": "Kuasa: mandated, insured agent commerce on Concordium",
-        "params": {
-          "role": "merchant",
-          "mandateRegistry": "<13065,0>",
-          "cover": "<13066,0>",
-          "asset": "EUDemo",
-          "network": "ccd:4221332d34e1694168c2a0c0b3fd0f27"
-        }
-      },
       {
         "uri": "https://docs.concordium.com/a2a-extensions/concordium-badge/v1",
         "description": "Verified by Concordium badge — on-chain agent identity in a CIS-8004 registry",
@@ -40,6 +43,9 @@
             "cis8004": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12802.0",
             "cis8": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12801.0"
           },
+          "services": {
+            "shop": "https://kuasa-live.onrender.com"
+          },
           "verify": "Resolve tokenAddress via CIS-8004 agent_of; confirm owner + status=Active + card SHA-256 == metadata_hash.",
           "verification": {
             "service": "Concordium Agent Registry",
@@ -48,24 +54,38 @@
             "docs": "https://docs.concordium.com/en/mainnet/technical-reference/agent-registry/concordium-badge.html"
           }
         }
+      },
+      {
+        "uri": "https://github.com/PugarHuda/kuasa/blob/main/docs/agents/kuasa-extension-v1.md",
+        "description": "Kuasa: mandated, insured agent commerce on Concordium",
+        "params": {
+          "role": "merchant",
+          "mandateRegistry": "<13065,0>",
+          "cover": "<13105,0>",
+          "asset": "EUDemo",
+          "network": "ccd:4221332d34e1694168c2a0c0b3fd0f27"
+        }
       }
     ]
   },
-  "skills": [
-    {
-      "id": "sell-regulated-goods",
-      "name": "Sell regulated goods",
-      "description": "x402 checkout gated by Kuasa mandates, ZK proofs and Kuasa Cover",
-      "tags": [
-        "x402",
-        "kuasa"
-      ]
-    }
-  ],
+  "provider": {
+    "organization": "Kuasa",
+    "url": "https://github.com/PugarHuda/kuasa"
+  },
+  "documentationUrl": "https://github.com/PugarHuda/kuasa/blob/main/docs/JUDGING.md",
   "registrations": [
     {
       "agentId": 1267,
       "agentRegistry": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12802.0"
     }
-  ]
+  ],
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "services": [
+    {
+      "name": "web",
+      "endpoint": "https://kuasa-live.onrender.com"
+    }
+  ],
+  "x402Support": true,
+  "active": true
 }

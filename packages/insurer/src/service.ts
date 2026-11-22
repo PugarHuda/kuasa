@@ -106,6 +106,8 @@ export type InsurerDeps = {
   otherInsurersPaid?(agentPayer: string, orders: string[]): Promise<bigint>;
   /** Portable reputation: ERC-8004 feedback on this agent from clients other than this insurer (null if none or unknown). */
   externalReputation?(agentToken: string): Promise<{ count: number; average: number } | null>;
+  /** The agent's payment wallet bound in the Agent Registry (CIS-8004 agentWallet), null when unset. */
+  agentWallet?(agentToken: string): Promise<string | null>;
 };
 
 /** JSON with bigints tagged, so a snapshot round-trips exactly. */
@@ -286,6 +288,12 @@ export class InsurerService {
     }
     const e = await this.deps.mandateEntry(m.principal.account, id);
     if (!e || e.revoked || e.owner !== m.principal.account || e.payer !== m.agent.payer) return { refused: 'mandate not active on-chain' };
+    // only the wallet the registry binds to this agent is insured: the binding is cleared when the agent changes hands
+    if (this.deps.agentWallet) {
+      const w = await this.deps.agentWallet(m.agent.registry.tokenId).catch(() => undefined);
+      if (w === undefined) return { refused: 'agent wallet check unavailable; try again' };
+      if (w !== m.agent.payer) return { refused: w === null ? 'no payment wallet bound to this agent in the Agent Registry (setAgentWallet)' : 'the paying account is not the payment wallet bound to this agent in the Agent Registry' };
+    }
     if (Number(e.validUntilMs) < this.deps.now()) return { refused: 'mandate expired' };
     if (req.limit > e.maxTotal) return { refused: 'cover limit exceeds the mandate budget' };
     if (this.deps.capacity) {

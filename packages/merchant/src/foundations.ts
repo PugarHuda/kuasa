@@ -25,6 +25,8 @@ export interface SpendControl {
 /** CIS-8004 Agent Registry lookup. */
 export interface AgentRegistry {
   agentOf(tokenIdHex: string): Promise<{ owner: string; active: boolean } | null>;
+  /** The agent's payment wallet (CIS-8004 agentWallet), null when unset (it is cleared on every transfer). */
+  walletOf?(tokenIdHex: string): Promise<string | null>;
 }
 
 /** Kuasa Cover lookup (live cover for an agent payer, optionally for one order). */
@@ -98,5 +100,20 @@ export class Cis8004Registry implements AgentRegistry {
       sdk.ContractName.fromString('CIS-8004'), sdk.EntrypointName.fromString('agentOf')) as { Some?: [{ owner_account: string; status: Record<string, unknown> }] };
     const a = v.Some?.[0];
     return a ? { owner: a.owner_account, active: 'Active' in a.status } : null;
+  }
+
+  async walletOf(tokenIdHex: string) {
+    const t = Buffer.from(tokenIdHex, 'hex');
+    const param = new Uint8Array([t.length, ...t]);
+    const res = await this.grpc.invokeContract({
+      contract: this.address,
+      method: sdk.ReceiveName.fromString('CIS-8004.getAgentWallet'),
+      parameter: sdk.Parameter.fromBuffer(param.buffer as ArrayBuffer),
+    });
+    if (res.tag !== 'success' || !res.returnValue) throw new Error('CIS-8004.getAgentWallet failed');
+    const v = sdk.deserializeReceiveReturnValue(sdk.ReturnValue.toBuffer(res.returnValue).slice().buffer as ArrayBuffer, await this.loadSchema(),
+      sdk.ContractName.fromString('CIS-8004'), sdk.EntrypointName.fromString('getAgentWallet')) as { Some?: [string] } | string | null;
+    if (v && typeof v === 'object' && 'Some' in v) return v.Some?.[0] ?? null;
+    return typeof v === 'string' ? v : null;
   }
 }

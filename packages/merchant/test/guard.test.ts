@@ -229,3 +229,11 @@ test('an order reference survives a payment that was never broadcast (verify fai
   await g.settleFailed({ paymentPayload: { payload: payload(2) } }); // settle failed: it may have been broadcast
   assert.match((await pay(3))?.message ?? '', /unknown or expired order reference/, 'after a settle failure: used up');
 });
+
+test('the paying account must be the payment wallet bound to the agent in the registry (CIS-8004 agentWallet)', async () => {
+  const reg = (wallet: string | null): AgentRegistry => ({ agentOf: async () => ({ owner: OWNER, active: true }), walletOf: async () => wallet });
+  const why = async (w: string | null) => ((await buy(makeGuard({}, undefined, { agents: reg(w) }))) as { reasons?: string[] }).reasons?.join('; ') ?? 'ok';
+  assert.equal(await why(PAYER), 'ok');
+  assert.match(await why(SHOP), /not the payment wallet bound/);
+  assert.match(await why(null), /no payment wallet bound .*changes hands/);
+});

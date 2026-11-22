@@ -63,12 +63,27 @@ async function build() {
         ? [{ id: 'sell-regulated-goods', name: 'Sell regulated goods', description: 'x402 checkout gated by Kuasa mandates, ZK proofs and Kuasa Cover', tags: ['x402', 'kuasa'] }]
         : [{ id: 'insured-shopping', name: 'Insured shopping', description: 'Shops within its Kuasa mandate and insures itself with Kuasa Cover', tags: ['x402', 'kuasa', 'insurance'] }],
     };
-    const res = await mcp<Record<string, unknown>>('build_agent_badge', { card_json: JSON.stringify(card), owner_account: owner, token_id: tokenDec(a.token), network: 'testnet' });
-    const json = (res.agent_card_json ?? res.card_json) as string | object | undefined;
-    if (!json) throw new Error(`unexpected build_agent_badge result: ${JSON.stringify(res).slice(0, 400)}`);
-    const body = typeof json === 'string' ? json : JSON.stringify(json);
+    // the official builder: badge extension with tokenAddress, owner, agentWallet (bound on-chain with
+    // setAgentWallet), registry contracts and the ERC-8004 registration, all computed from chain
+    const wallet = await mcp<{ agent_wallet?: string | null }>('get_agent_wallet', { token_id: tokenDec(a.token), network: 'testnet' }).catch(() => ({ agent_wallet: null }));
+    const endpoint = a.role === 'insurer' ? (process.env.KUASA_A2A_URL ?? 'https://kuasa-explorer.vercel.app/a2a') : a.role === 'buyer' ? 'https://kuasa-live.onrender.com/mcp' : 'https://kuasa-live.onrender.com';
+    const res = await mcp<Record<string, unknown>>('build_agent_card', {
+      name: card.name, description: card.description, agent_uri: uriOf(a.name), owner_account: owner, agent_wallet: wallet.agent_wallet ?? null,
+      token_id: tokenDec(a.token), skills: card.skills, provider: card.provider, documentation_url: 'https://github.com/PugarHuda/kuasa/blob/main/docs/JUDGING.md',
+      services: { [a.role === 'insurer' ? 'a2a' : a.role === 'buyer' ? 'mcp' : 'shop']: endpoint }, network: 'testnet',
+    });
+    const built = JSON.parse(res.agent_card_json as string) as Record<string, any>;
+    // our own extension next to the badge, and the ERC-8004 registration-file fields
+    built.capabilities.extensions.push(card.capabilities.extensions[0]);
+    if (a.role === 'insurer') built.preferredTransport = 'JSONRPC';
+    Object.assign(built, {
+      type: 'https://eips.ethereum.org/EIPS/eip-8004#registration-v1',
+      services: [{ name: a.role === 'insurer' ? 'A2A' : a.role === 'buyer' ? 'MCP' : 'web', endpoint }],
+      x402Support: true, active: true,
+    });
+    const body = JSON.stringify(built, null, 2);
     writeFileSync(new URL(`${a.name}.json`, OUT), body);
-    console.log(a.name, 'card written', await sha256Hex(body), 'mcp sha256', res.sha256 ?? res.card_sha256 ?? '?');
+    console.log(a.name, 'card written', await sha256Hex(body), 'agentWallet', wallet.agent_wallet ?? 'none');
   }
 }
 

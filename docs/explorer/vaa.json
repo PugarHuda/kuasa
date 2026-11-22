@@ -1,0 +1,18 @@
+{
+  "alice": {
+    "auditRecordId": "042c2dcc-b6c0-4192-9c11-337b414548b3",
+    "anchorTx": "a2889df13b056017bbea87de5611d471f39cdc136a8d797e48b49c6b48398c61"
+  },
+  "bob": {
+    "auditRecordId": "a588543c-8f1e-4144-a96d-c2ef328636ee",
+    "anchorTx": "0050a5c3df732be6ef11e84423230a43973fdaab14edb27c8088f59dc9b1e12a"
+  },
+  "carol": {
+    "auditRecordId": "27cc64e4-7f3b-4c13-8c9d-e679f85f6f3a",
+    "anchorTx": "c6fb86d8e367e41c0f600f338839dea14c7831bdb533868f0fbfb2846a7a10f3"
+  },
+  "teen": {
+    "auditRecordId": "c03f0e71-794b-46fa-942e-7fe68ca753a2",
+    "anchorTx": "2e8ac34525d93c506a99a9890d86fa59da5fd1c6f2a49cef6d8707f4245158da"
+  }
+}

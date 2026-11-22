@@ -47,5 +47,9 @@ export async function createMandateProof(grpc: ConcordiumGRPCClient, p: Profile,
 
   const checked = await VerificationAuditRecordV1.createChecked(crypto.randomUUID(), request, presentation, grpc, 'Testnet');
   if (checked.type === 'failed') throw new Error(`own proof failed verification: ${checked.error.message}`);
-  return { json: JSON.stringify(checked.result), anchorTx: sdk.TransactionHash.toHexString(request.transactionRef) };
+  // third step of the V1 flow: the Verification Audit Anchor, the record's hash registered on-chain
+  const { nonce } = await grpc.getNextAccountNonce(sender.sender);
+  const vaa = await VerificationAuditRecordV1.registerAnchor(checked.result, grpc, { ...sender, sequenceNumber: nonce }, { service: 'kuasa-cover', purpose: 'mandate' });
+  await grpc.waitForTransactionFinalization(vaa);
+  return { json: JSON.stringify(checked.result), anchorTx: sdk.TransactionHash.toHexString(request.transactionRef), auditAnchorTx: sdk.TransactionHash.toHexString(vaa) };
 }
