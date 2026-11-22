@@ -262,7 +262,6 @@ async function eudemoBalance(address: string) {
   return t ? BigInt(t.state.balance.value) : 0n;
 }
 
-let lastCapacity: { pool: bigint; exposure: bigint; at: number } | null = null;
 const STATE_NAME = process.env.KUASA_STATE_FILE ?? 'insurer-state.json';
 const STATE_FILE = new URL(STATE_NAME, ROOT);
 const svc = new InsurerService({
@@ -309,15 +308,13 @@ const svc = new InsurerService({
   verifyAp2Owner: (intent, owner) => verifyAp2Intent(intent, owner, (a) => grpc.getAccountInfo(a)),
   verifyDelivery: (d, signer) => verifyDeliveryNote(d, signer, (a) => grpc.getAccountInfo(a)),
   treasuryBalance: () => eudemoBalance(treasury.address.address),
-  // a busy public node (HTTP 429) can fail the full scan: the last good reading stands for 2 minutes
+  // a busy public node (HTTP 429) can fail the full scan: retry it, then fail closed (no stale reading
+  // ever underwrites: a policy issued since would be missing from it)
   capacity: async () => {
-    try {
-      const s = await solvencyNow();
-      lastCapacity = { pool: s.pool, exposure: s.exposure, at: Date.now() };
-    } catch (e) {
-      if (!lastCapacity || Date.now() - lastCapacity.at > 120_000) throw e;
+    for (let i = 0; ; i++) {
+      try { const s = await solvencyNow(); return { pool: s.pool - pendingOut(), exposure: s.exposure }; }
+      catch (e) { if (i >= 2) throw e; await new Promise((r) => setTimeout(r, 3000 * (i + 1))); }
     }
-    return { pool: lastCapacity!.pool - pendingOut(), exposure: lastCapacity!.exposure };
   },
   ...(isV3 ? { bondOf: (payer: string) => cover.bondOf(payer) } : {}),
   paidClaims: async (payer) => {
