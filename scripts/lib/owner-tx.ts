@@ -49,7 +49,7 @@ async function sponsored(grpc: ConcordiumGRPCClient, tx: Transaction.Builder, ow
   const sp = sponsor();
   const signable = tx.addMetadata({ sender, nonce, expiry: sdk.TransactionExpiry.futureMinutes(10) }).addSponsor(sp.address).build();
   const signed = await Transaction.sponsor(signable as Parameters<typeof Transaction.sponsor>[0], sp.signer);
-  return JSON.parse(JSON.stringify(Transaction.toJSON(signed as never), (_k, v) => (typeof v === 'bigint' ? v.toString() : v)));
+  return JSON.parse(JSON.stringify(Transaction.toJSON(signed as never), (_k, v) => (typeof v === 'bigint' ? (v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString()) : v)));
 }
 
 export async function prepareOwnerTx(grpc: ConcordiumGRPCClient, owner: string, action: string, args: { agentToken?: string; mandateId?: string }) {
