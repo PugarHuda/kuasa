@@ -12,7 +12,7 @@ Kuasa Cover was built against interfaces, so each testnet stand-in has a named r
 | Owner's Verify & Access proof referenced by the mandate | **Agent IDP** credential presented by the agent | AI Agent IDP, Nov 2026 | `IdentitySource` (`packages/merchant/src/foundations.ts`) |
 | Budget in the `kuasa-registry` contract | Agent funds in a **Simple Lock** with recipients, token, expiry and amount | PLL Simple, Jan 2027 | `SpendControl` |
 | Premium factors: mandate, proofs, history | Add **KYCaaS**, **AML on demand** and **liveness** results as factors | Feb–Mar 2027 | `RiskInput` in `packages/cover/src/risk.ts` |
-| The console can prepare owner actions unsigned (`/api/prepare/publish-cover`, `/api/prepare/revoke`); `scripts/owner-sign.ts` stands in for the owner's wallet (shows the call, checks contract and sender, signs, submits). The demo console still keeps a signing shortcut | A real wallet (Concordium Browser Wallet, ID App or Dfns) signs the prepared transaction; the console holds no owner keys | Live | `prepareTx`, `signAndSend`, `cis8004SetMetadataTx`, `KuasaRegistry.revokeTx` |
+| Owner actions are signed in the owner's own Concordium Wallet: on [owner.html](https://kuasa-explorer.vercel.app/owner.html) an owner registers an agent (CIS-8004, built by the hosted registry MCP), proves 18+ and EU residency bound to that agent, signs a Kuasa mandate and revokes it. Each is a sponsored transaction: Kuasa builds it, signs as sponsor and pays the fee; the wallet signs as sender. The console's prepared transactions remain for scripted owners | The same flow from Dfns or the ID App for owners who do not use the browser wallet | Live | `scripts/lib/owner-tx.ts`, `/owner/prepare` |
 | Auto-pay limit 10 EUDemo, 2-minute objection window, set by the insurer | Limit and window per policy, written to the cover contract so the holder can see them | Live | `autoPayLimit` / `autoPayDelayMs` in `InsurerDeps` |
 | AP2 IntentMandate mapped to a Kuasa scope (library) | Insurer quotes directly from an AP2 Intent Mandate + Kuasa budget | AP2 adoption | `scopeFromAp2Intent` (`packages/cover/src/ap2.ts`) |
 | Objections need only a signature from a party to the claim (rate-limited) | UMA-style bonded objections, plus Kleros-style appeal courts for disputed decisions | Live (unbonded) | `InsurerService.object` |
@@ -117,6 +117,12 @@ An independent review of `contracts/kuasa-cover` found no critical issue: status
 | The first poster of an agent bond owns it | Open: let only the payer post |
 
 The fixes ship with the next kuasa-cover deployment (25 contract tests pass). The live instances still run the reviewed code.
+
+## 8b. kuasa-market v6: known limits (review of 23 Nov)
+- The fast-release budget (10 CCD per insurer per exit delay) is a fixed window, so across a window boundary up to
+  twice the cap can be released fast. Bounded (20 CCD of a 100 CCD bond) and still behind the panel's veto window.
+- A vetoed slash does not give its amount back to the insurer's fast-release budget. This errs on the safe side
+  (less is released fast, never more). A sliding window or refilling budget replaces both in the mainnet contract.
 
 ## 9. Concordium roadmap Kuasa plugs into (checked 22 Nov 2026)
 
