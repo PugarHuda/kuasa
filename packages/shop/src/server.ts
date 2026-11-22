@@ -188,7 +188,8 @@ app.get('/delivery/:paymentTx', async (req, res) => {
   json(res, await signDeliveryNote(note, sponsor.address, recorderWallet.signer));
 });
 
-const loopback = (req: express.Request) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '');
+// behind a reverse proxy every request comes from loopback: the Host header must be local too (a proxy forwards the public one)
+const loopback = (req: express.Request) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') && [`localhost:${PORT}`, `127.0.0.1:${PORT}`].includes(req.get('host') ?? '');
 /** Demo only (loopback): the warehouse mis-picks the next order of `route` and ships `ship` instead. */
 app.post('/demo/mispick', express.json(), (req, res) => {
   const { route, ship } = req.body ?? {};
@@ -198,7 +199,7 @@ app.post('/demo/mispick', express.json(), (req, res) => {
   json(res, { staged: { route, ship } });
 });
 
-app.get('/kuasa-log', (req, res) => !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, audit: audit.anchors(), unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
+app.get('/kuasa-log', (req, res) => !loopback(req) ? json(res, { error: 'forbidden' }, 403) : json(res, { log: guard.log.slice(-50), receipts: guard.receipts, audit: audit.anchors(), unrecorded: guard.unrecorded, registry: `<${state.registry},0>`, payTo, sponsor: sponsor.address }));
 
 app.use(paymentMiddleware(routes as never, server));
 for (const [path, p] of Object.entries(catalog)) {
