@@ -865,7 +865,8 @@ app.post('/rules/:payer', async (req, res) => {
     const rule = req.body?.maxSpendPerHour !== undefined ? svc.setRule(req.params.payer, holder, big(req.body.maxSpendPerHour)) : svc.ruleOf(req.params.payer);
     const notify = typeof req.body?.notify === 'string' ? svc.setNotify(req.params.payer, holder, req.body.notify) : svc.notifyTopic(req.params.payer);
     audit.append({ kind: 'owner-rule', payer: req.params.payer, by: holder, maxSpendPerHour: String(rule?.maxSpendPerHour ?? 0), notify: notify ? 'set' : 'none' });
-    json(res, { rule, notify });
+    // the topic is a secret of the holder (anyone who knows it can subscribe): never echo it back
+    json(res, { rule, notify: notify ? 'set' : null });
   } catch (e) { json(res, { error: (e as Error).message }, 400); }
 });
 
