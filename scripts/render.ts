@@ -50,7 +50,7 @@ const DAILY = 36;
 const { anchorWalletRequest, checkWalletPresentation } = await import('./lib/wallet-vp.js');
 const VP_DAILY = 30;
 let vpDay = '', vpToday = 0;
-const vpRequests = new Map<string, { at: number; request: unknown; account: string }>(); // random session -> request, 30 min
+const vpRequests = new Map<string, { at: number; request: unknown; account: string; tries: number }>(); // random session -> request, 30 min
 const vpLastByIp = new Map<string, number>();
 async function readJson(req: import('node:http').IncomingMessage, max: number): Promise<Record<string, unknown> | null> {
   const chunks: Buffer[] = [];
@@ -96,13 +96,15 @@ createServer(async (req, res) => {
         const r = await anchorWalletRequest(grpc, body.account);
         for (const [k, v] of vpRequests) if (Date.now() - v.at > 30 * 60_000) vpRequests.delete(k);
         const session = crypto.randomUUID(); // unguessable: only the page that asked can answer
-        vpRequests.set(session, { at: Date.now(), request: r.request, account: body.account });
+        vpRequests.set(session, { at: Date.now(), request: r.request, account: body.account, tries: 0 });
         res.end(JSON.stringify({ ...r, session }));
       } else {
         const held = typeof body.session === 'string' ? vpRequests.get(body.session) : undefined;
         if (!held) return fail(404, 'unknown or expired request: ask for a new one');
-        const r = await checkWalletPresentation(grpc, held.request, body.presentation, held.account);
-        if (r.verified) vpRequests.delete(body.session as string); // one audit anchor per request
+        // claim the session before any async work: concurrent answers cannot both anchor an audit record
+        vpRequests.delete(body.session as string);
+        const r = await checkWalletPresentation(grpc, held.request, body.presentation, held.account).catch((e) => ({ verified: false as const, error: (e as Error).message.slice(0, 300) }));
+        if (!r.verified && ++held.tries < 3) vpRequests.set(body.session as string, held); // a failed answer may retry, 3 times
         res.end(JSON.stringify(r));
       }
     } catch (e) { fail(400, (e as Error).message.slice(0, 300)); }
