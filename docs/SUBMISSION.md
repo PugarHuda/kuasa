@@ -68,6 +68,7 @@ See https://github.com/PugarHuda/kuasa/blob/main/docs/PRODUCTION.md.
 https://kuasa-explorer.vercel.app/slides
 
 ## Live demo
+- Try it live: the "Run it on testnet" button on https://kuasa-explorer.vercel.app runs the parametric claim for real on the hosted shop and insurer (Render free tier: if it was asleep, the first run takes a minute to start)
 - Explorer: https://kuasa-explorer.vercel.app (market table, claim timelines, premium calculator)
 - Evidence tour: https://kuasa-explorer.vercel.app/evidence.html
 - Public A2A: https://kuasa-explorer.vercel.app/a2a

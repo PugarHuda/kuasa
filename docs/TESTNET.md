@@ -39,6 +39,8 @@ All identities come from the testnet identity provider with invented attributes.
 
 ## Who runs what
 
+The hosted demo (the explorer's "Try it live" button) runs the shop and Kuasa Cover in one process on Render's free tier (`scripts/render.ts`), with their state kept in Render Postgres; Kuasa Re is not hosted (it stays registered on kuasa-market). Every run is real: purchases, the detection, the claim and the payout are testnet transactions.
+
 Every role on testnet is played by one team, so each mechanism can be shown end to end with real transactions. Both insurers, all three jurors (and so the 2-of-3 panel), the capital providers, the shop and the agents' owners are our accounts. The contracts do not depend on that: the market registry admits any insurer whose cover contract runs the kuasa-cover module and names its own pool, and slashing an unpaid claim needs no arbiter at all. [PRODUCTION.md](PRODUCTION.md#7-from-one-operator-to-many) lists what each role needs before mainnet.
 
 ## Kuasa Cover, transaction by transaction
