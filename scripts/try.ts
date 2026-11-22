@@ -43,6 +43,10 @@ export async function runTry(log: (line: string) => void) {
       log(`   ${name}: ${!q ? 'offline' : q.refused ?? `${Number(q.premium) / 1e6} EUDemo [${(q.factors ?? []).map((f) => `${f.name} x${f.multiplier}`).join(', ')}]`}`);
     }
   }
+  // guards and insurance compose: the agent asks vet402 (a payment guard) about the shop before it pays
+  const shopToken = Buffer.from((JSON.parse(readFileSync(new URL('../.kuasa/state.json', import.meta.url), 'utf8')) as { shopAgent: string }).shopAgent, 'hex').readBigUInt64LE();
+  const vet = await fetch(`https://vet402-concordium.fly.dev/check?agent=${shopToken}`, { signal: AbortSignal.timeout(10_000) }).then((r) => r.json()).catch(() => null) as { vet402?: { verdict?: string; reason?: string } } | null;
+  log(`   vet402 (a payment guard) on the shop, agent #${shopToken}: ${vet?.vet402 ? `${vet.vet402.verdict} (${vet.vet402.reason})` : 'unreachable'}; Kuasa prices that verdict into cover`);
   log("2. Alice's agent and its cover");
   // a run cut short leaves the agent paused: its owner resumes it first, as after every finished run
   const held = await alice.detections().then((d) => (d as { hold?: string | null }).hold).catch(() => null);

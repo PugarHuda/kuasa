@@ -106,6 +106,11 @@ export type InsurerDeps = {
   otherInsurersPaid?(agentPayer: string, orders: string[]): Promise<bigint>;
   /** Portable reputation: ERC-8004 feedback on this agent from clients other than this insurer (null if none or unknown). */
   externalReputation?(agentToken: string): Promise<{ count: number; average: number } | null>;
+  /**
+   * Payee vetting by an outside payment guard (vet402): whether the merchants this agent may pay actually
+   * deliver. Guards stop a bad payment before it happens; Kuasa prices what still gets through.
+   */
+  payeeVetting?(merchants: string[]): Promise<{ go: string[]; no: string[]; unproven: string[] }>;
   /** The agent's payment wallet bound in the Agent Registry (CIS-8004 agentWallet), null when unset. */
   agentWallet?(agentToken: string): Promise<string | null>;
 };
@@ -334,6 +339,18 @@ export class InsurerService {
     };
     const q = quote(input);
     if ('refused' in q) return q;
+    // a payee-vetting signal, never a gate: an unreachable guard leaves the price as it is
+    const vet = this.deps.payeeVetting && m.scope.merchants?.length ? await this.deps.payeeVetting(m.scope.merchants).catch(() => null) : null;
+    if (vet) {
+      const short = (a: string) => `${a.slice(0, 8)}…`;
+      if (vet.no.length) {
+        q.premium = (q.premium * 125n + 50n) / 100n;
+        q.factors.push({ name: 'payee vetting (vet402)', multiplier: 1.25, reason: `vet402 found ${vet.no.map(short).join(', ')} failing to deliver what agents paid for` });
+      } else if (vet.go.length && !vet.unproven.length) {
+        q.premium = (q.premium * 90n + 50n) / 100n;
+        q.factors.push({ name: 'payee vetting (vet402)', multiplier: 0.9, reason: 'every merchant this agent may pay is vetted by vet402 as delivering' });
+      } else q.factors.push({ name: 'payee vetting (vet402)', multiplier: 1, reason: `not yet vetted by vet402: ${vet.unproven.map(short).join(', ') || 'none'}; no discount, no surcharge` });
+    }
     const bps = this.deps.priceBps ?? 10_000n;
     if (bps !== 10_000n) {
       q.premium = (q.premium * bps + 5_000n) / 10_000n;

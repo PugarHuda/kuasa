@@ -181,6 +181,35 @@ function publishDecision(claimId: bigint | string, by: 'auto' | 'human' | 'panel
 }
 
 /**
+ * Payee vetting through vet402 (a payment guard on Concordium): each merchant account is mapped to its
+ * agent in the Agent Registry (hosted MCP agents_by_owner), then vet402's public check gives go / no /
+ * unproven from the deliveries it has observed. Cached 10 minutes per merchant; fixed hosts only.
+ */
+const vetCache = new Map<string, { at: number; verdict: 'go' | 'no' | 'unproven' }>();
+async function vetOne(merchant: string): Promise<'go' | 'no' | 'unproven'> {
+  const hit = vetCache.get(merchant);
+  if (hit && Date.now() - hit.at < 600_000) return hit.verdict;
+  const r = await fetch('https://agent-registry-mcp.concordium.com/mcp', {
+    method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, signal: AbortSignal.timeout(8_000),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'agents_by_owner', arguments: { owner_account: merchant, network: 'testnet' } } }),
+  });
+  const raw = await r.text();
+  const agents = (JSON.parse(JSON.parse(raw.slice(raw.indexOf('{'))).result.content[0].text) as { agents?: { token_id: number }[] }).agents ?? [];
+  let verdict: 'go' | 'no' | 'unproven' = 'unproven';
+  if (agents.length) {
+    const v = await (await fetch(`https://vet402-concordium.fly.dev/check?agent=${agents[0].token_id}`, { signal: AbortSignal.timeout(8_000) })).json() as { vet402?: { verdict?: string } };
+    verdict = v.vet402?.verdict === 'go' ? 'go' : v.vet402?.verdict === 'no' ? 'no' : 'unproven';
+  }
+  vetCache.set(merchant, { at: Date.now(), verdict });
+  return verdict;
+}
+async function payeeVetting(merchants: string[]) {
+  const out = { go: [] as string[], no: [] as string[], unproven: [] as string[] };
+  for (const m of merchants) out[await vetOne(m).catch(() => 'unproven' as const)].push(m);
+  return out;
+}
+
+/**
  * Owner alerts through ntfy.sh (the owner subscribes to a topic in the ntfy app). The host is fixed:
  * the insurer never posts to an address a user supplied. Best effort: an alert never blocks a decision.
  */
@@ -364,6 +393,7 @@ const svc = new InsurerService({
   // listing these orders elsewhere cannot reduce this agent's payout), and only what was paid or approved
   externalReputation: (token) => externalReputation(token),
   agentWallet: (token) => agentRegistry.walletOf(token),
+  payeeVetting: (merchants) => payeeVetting(merchants),
   otherInsurersPaid: async (agentPayer, mine) => {
     const others = [fileCover, ...((state as { market?: { cover: string }[] }).market ?? []).map((m) => m.cover)].filter((c) => BigInt(c) !== coverIndex);
     let paid = 0n;

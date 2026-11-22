@@ -1098,3 +1098,14 @@ test('owner alerts: only a policy holder picks the ntfy topic, and it must be ha
   // the same ownership rule as spending rules: another holder cannot take over a live holder's alerts
   assert.throws(() => t.svc.setNotify(PAYER, addr(40), 'someone-else-topic-1'), /holder of a live policy|another policy holder/);
 });
+
+test('payee vetting by vet402 prices the merchants the agent may pay: delivering x0.9, failing x1.25, unreachable unchanged', async () => {
+  const base = (await quoteOk(harness().svc)) as { premium: bigint };
+  const priced = async (vet: InsurerDeps['payeeVetting']) => (await quoteOk(harness({ payeeVetting: vet }).svc)) as { premium: bigint; factors: { name: string; multiplier: number }[] };
+  const go = await priced(async (m) => ({ go: m, no: [], unproven: [] }));
+  assert.ok(go.premium < base.premium && go.factors.some((f) => f.name.startsWith('payee vetting') && f.multiplier === 0.9));
+  const no = await priced(async (m) => ({ go: [], no: m.slice(0, 1), unproven: m.slice(1) }));
+  assert.ok(no.premium > base.premium && no.factors.some((f) => f.multiplier === 1.25));
+  const down = await priced(async () => { throw new Error('vet402 unreachable'); });
+  assert.equal(down.premium, base.premium, 'a guard that cannot be reached never changes the price');
+});
