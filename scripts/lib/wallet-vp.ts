@@ -15,8 +15,11 @@ function verifier() {
   return { sender: sdk.AccountAddress.fromBase58(a.address), signer: sdk.buildBasicAccountSigner(a.key) };
 }
 
-export async function anchorWalletRequest(grpc: ConcordiumGRPCClient, account: string) {
+export async function anchorWalletRequest(grpc: ConcordiumGRPCClient, account: string, agentToken?: string) {
   sdk.AccountAddress.fromBase58(account); // throws on anything but an account address
+  if (agentToken !== undefined && !/^[0-9a-f]{16}$/.test(agentToken)) throw new Error('agentToken: 16 hex characters');
+  // bound to one agent (the mandate's proof binding: payer and Agent Registry token), or to the account alone
+  const binding = agentToken ? `kuasa:v1:${TESTNET.caip2}:${account}:12802.0/${agentToken}` : `kuasa:v1:${TESTNET.caip2}:${account}:browser-wallet`;
   const ips = [];
   for await (const ip of grpc.getIdentityProviders()) ips.push(new sdk.IdentityProviderDID('Testnet', ip.ipIdentity));
   const claims = VerificationRequestV1.claimsBuilder().addAccountClaims(ips, (b) => { b.addMinimumAge(18); b.addEUResidency(); }).getClaims();
@@ -25,7 +28,7 @@ export async function anchorWalletRequest(grpc: ConcordiumGRPCClient, account: s
       { label: 'Nonce', context: crypto.getRandomValues(new Uint8Array(32)) },
       { label: 'ConnectionID', context: 'kuasa-browser-wallet' },
       { label: 'ResourceID', context: 'kuasa-mandate' },
-      { label: 'ContextString', context: `kuasa:v1:${TESTNET.caip2}:${account}:browser-wallet` },
+      { label: 'ContextString', context: binding },
     ],
     requested: ['BlockHash'],
   }, claims);

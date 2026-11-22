@@ -49,6 +49,10 @@ const DAILY = 36;
 // wallet proofs: each request and each audit anchor is a testnet transaction from the verifier, so cap them
 const { anchorWalletRequest, checkWalletPresentation } = await import('./lib/wallet-vp.js');
 const VP_DAILY = 30;
+const { prepareOwnerTx, agentsOf } = await import('./lib/owner-tx.js');
+const OWNER_DAILY = 60;
+let ownerDay = '', ownerToday = 0;
+const ownerLastByIp = new Map<string, number>();
 let vpDay = '', vpToday = 0;
 const vpRequests = new Map<string, { at: number; request: unknown; account: string; tries: number }>(); // random session -> request, 30 min
 const vpLastByIp = new Map<string, number>();
@@ -85,6 +89,33 @@ createServer(async (req, res) => {
   const origin = req.headers.origin ?? '';
   if (ORIGINS.includes(origin)) res.setHeader('access-control-allow-origin', origin);
   if (req.method === 'OPTIONS') { res.setHeader('access-control-allow-methods', 'POST'); res.setHeader('access-control-allow-headers', 'content-type'); res.end(); return; }
+  if (req.method === 'POST' && (req.url === '/owner/prepare' || req.url === '/owner/agents' || req.url === '/owner/status')) {
+    // owner actions signed in the owner's wallet; Kuasa sponsors the fee (each is a testnet transaction, so capped)
+    res.setHeader('content-type', 'application/json');
+    const fail = (code: number, error: string) => { res.statusCode = code; res.end(JSON.stringify({ error })); };
+    if (!ORIGINS.includes(origin)) return fail(403, 'owner actions start from https://kuasa-explorer.vercel.app/owner.html');
+    const body = await readJson(req, 4_000);
+    if (!body || typeof body.account !== 'string') return fail(400, 'account (base58) required');
+    try {
+      if (req.url === '/owner/agents') { res.end(JSON.stringify({ agents: await agentsOf(body.account) })); return; }
+      if (req.url === '/owner/status') {
+        if (typeof body.hash !== 'string' || !/^[0-9a-f]{64}$/.test(body.hash)) return fail(400, 'hash: 64 hex characters');
+        const s = await connect().getBlockItemStatus(sdk.TransactionHash.fromHexString(body.hash));
+        const sum = s.status === 'finalized' ? (s.outcome.summary as unknown as Record<string, unknown>) : null;
+        res.end(JSON.stringify({ status: s.status, rejected: !!sum && (sum.transactionType === 'failed' || 'rejectReason' in sum) }));
+        return;
+      }
+      const d = new Date().toISOString().slice(0, 10);
+      if (d !== ownerDay) { ownerDay = d; ownerToday = 0; }
+      if (ownerToday >= OWNER_DAILY) return fail(429, `today's ${OWNER_DAILY} sponsored owner actions on the hosted demo are used up`);
+      const ip = clientIp(req);
+      if (Date.now() - (ownerLastByIp.get(ip) ?? 0) < 15_000) return fail(429, 'one owner action per 15 seconds from the same address');
+      ownerLastByIp.set(ip, Date.now()); if (ownerLastByIp.size > 5000) ownerLastByIp.clear();
+      ownerToday++;
+      res.end(JSON.stringify(await prepareOwnerTx(connect(), body.account, String(body.action), { agentToken: typeof body.agentToken === 'string' ? body.agentToken : undefined, mandateId: typeof body.mandateId === 'string' ? body.mandateId : undefined })));
+    } catch (e) { fail(400, (e as Error).message.slice(0, 300)); }
+    return;
+  }
   if (req.method === 'POST' && (req.url === '/vp/request' || req.url === '/vp/verify')) {
     res.setHeader('content-type', 'application/json');
     const fail = (code: number, error: string) => { res.statusCode = code; res.end(JSON.stringify({ error })); };
@@ -103,7 +134,7 @@ createServer(async (req, res) => {
         vpLastByIp.set(ip, Date.now());
         if (vpLastByIp.size > 5000) vpLastByIp.clear();
         vpToday++;
-        const r = await anchorWalletRequest(grpc, body.account);
+        const r = await anchorWalletRequest(grpc, body.account, typeof body.agentToken === 'string' ? body.agentToken : undefined);
         for (const [k, v] of vpRequests) if (Date.now() - v.at > 30 * 60_000) vpRequests.delete(k);
         const session = crypto.randomUUID(); // unguessable: only the page that asked can answer
         vpRequests.set(session, { at: Date.now(), request: r.request, account: body.account, tries: 0 });
