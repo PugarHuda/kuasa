@@ -52,6 +52,16 @@ const VP_DAILY = 30;
 let vpDay = '', vpToday = 0;
 const vpRequests = new Map<string, { at: number; request: unknown; account: string; tries: number }>(); // random session -> request, 30 min
 const vpLastByIp = new Map<string, number>();
+/**
+ * The visitor's address. Render sits behind Cloudflare: X-Forwarded-For is "client, cf-edge, render-lb", so
+ * its last entry is an internal balancer that changes per request (useless as a key), and its first entry
+ * can be forged. Cloudflare overwrites CF-Connecting-IP with the address it saw, so that is the key.
+ */
+function clientIp(req: import('node:http').IncomingMessage) {
+  const cf = req.headers['cf-connecting-ip'];
+  if (typeof cf === 'string' && cf) return cf;
+  return String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '').split(',').map((x) => x.trim()).at(-3) ?? 'unknown';
+}
 async function readJson(req: import('node:http').IncomingMessage, max: number): Promise<Record<string, unknown> | null> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -86,7 +96,7 @@ createServer(async (req, res) => {
         const d = new Date().toISOString().slice(0, 10);
         if (d !== vpDay) { vpDay = d; vpToday = 0; }
         if (!ORIGINS.includes(origin)) return fail(403, 'wallet proofs start from https://kuasa-explorer.vercel.app/wallet.html');
-        const ip = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '').split(',').at(-1)!.trim();
+        const ip = clientIp(req);
         if (Date.now() - (vpLastByIp.get(ip) ?? 0) < 60_000) return fail(429, 'one wallet proof request per minute from the same address');
         if (vpToday >= VP_DAILY) return fail(429, `today's ${VP_DAILY} wallet proofs on the hosted demo are used up`);
         if (typeof body.account !== 'string') return fail(400, 'account (base58) required');
@@ -111,11 +121,6 @@ createServer(async (req, res) => {
     return;
   }
   if (req.method === 'GET' && req.url === '/health') { res.end('ok'); return; }
-  if (req.method === 'GET' && req.url === '/ip') { // the caller's own address as the proxy chain reports it (rate limits key on it)
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ xff: req.headers['x-forwarded-for'] ?? null, cf: req.headers['cf-connecting-ip'] ?? null, trueClient: req.headers['true-client-ip'] ?? null, xRealIp: req.headers['x-real-ip'] ?? null }));
-    return;
-  }
   if (req.method === 'GET' && req.url === '/stats') {
     // public, read-only: what the hosted insurers hold and owe right now, from their own solvency views
     const get = (u: string) => fetch(u, { signal: AbortSignal.timeout(20_000) }).then((r) => r.json()).catch(() => null);
@@ -142,8 +147,7 @@ createServer(async (req, res) => {
     return;
   }
   if (req.method !== 'POST' || req.url !== '/try') { res.statusCode = 404; res.end('not found'); return; }
-  // the last X-Forwarded-For entry is the one Render's proxy appends; earlier ones are client-supplied
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '').split(',').at(-1)!.trim();
+  const ip = clientIp(req);
   const now = Date.now();
   const d = new Date().toISOString().slice(0, 10);
   if (d !== day) { day = d; today = 0; }
