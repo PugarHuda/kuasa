@@ -169,10 +169,11 @@ async function issueChecked(grpc: ConcordiumGRPCClient, owner: string, mandateId
     holder: owner, agentPayer: owner, agentToken, mandate: { owner, id: mandateId }, kind: 'period',
     limit: COVER_TERMS.limit, deductible: COVER_TERMS.deductible, premium: COVER_TERMS.premium, premiumTx, validUntilMs: BigInt(Date.now() + COVER_TERMS.days * 86_400_000),
   } as never, wallet(op.address, op.key));
-  saveUsed(); // the policy exists: this premium stays used for good
+  saveUsed(); // the policy exists: this premium stays used for good, whatever happens below
   const policyId = KuasaCover.idFromEvents(r.summary, coverIndex);
-  if (policyId === null) throw new Error(`policy issued but its id is unreadable (tx ${r.hash})`);
+  if (policyId === null) return { policyId: null, policyTx: r.hash, certificate: null };
   const param = new Uint8Array([8, ...new Uint8Array(new BigUint64Array([policyId]).buffer)]);
-  const a = await submit(grpc, Transaction.updateContract({ amount: sdk.CcdAmount.zero(), address: sdk.ContractAddress.create(13120n, 0n), receiveName: sdk.ReceiveName.fromString('kuasa_certificate.announce'), message: sdk.Parameter.fromBuffer(param.buffer) }, sdk.Energy.create(30_000)) as Transaction.Builder, wallet(op.address, op.key));
-  return { policyId: String(policyId), policyTx: r.hash, certificate: { contract: '<13120,0>', index: '13120', tokenId: Buffer.from(new BigUint64Array([policyId]).buffer).toString('hex'), announceTx: a.hash } };
+  // best effort: the certificate's balance is live either way; announcing only makes explorers list it
+  const a = await submit(grpc, Transaction.updateContract({ amount: sdk.CcdAmount.zero(), address: sdk.ContractAddress.create(13120n, 0n), receiveName: sdk.ReceiveName.fromString('kuasa_certificate.announce'), message: sdk.Parameter.fromBuffer(param.buffer) }, sdk.Energy.create(30_000)) as Transaction.Builder, wallet(op.address, op.key)).catch(() => null);
+  return { policyId: String(policyId), policyTx: r.hash, certificate: { contract: '<13120,0>', index: '13120', tokenId: Buffer.from(new BigUint64Array([policyId]).buffer).toString('hex'), announceTx: a?.hash ?? null } };
 }
