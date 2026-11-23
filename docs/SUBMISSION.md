@@ -26,7 +26,7 @@ Judging guide (five minutes, keyless verification of every transaction): https:/
 - Merchants harmed by an agent claim on its cover; cancelled policies are refunded pro rata.
 
 **Concordium components**
-Concordium ID and Verify & Access, Web3 ID, Agent Registry (CIS-8004) and the Verified by Concordium badge, CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, three smart contracts (kuasa-registry, kuasa-cover, kuasa-market) with cross-contract reads, registerData audit anchors (EU AI Act Art. 12), MCP and A2A, plus a documented lawful-disclosure route through the identity provider and Privacy Guardians (drafted and anchored per claim; not executed on testnet).
+Concordium ID and Verify & Access, Web3 ID, Agent Registry (CIS-8004) and the Verified by Concordium badge, CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, four smart contracts (kuasa-registry, kuasa-cover, kuasa-market, kuasa-certificate: CIS-2 cover certificates) with cross-contract reads, registerData audit anchors (EU AI Act Art. 12), MCP and A2A, plus a documented lawful-disclosure route through the identity provider and Privacy Guardians (drafted and anchored per claim; not executed on testnet).
 
 **Path to production**
 Pools move into Protocol-Level Locks released only by the cover contract; EURQ replaces EUDemo; a licensed fronting insurer carries the risk while Kuasa acts as MGA and claims infrastructure. Details: https://github.com/PugarHuda/kuasa/blob/main/docs/PRODUCTION.md
