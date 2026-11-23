@@ -34,9 +34,17 @@ No keys, no accounts and none of our services: it only reads the public testnet 
 | Criterion | Where |
 |---|---|
 | Depth of integration | Concordium ID and Verify & Access V1 with all three anchors (request, presentation, audit anchor; ZK 18+ and EU residency bound to one agent; also answered by a real Concordium Browser Wallet, [record](https://kuasa-explorer.vercel.app/wallet-proof.json)), Agent Registry CIS-8004 with the badge and the agentWallet each payment must come from (cleared on transfer), Agent Cards from the registry's own builder (badge valid, card hash matches on-chain), CIS-8, hosted Agent Registry MCP, x402, sponsored transactions, the EUDemo PLT, three contracts with cross-contract reads, registerData audit anchors. Table: [README](../README.md#concordium-components) |
-| It works | The Try it button above; live numbers at https://kuasa-live.onrender.com/stats; [evidence tour](https://kuasa-explorer.vercel.app/evidence.html) (every live step with its transactions); `pnpm verify` |
+| It works | The Try it button above (also run every day by a GitHub workflow that fails if it does not reach the payout); live numbers at https://kuasa-live.onrender.com/stats; [evidence tour](https://kuasa-explorer.vercel.app/evidence.html) (every live step with its transactions); `pnpm verify` |
 | Path to production | [PRODUCTION.md](PRODUCTION.md): pools under Protocol-Level Locks, EURQ, a licensed fronting insurer with Kuasa as MGA, independent operators, open security findings |
 | Usefulness | Composes with the payment guards other teams built: the insurer prices vet402's delivery verdicts on the merchants an agent may pay (guards stop a bad payment; Kuasa pays when one gets through). Agents now spend money on their own; when one double-pays, buys outside its owner's intent or harms a merchant, Kuasa pays, priced from on-chain facts. From the mistake to the payout: about 5 minutes, no human (median of recorded runs, on-chain) |
+
+## Where Kuasa sits
+Card networks are building agent payments (Visa Intelligent Commerce, Mastercard Agent Pay) and Google's AP2 gives
+an agent a signed intent from its user. Both answer whether an agent may pay. Neither answers who carries the loss
+when a permitted agent still gets it wrong; on cards that is the chargeback, and agent payments on-chain have none.
+Kuasa is that liability layer: it reads the AP2 intent, prices the agent from on-chain facts, and pays from
+evidence. Any merchant can check cover itself with one standard CIS-2 call on the certificate contract
+(`examples/merchant-certificate-check.ts`, or the public A2A skill `certificate`).
 
 ## What the contracts enforce, and what waits for Protocol-Level Locks
 Enforced on-chain today: the policy terms and limits, the claim lifecycle and its automatic-approval rules

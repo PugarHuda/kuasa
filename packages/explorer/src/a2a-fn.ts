@@ -6,7 +6,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleA2a } from '../../insurer/src/a2a.js';
 import { solvency } from '@kuasa/cover';
-import { coverOf, eudemoOf, marketInsurers, riskOf, scan, solvencyNow } from './chain.js';
+import { certificateHeld, CERTIFICATES, coverOf, eudemoOf, marketInsurers, riskOf, scan, solvencyNow } from './chain.js';
 import { feedbackFor } from './erc8004.js';
 import { verifyEvmAgent } from './evm.js';
 
@@ -36,6 +36,8 @@ const skills = {
   // Portable reputation: this agent's claim outcomes as ERC-8004 Reputation Registry feedback entries.
   'erc8004-feedback': async (d: Record<string, unknown>) => ({ payer: String(d.payer ?? ''), standard: 'ERC-8004 reputation feedback (score 0-100, tag1, tag2, evidence pointer)', feedback: feedbackFor(String(d.payer ?? ''), (await scan()).books) }),
   'cover-status': async (d: Record<string, unknown>) => ({ onChain: await coverOf(String(d.payer ?? '')) }),
+  // The standard check any merchant can repeat itself: does this account hold the CIS-2 certificate of this policy?
+  certificate: async (d: Record<string, unknown>) => certificateHeld(String(d.payer ?? ''), BigInt(String(d.policy ?? '0')), CERTIFICATES[String(d.cover ?? '13105')] ?? 13120n),
   quote: async () => { throw new Error('quotes need the insurer service (payer proof, then x402 checkout); see github.com/PugarHuda/kuasa/blob/main/docs/INTEGRATIONS.md'); },
 };
 

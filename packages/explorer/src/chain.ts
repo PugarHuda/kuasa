@@ -120,6 +120,21 @@ async function metadata(token: number[], key: string) {
 const fields = (v: string | null) => (v ? Object.fromEntries(v.split(';').map((kv) => kv.split('=') as [string, string])) : null);
 
 /** The insurer publishes each claim decision on its CIS-8004 entry: by=auto|human;verdict=...;paid=... */
+/** kuasa-certificate per cover contract: a CIS-2 token per policy, balance read live from the cover. */
+export const CERTIFICATES: Record<string, bigint> = { '13105': 13120n, '13108': 13121n };
+/**
+ * Whether `payer` holds the cover certificate for `policyId` (one CIS-2 balanceOf on the certificate
+ * contract; 1 while the policy is active, unexpired and not used up). Any merchant can make this call.
+ */
+export async function certificateHeld(payer: string, policyId: bigint, certificate = 13120n) {
+  const owner = AccountAddress.fromBase58(payer).decodedAddress;
+  const q = Uint8Array.from([1, 0, 8, ...new Uint8Array(new BigUint64Array([policyId]).buffer), 0, ...owner]);
+  const r = await grpc.invokeContract({ contract: ContractAddress.create(certificate, 0n), method: ReceiveName.fromString('kuasa_certificate.balanceOf'), parameter: Parameter.fromBuffer(q.buffer as ArrayBuffer) });
+  if (r.tag !== 'success' || !r.returnValue) throw new Error('certificate unreadable');
+  const b = new Uint8Array(ReturnValue.toBuffer(r.returnValue));
+  return { holds: b[2] === 1, contract: `<${certificate},0>`, tokenId: [...new Uint8Array(new BigUint64Array([policyId]).buffer)].map((x) => x.toString(16).padStart(2, '0')).join(''), standard: 'CIS-2 balanceOf' };
+}
+
 /** The open, bonded registry of insurers (kuasa-market). */
 export const MARKET_REGISTRY = 13119n;
 export async function marketInsurers() {
