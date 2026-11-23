@@ -7,7 +7,7 @@
  *   issue     the Kuasa mandate for that agent: budget, expiry, who may record its spending
  *   revoke    withdraw the mandate: shops and insurers refuse the agent from the next block
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import * as sdk from '@concordium/web-sdk';
 import type { ConcordiumGRPCClient } from '@concordium/web-sdk';
 import { Transaction } from '@concordium/web-sdk/transactions';
@@ -134,7 +134,10 @@ export async function preparePremium(grpc: ConcordiumGRPCClient, owner: string, 
   return { transaction: await sponsored(grpc, tx, owner), what: `Pay the premium: ${Number(COVER_TERMS.premium) / 1e6} EUDemo for ${Number(COVER_TERMS.limit) / 1e6} EUDemo of cover over ${COVER_TERMS.days} days` };
 }
 
-const usedPremiums = new Set<string>();
+// premiums that bought a policy, kept in .kuasa (synced with the hosted state) so a restart cannot replay one
+const USED = new URL('../../.kuasa/owner-premiums.json', import.meta.url);
+const usedPremiums = new Set<string>((() => { try { return JSON.parse(readFileSync(USED, 'utf8')) as string[]; } catch { return []; } })());
+const saveUsed = () => writeFileSync(USED, JSON.stringify([...usedPremiums]));
 /**
  * Issues the policy once the premium is on-chain: a finalized EUDemo transfer of the premium from the owner
  * to Kuasa Cover's pool whose memo names a live mandate this account issued for its own agent. Returns the
@@ -143,6 +146,12 @@ const usedPremiums = new Set<string>();
 export async function issueOwnerCover(grpc: ConcordiumGRPCClient, owner: string, mandateId: string, agentToken: string, premiumTx: string) {
   if (!/^[0-9a-f]{64}$/.test(premiumTx) || !/^[0-9a-f]{64}$/.test(mandateId) || !/^[0-9a-f]{16}$/.test(agentToken)) throw new Error('premiumTx, mandateId, agentToken');
   if (usedPremiums.has(premiumTx)) throw new Error('this premium already bought a policy');
+  usedPremiums.add(premiumTx); // claimed before any await: concurrent requests cannot both use it
+  try { return await issueChecked(grpc, owner, mandateId, agentToken, premiumTx); }
+  catch (e) { usedPremiums.delete(premiumTx); throw e; }
+}
+
+async function issueChecked(grpc: ConcordiumGRPCClient, owner: string, mandateId: string, agentToken: string, premiumTx: string) {
   if (!(await agentsOf(owner)).some((a) => a.tokenHex === agentToken && a.status !== 'Revoked')) throw new Error('that agent is not yours in the Agent Registry');
   const st = await grpc.getBlockItemStatus(sdk.TransactionHash.fromHexString(premiumTx));
   if (st.status !== 'finalized' || !st.outcome) throw new Error('the premium is not finalized yet');
@@ -156,11 +165,11 @@ export async function issueOwnerCover(grpc: ConcordiumGRPCClient, owner: string,
   const op = loadProfile('insurer').accounts.find((x) => x.credNumber === 1)!;
   const coverIndex = 13105n;
   const cover = new KuasaCover(grpc, coverIndex);
-  usedPremiums.add(premiumTx);
   const r = await cover.issuePolicy({
     holder: owner, agentPayer: owner, agentToken, mandate: { owner, id: mandateId }, kind: 'period',
     limit: COVER_TERMS.limit, deductible: COVER_TERMS.deductible, premium: COVER_TERMS.premium, premiumTx, validUntilMs: BigInt(Date.now() + COVER_TERMS.days * 86_400_000),
-  } as never, wallet(op.address, op.key)).catch((e) => { usedPremiums.delete(premiumTx); throw e; });
+  } as never, wallet(op.address, op.key));
+  saveUsed(); // the policy exists: this premium stays used for good
   const policyId = KuasaCover.idFromEvents(r.summary, coverIndex);
   if (policyId === null) throw new Error(`policy issued but its id is unreadable (tx ${r.hash})`);
   const param = new Uint8Array([8, ...new Uint8Array(new BigUint64Array([policyId]).buffer)]);
