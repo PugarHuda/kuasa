@@ -7831,6 +7831,15 @@ async function coverOf(payer, cover = CURRENT) {
   return decodeCoverView(await viewCover("coverOf", encodeCoverQuery(payer), cover));
 }
 var REGISTRY = ContractAddress.create(12802n, 0n);
+var CERTIFICATES = { "13105": 13120n, "13108": 13121n };
+async function certificateHeld(payer, policyId, certificate = 13120n) {
+  const owner = AccountAddress2.fromBase58(payer).decodedAddress;
+  const q = Uint8Array.from([1, 0, 8, ...new Uint8Array(new BigUint64Array([policyId]).buffer), 0, ...owner]);
+  const r = await grpc.invokeContract({ contract: ContractAddress.create(certificate, 0n), method: ReceiveName.fromString("kuasa_certificate.balanceOf"), parameter: Parameter.fromBuffer(q.buffer) });
+  if (r.tag !== "success" || !r.returnValue) throw new Error("certificate unreadable");
+  const b = new Uint8Array(ReturnValue.toBuffer(r.returnValue));
+  return { holds: b[2] === 1, contract: `<${certificate},0>`, tokenId: [...new Uint8Array(new BigUint64Array([policyId]).buffer)].map((x) => x.toString(16).padStart(2, "0")).join(""), standard: "CIS-2 balanceOf" };
+}
 var MARKET_REGISTRY = 13119n;
 async function marketInsurers() {
   const r = await grpc.invokeContract({ contract: ContractAddress.create(MARKET_REGISTRY, 0n), method: ReceiveName.fromString("kuasa_market.insurers"), parameter: Parameter.empty() });
@@ -8064,6 +8073,8 @@ var skills = {
   // Portable reputation: this agent's claim outcomes as ERC-8004 Reputation Registry feedback entries.
   "erc8004-feedback": async (d) => ({ payer: String(d.payer ?? ""), standard: "ERC-8004 reputation feedback (score 0-100, tag1, tag2, evidence pointer)", feedback: feedbackFor(String(d.payer ?? ""), (await scan()).books) }),
   "cover-status": async (d) => ({ onChain: await coverOf(String(d.payer ?? "")) }),
+  // The standard check any merchant can repeat itself: does this account hold the CIS-2 certificate of this policy?
+  certificate: async (d) => certificateHeld(String(d.payer ?? ""), BigInt(String(d.policy ?? "0")), CERTIFICATES[String(d.cover ?? "13105")] ?? 13120n),
   quote: async () => {
     throw new Error("quotes need the insurer service (payer proof, then x402 checkout); see github.com/PugarHuda/kuasa/blob/main/docs/INTEGRATIONS.md");
   }
