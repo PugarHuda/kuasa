@@ -48,7 +48,7 @@ button:disabled{background:transparent;color:#8A94A6;border-color:var(--line);cu
   </header>
 
   <h1>Own an agent, with your own wallet</h1>
-  <p class="lede">Register an AI agent, prove who stands behind it, give it a spending mandate and take it back. You sign every step in the Concordium Wallet; Kuasa pays the fees, so you need no CCD.</p>
+  <p class="lede">Register an AI agent, prove who stands behind it, give it a spending mandate, insure it and take it back. You sign every step in the Concordium Wallet; Kuasa pays the fees, so you need no CCD.</p>
   <p class="fine">Needs the <a href="https://chromewebstore.google.com/detail/concordium-wallet/mnnkpffndmickbiakofclnpoiajlegmg">Concordium Wallet</a> on Testnet with an identity. Rather watch first? <a href="https://youtu.be/0PuI22XYhdA">One minute with a real wallet</a>.</p>
 
   <div class="grid">
@@ -57,7 +57,9 @@ button:disabled{background:transparent;color:#8A94A6;border-color:var(--line);cu
       <li id="s2"><div><h2>Register your agent</h2><p>Mints your agent in Concordium's Agent Registry, owned by you.</p><button id="b2" type="button" disabled>Register agent</button><div class="result" id="r2"></div></div></li>
       <li id="s3"><div><h2>Prove who stands behind it</h2><p>18 or older and living in the EU, as a zero-knowledge proof bound to this agent.</p><button id="b3" type="button" disabled>Prove with my wallet</button><div class="result" id="r3"></div></div></li>
       <li id="s4"><div><h2>Give it a mandate</h2><p>50 EUDemo over 30 days. Shops and insurers check it before every payment.</p><button id="b4" type="button" disabled>Sign the mandate</button><div class="result" id="r4"></div></div></li>
-      <li id="s5"><div><h2>Take it back</h2><p>Revoke the mandate. From the next block, shops refuse the agent.</p><button id="b5" type="button" disabled>Revoke the mandate</button><div class="result" id="r5"></div></div></li>
+      <li id="s5"><div><h2>Get test EUDemo</h2><p>Concordium's EUDemo allowlist asks your wallet to prove EU nationality, then sends test euros to your account.</p><button id="b5" type="button" disabled>Get test EUDemo</button><div class="result" id="r5"></div></div></li>
+      <li id="s6"><div><h2>Insure your agent</h2><p>Pay 0.5 EUDemo for 10 EUDemo of cover over 7 days. You receive a cover certificate (a CIS-2 token) your wallet can show.</p><button id="b6" type="button" disabled>Pay and insure</button><div class="result" id="r6"></div></div></li>
+      <li id="s7"><div><h2>Take it back</h2><p>Revoke the mandate. From the next block, shops refuse the agent.</p><button id="b7" type="button" disabled>Revoke the mandate</button><div class="result" id="r7"></div></div></li>
     </ol>
     <div class="console" id="log" role="log" aria-live="polite">Each step prints here, with a link to its transaction.</div>
   </div>
@@ -138,11 +140,35 @@ step(4, async () => {
   state.mandate = prepared.mandateId;
   done(4, `Mandate ${state.mandate.slice(0, 12)}… signed in ${tx(h)}`);
   log('the mandate is on-chain: shops and insurers will check it', 'ok');
-  $('b5').disabled = false;
+  $('b5').disabled = false; $('b7').disabled = false;
 });
+const EU = ['AT','BE','BG','CY','CZ','DE','DK','EE','ES','FI','FR','GR','HR','HU','IE','IT','LT','LU','LV','MT','NL','PL','PT','RO','SE','SI','SK'];
 step(5, async () => {
+  log("Concordium's EUDemo allowlist: approve the EU-nationality proof in your wallet…");
+  const challenge = [...crypto.getRandomValues(new Uint8Array(32))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const vp = await window.concordium.requestVerifiablePresentation(challenge, [{ idQualifier: { type: 'cred', issuers: [0, 1, 3, 4, 5] }, statement: [{ type: 'AttributeInSet', attributeTag: 'nationality', set: EU }] }]);
+  log("checked by Concordium's verifier; the allowlist sends test EUDemo (about a minute)…");
+  const r = await post('/owner/eudemo', { account: state.account, presentation: vp.toString() });
+  done(5, r.tx ? `Allow-listed and funded in ${tx(r.tx)}` : 'Allow-listed and funded');
+  log('your account holds test EUDemo', 'ok');
+  $('b6').disabled = false;
+});
+step(6, async () => {
+  const prepared = await post('/owner/prepare', { account: state.account, action: 'premium', mandateId: state.mandate });
+  const h = await signInWallet(prepared);
+  log('premium paid; Kuasa checks it on-chain and issues the policy…');
+  const c = await post('/owner/cover', { account: state.account, mandateId: state.mandate, agentToken: state.agent.tokenHex, premiumTx: h });
+  state.cert = c.certificate;
+  done(6, `Policy ${c.policyId} issued in ${tx(c.policyTx)}; certificate ${c.certificate.contract} token ${c.certificate.tokenId} <button id="addcert" type="button">Add to wallet</button>`);
+  log(`insured: policy ${c.policyId}, certificate announced ${tx(c.certificate.announceTx)}`, 'ok');
+  $('addcert').addEventListener('click', async () => {
+    try { await window.concordium.addCIS2Tokens(state.account, [state.cert.tokenId], BigInt(state.cert.index), 0n); log('the certificate is in your wallet', 'ok'); }
+    catch (err) { log(`stopped: ${err.message || err}`, 'err'); }
+  });
+});
+step(7, async () => {
   const h = await signInWallet(await post('/owner/prepare', { account: state.account, action: 'revoke', mandateId: state.mandate }));
-  done(5, `Revoked in ${tx(h)}`);
+  done(7, `Revoked in ${tx(h)}`);
   log('revoked: from the next block the agent cannot spend under this mandate', 'ok');
 });
 </script>

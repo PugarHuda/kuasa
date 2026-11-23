@@ -51,7 +51,8 @@ const DAILY = 36;
 // wallet proofs: each request and each audit anchor is a testnet transaction from the verifier, so cap them
 const { anchorWalletRequest, checkWalletPresentation } = await import('./lib/wallet-vp.js');
 const VP_DAILY = 30;
-const { prepareOwnerTx, agentsOf } = await import('./lib/owner-tx.js');
+const { prepareOwnerTx, agentsOf, getTestEudemo, preparePremium, issueOwnerCover } = await import('./lib/owner-tx.js');
+const eudemoGiven = new Set<string>();
 const OWNER_DAILY = 60;
 let ownerDay = '', ownerToday = 0;
 const ownerLastByIp = new Map<string, number>();
@@ -91,12 +92,12 @@ createServer(async (req, res) => {
   const origin = req.headers.origin ?? '';
   if (ORIGINS.includes(origin)) res.setHeader('access-control-allow-origin', origin);
   if (req.method === 'OPTIONS') { res.setHeader('access-control-allow-methods', 'POST'); res.setHeader('access-control-allow-headers', 'content-type'); res.end(); return; }
-  if (req.method === 'POST' && (req.url === '/owner/prepare' || req.url === '/owner/agents' || req.url === '/owner/status')) {
+  if (req.method === 'POST' && (req.url === '/owner/prepare' || req.url === '/owner/agents' || req.url === '/owner/status' || req.url === '/owner/eudemo' || req.url === '/owner/cover')) {
     // owner actions signed in the owner's wallet; Kuasa sponsors the fee (each is a testnet transaction, so capped)
     res.setHeader('content-type', 'application/json');
     const fail = (code: number, error: string) => { res.statusCode = code; res.end(JSON.stringify({ error })); };
     if (!ORIGINS.includes(origin)) return fail(403, 'owner actions start from https://kuasa-explorer.vercel.app/owner.html');
-    const body = await readJson(req, 4_000);
+    const body = await readJson(req, 60_000);
     if (!body || typeof body.account !== 'string') return fail(400, 'account (base58) required');
     try {
       if (req.url === '/owner/agents') { res.end(JSON.stringify({ agents: await agentsOf(body.account) })); return; }
@@ -114,6 +115,17 @@ createServer(async (req, res) => {
       if (Date.now() - (ownerLastByIp.get(ip) ?? 0) < 15_000) return fail(429, 'one owner action per 15 seconds from the same address');
       ownerLastByIp.set(ip, Date.now()); if (ownerLastByIp.size > 5000) ownerLastByIp.clear();
       ownerToday++;
+      if (req.url === '/owner/eudemo') {
+        if (eudemoGiven.has(body.account)) return fail(429, 'this account already received test EUDemo from the hosted demo');
+        if (typeof body.presentation !== 'string') return fail(400, 'presentation: the EU-nationality proof from the wallet (JSON string)');
+        const r = await getTestEudemo(connect(), body.account, body.presentation);
+        eudemoGiven.add(body.account);
+        res.end(JSON.stringify(r)); return;
+      }
+      if (req.url === '/owner/cover') {
+        res.end(JSON.stringify(await issueOwnerCover(connect(), body.account, String(body.mandateId), String(body.agentToken), String(body.premiumTx)))); return;
+      }
+      if (body.action === 'premium') { res.end(JSON.stringify(await preparePremium(connect(), body.account, String(body.mandateId)))); return; }
       res.end(JSON.stringify(await prepareOwnerTx(connect(), body.account, String(body.action), { agentToken: typeof body.agentToken === 'string' ? body.agentToken : undefined, mandateId: typeof body.mandateId === 'string' ? body.mandateId : undefined })));
     } catch (e) { fail(400, (e as Error).message.slice(0, 300)); }
     return;
